@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import { join } from 'node:path';
 
 const server = spawn('bun', ['--watch', 'packages/server/src/index.ts'], {
   cwd: process.cwd(),
