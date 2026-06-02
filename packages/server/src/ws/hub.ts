@@ -1,20 +1,24 @@
-import type { WebSocket } from 'ws';
 import type { WSEvent } from '@cubby/core';
+import type { WebSocket } from 'ws';
 
 export class WebSocketHub {
   private topicClients = new Map<string, Set<WebSocket>>();
   private clientTopics = new Map<WebSocket, Set<string>>();
 
   subscribe(ws: WebSocket, topic: string): void {
-    if (!this.topicClients.has(topic)) {
-      this.topicClients.set(topic, new Set());
+    let topicSet = this.topicClients.get(topic);
+    if (!topicSet) {
+      topicSet = new Set();
+      this.topicClients.set(topic, topicSet);
     }
-    this.topicClients.get(topic)!.add(ws);
+    topicSet.add(ws);
 
-    if (!this.clientTopics.has(ws)) {
-      this.clientTopics.set(ws, new Set());
+    let clientSet = this.clientTopics.get(ws);
+    if (!clientSet) {
+      clientSet = new Set();
+      this.clientTopics.set(ws, clientSet);
     }
-    this.clientTopics.get(ws)!.add(topic);
+    clientSet.add(topic);
   }
 
   unsubscribe(ws: WebSocket, topic: string): void {

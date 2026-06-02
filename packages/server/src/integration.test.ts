@@ -1,10 +1,10 @@
-import { describe, expect, it, beforeEach, afterEach } from 'vitest';
-import { Database } from './db/index.js';
-import { SessionStore } from './session/store.js';
-import { SessionManager } from './session/manager.js';
+import { unlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { unlinkSync } from 'node:fs';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { Database } from './db/index.js';
+import { SessionManager } from './session/manager.js';
+import { SessionStore } from './session/store.js';
 
 describe('Integration: SessionManager + SessionStore + Database', () => {
   let db: Database;
@@ -21,14 +21,21 @@ describe('Integration: SessionManager + SessionStore + Database', () => {
 
   afterEach(() => {
     db.close();
-    try { unlinkSync(dbPath); } catch {}
+    try {
+      unlinkSync(dbPath);
+    } catch {}
   });
 
   it('full lifecycle: create → start → output → kill', async () => {
     // Register mock provider
     manager.registerProvider({
       name: 'mock',
-      async spawn(_sid: string, _opts: unknown, onOutput: (d: string) => void, onExit: (c: number) => void) {
+      async spawn(
+        _sid: string,
+        _opts: unknown,
+        onOutput: (d: string) => void,
+        onExit: (c: number) => void,
+      ) {
         setTimeout(() => onOutput('hello'), 10);
         setTimeout(() => onExit(0), 100);
         return {
@@ -49,7 +56,9 @@ describe('Integration: SessionManager + SessionStore + Database', () => {
 
     // Start
     const outputs: string[] = [];
-    await manager.startSession(session.id, { cwd: '/tmp', cols: 80, rows: 24 }, (d) => outputs.push(d));
+    await manager.startSession(session.id, { cwd: '/tmp', cols: 80, rows: 24 }, (d) =>
+      outputs.push(d),
+    );
 
     const running = manager.getSession(session.id);
     expect(running?.status).toBe('running');

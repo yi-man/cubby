@@ -1,10 +1,10 @@
-import { useState, useCallback, useEffect } from 'react';
+import type { WSEvent, WSResponse } from '@cubby/core';
 import { useAtom } from 'jotai';
-import type { Session } from '@cubby/core';
-import { useWebSocket } from './hooks/use-ws.js';
-import { sessionsAtom, currentSessionIdAtom } from './atoms/session.js';
+import { useCallback, useEffect } from 'react';
+import { currentSessionIdAtom, sessionsAtom } from './atoms/session.js';
 import { SessionList } from './components/session/session-list.js';
 import { SessionView } from './components/session/session-view.js';
+import { useWebSocket } from './hooks/use-ws.js';
 
 export function App() {
   const { send, onMessage, connected } = useWebSocket('ws://localhost:3000/ws');
@@ -21,7 +21,7 @@ export function App() {
 
   // Handle responses
   useEffect(() => {
-    return onMessage((msg: any) => {
+    return onMessage((msg: WSResponse | WSEvent) => {
       if (msg.ok && msg.id === 'init' && Array.isArray(msg.data)) {
         setSessions(msg.data);
       }
@@ -31,18 +31,30 @@ export function App() {
       }
       if (msg.evt === 'session.status') {
         setSessions((prev) =>
-          prev.map((s) => (s.id === msg.data.sessionId ? { ...s, status: msg.data.status } : s))
+          prev.map((s) => (s.id === msg.data.sessionId ? { ...s, status: msg.data.status } : s)),
         );
       }
     });
   }, [onMessage, setSessions, setCurrentId]);
 
   const handleCreate = useCallback(() => {
-    send({ id: 'create', cmd: 'session.create', args: { workspaceId: '/', provider: 'claude-code' } });
+    send({
+      id: 'create',
+      cmd: 'session.create',
+      args: { workspaceId: '/', provider: 'claude-code' },
+    });
   }, [send]);
 
   return (
-    <div style={{ display: 'flex', height: '100vh', background: '#1e1e2e', color: '#cdd6f4', fontFamily: 'system-ui, sans-serif' }}>
+    <div
+      style={{
+        display: 'flex',
+        height: '100vh',
+        background: '#1e1e2e',
+        color: '#cdd6f4',
+        fontFamily: 'system-ui, sans-serif',
+      }}
+    >
       <div style={{ width: '240px', flexShrink: 0 }}>
         <SessionList
           sessions={sessions}
@@ -55,7 +67,15 @@ export function App() {
         {currentSession ? (
           <SessionView session={currentSession} send={send} onMessage={onMessage} />
         ) : (
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: '#666' }}>
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              height: '100%',
+              color: '#666',
+            }}
+          >
             Select or create a session
           </div>
         )}

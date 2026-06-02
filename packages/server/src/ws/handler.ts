@@ -1,8 +1,8 @@
-import type { WSRequest, WSResponse, WSCommand } from '@cubby/core';
+import type { WSCommand, WSRequest, WSResponse } from '@cubby/core';
 import { WS_COMMANDS } from '@cubby/core';
+import type { WebSocket } from 'ws';
 import type { SessionManager } from '../session/manager.js';
 import type { WebSocketHub } from './hub.js';
-import type { WebSocket } from 'ws';
 
 export class WSCommandHandler {
   constructor(
@@ -55,13 +55,9 @@ export class WSCommandHandler {
     const topic = `terminal:${sessionId}`;
     this.hub.subscribe(ws, topic);
 
-    await this.sessionManager.startSession(
-      sessionId,
-      { cwd, cols: 80, rows: 24 },
-      (data) => {
-        this.hub.broadcast(topic, { evt: 'terminal.output', data: { sessionId, data } });
-      },
-    );
+    await this.sessionManager.startSession(sessionId, { cwd, cols: 80, rows: 24 }, (data) => {
+      this.hub.broadcast(topic, { evt: 'terminal.output', data: { sessionId, data } });
+    });
 
     return { id: req.id, ok: true, data: { sessionId } };
   }

@@ -1,6 +1,6 @@
-import { useEffect, useRef } from 'react';
-import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
+import { Terminal } from '@xterm/xterm';
+import { useEffect, useRef } from 'react';
 import '@xterm/xterm/css/xterm.css';
 
 interface TerminalViewProps {
@@ -51,12 +51,7 @@ export function TerminalView({ onData, onResize }: TerminalViewProps) {
     };
   }, []);
 
-  return (
-    <div
-      ref={containerRef}
-      style={{ width: '100%', height: '100%', minHeight: '200px' }}
-    />
-  );
+  return <div ref={containerRef} style={{ width: '100%', height: '100%', minHeight: '200px' }} />;
 }
 
 export function useTerminalOutput(terminalRef: Terminal | null, output: string) {

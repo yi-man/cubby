@@ -1,8 +1,8 @@
-import { describe, expect, it, beforeEach, afterEach } from 'vitest';
-import { Database } from './index.js';
+import { unlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { unlinkSync } from 'node:fs';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { Database } from './index.js';
 
 describe('Database', () => {
   let db: Database;
@@ -21,9 +21,9 @@ describe('Database', () => {
   });
 
   it('creates tables on init', () => {
-    const tables = db
-      .prepare("SELECT name FROM sqlite_master WHERE type='table'")
-      .all() as { name: string }[];
+    const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as {
+      name: string;
+    }[];
     const names = tables.map((t) => t.name);
     expect(names).toContain('sessions');
     expect(names).toContain('terminals');

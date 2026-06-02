@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState, useCallback } from 'react';
 import type { Session } from '@cubby/core';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { TerminalView } from '../terminal/terminal.js';
 
 interface SessionViewProps {
@@ -38,15 +38,27 @@ export function SessionView({ session, send, onMessage }: SessionViewProps) {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-      <div style={{ padding: '8px', borderBottom: '1px solid #333', display: 'flex', gap: '8px', alignItems: 'center' }}>
+      <div
+        style={{
+          padding: '8px',
+          borderBottom: '1px solid #333',
+          display: 'flex',
+          gap: '8px',
+          alignItems: 'center',
+        }}
+      >
         <span style={{ fontWeight: 'bold' }}>{session.title ?? session.provider}</span>
         <span style={{ color: '#888', fontSize: '12px' }}>{session.status}</span>
         <div style={{ marginLeft: 'auto', display: 'flex', gap: '4px' }}>
           {session.status === 'draft' && (
-            <button onClick={handleStart} style={{ padding: '4px 12px' }}>Start</button>
+            <button onClick={handleStart} style={{ padding: '4px 12px' }}>
+              Start
+            </button>
           )}
           {(session.status === 'running' || session.status === 'starting') && (
-            <button onClick={handleKill} style={{ padding: '4px 12px', color: 'red' }}>Kill</button>
+            <button onClick={handleKill} style={{ padding: '4px 12px', color: 'red' }}>
+              Kill
+            </button>
           )}
         </div>
       </div>

@@ -9,7 +9,9 @@ interface SessionListProps {
 
 export function SessionList({ sessions, currentId, onSelect, onCreate }: SessionListProps) {
   return (
-    <div style={{ padding: '8px', borderRight: '1px solid #333', height: '100%', overflowY: 'auto' }}>
+    <div
+      style={{ padding: '8px', borderRight: '1px solid #333', height: '100%', overflowY: 'auto' }}
+    >
       <button onClick={onCreate} style={{ width: '100%', marginBottom: '8px', padding: '8px' }}>
         + New Session
       </button>

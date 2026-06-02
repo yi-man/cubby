@@ -1,5 +1,5 @@
-import { useEffect, useRef, useCallback, useState } from 'react';
-import type { WSRequest, WSResponse, WSEvent } from '@cubby/core';
+import type { WSEvent, WSRequest, WSResponse } from '@cubby/core';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 export function serializeWSRequest(req: WSRequest): string {
   return JSON.stringify(req);
@@ -24,7 +24,9 @@ export function useWebSocket(url: string) {
 
   const onMessage = useCallback((handler: MessageHandler) => {
     handlersRef.current.add(handler);
-    return () => { handlersRef.current.delete(handler); };
+    return () => {
+      handlersRef.current.delete(handler);
+    };
   }, []);
 
   useEffect(() => {
@@ -40,7 +42,9 @@ export function useWebSocket(url: string) {
       }
     };
 
-    return () => { ws.close(); };
+    return () => {
+      ws.close();
+    };
   }, [url]);
 
   return { send, onMessage, connected };

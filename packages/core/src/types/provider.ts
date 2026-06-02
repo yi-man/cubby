@@ -7,7 +7,12 @@ export interface SpawnOptions {
 
 export interface AgentProvider {
   name: string;
-  spawn(sessionId: string, options: SpawnOptions): Promise<AgentProcess>;
+  spawn(
+    sessionId: string,
+    options: SpawnOptions,
+    onOutput?: (data: string) => void,
+    onExit?: (code: number) => void,
+  ): Promise<AgentProcess>;
   kill(process: AgentProcess): Promise<void>;
 }
 

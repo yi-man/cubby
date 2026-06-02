@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { decodeBinaryFrame, encodeBinaryFrame } from './binary.js';
 import { BinaryFrameType } from '../types/ws.js';
+import { decodeBinaryFrame, encodeBinaryFrame } from './binary.js';
 
 describe('binary protocol', () => {
   it('encode and decode output frame', () => {

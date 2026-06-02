@@ -1,4 +1,4 @@
-import { BinaryFrameType } from '../types/ws.js';
+import type { BinaryFrameType } from '../types/ws.js';
 
 export interface DecodedFrame {
   type: BinaryFrameType;
@@ -6,7 +6,11 @@ export interface DecodedFrame {
   payload: string;
 }
 
-export function encodeBinaryFrame(type: BinaryFrameType, terminalId: string, payload: string): ArrayBuffer {
+export function encodeBinaryFrame(
+  type: BinaryFrameType,
+  terminalId: string,
+  payload: string,
+): ArrayBuffer {
   const encoder = new TextEncoder();
   const idBytes = encoder.encode(terminalId);
   const payloadBytes = encoder.encode(payload);

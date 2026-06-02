@@ -1,5 +1,5 @@
-import { atom } from 'jotai';
 import type { Session } from '@cubby/core';
+import { atom } from 'jotai';
 
 export const sessionsAtom = atom<Session[]>([]);
 export const currentSessionIdAtom = atom<string | null>(null);
