@@ -256,6 +256,8 @@ test.describe('Cubby MVP', () => {
 
     await page.goto('/');
 
+    const group = page.getByTestId('workspace-group').filter({ hasText: workspaceId });
+    await selectSessionTab(group, latest.title);
     await assertActiveDetail(page, {
       title: latest.title,
       status: 'draft',
@@ -272,6 +274,52 @@ test.describe('Cubby MVP', () => {
     ).toHaveCSS('border-color', 'rgb(137, 180, 250)');
   });
 
+  test('default active session prefers running work over newer ended empty sessions', async ({
+    page,
+  }) => {
+    const stamp = Date.now();
+    const workspaceId = `/tmp/cubby-default-running-${stamp}`;
+    const running = await createSession(page, {
+      workspaceId,
+      title: `Default Running ${stamp}`,
+    });
+    await startSession(page, running);
+    const ended = await createSession(page, {
+      workspaceId,
+      title: `Default Empty Ended ${stamp}`,
+    });
+    await stopSession(page, ended);
+
+    await page.goto('/');
+
+    await assertActiveDetail(page, {
+      title: running.title,
+      status: 'running',
+      action: 'Stop',
+    });
+  });
+
+  test('ended session without captured history shows a visible empty state', async ({ page }) => {
+    const stamp = Date.now();
+    const workspaceId = `/tmp/cubby-ended-empty-${stamp}`;
+    const ended = await createSession(page, {
+      workspaceId,
+      title: `Ended Empty ${stamp}`,
+    });
+    await stopSession(page, ended);
+
+    await page.goto('/');
+
+    const group = page.getByTestId('workspace-group').filter({ hasText: workspaceId });
+    await selectSessionTab(group, ended.title);
+    await assertActiveDetail(page, {
+      title: ended.title,
+      status: 'ended',
+      action: 'Resume',
+    });
+    await expect(page.getByTestId('empty-terminal-history')).toBeVisible();
+  });
+
   test('workspace tabs switch the right pane to that workspace session', async ({ page }) => {
     const stamp = Date.now();
     const firstWorkspaceId = `/tmp/cubby-workspace-a-${stamp}`;
@@ -286,6 +334,12 @@ test.describe('Cubby MVP', () => {
     });
 
     await page.goto('/');
+
+    await page
+      .getByTestId('workspace-group')
+      .filter({ hasText: firstWorkspaceId })
+      .getByTestId('workspace-tab')
+      .click();
 
     await assertActiveDetail(page, {
       title: first.title,
@@ -443,6 +497,11 @@ test.describe('Cubby MVP', () => {
     });
 
     await page.goto('/');
+    await page
+      .getByTestId('workspace-group')
+      .filter({ hasText: secondWorkspaceId })
+      .getByTestId('workspace-tab')
+      .click();
     await assertActiveDetail(page, { title: second.title, status: 'draft', action: 'Start' });
 
     const firstGroup = page.getByTestId('workspace-group').filter({ hasText: firstWorkspaceId });

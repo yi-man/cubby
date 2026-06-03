@@ -59,6 +59,7 @@ export function SessionView({
   const termRef = useRef<TerminalHandle>(null);
   const terminalSizeRef = useRef({ cols: 80, rows: 24 });
   const [terminalReady, setTerminalReady] = useState(false);
+  const [replayState, setReplayState] = useState({ loaded: false, hasHistory: false });
 
   // Subscribe to terminal output events
   useEffect(() => {
@@ -69,6 +70,7 @@ export function SessionView({
         isTerminalOutputData(msg.data, session.id)
       ) {
         termRef.current?.write(msg.data.data);
+        setReplayState((prev) => (prev.hasHistory ? prev : { loaded: true, hasHistory: true }));
       }
     });
     return unsub;
@@ -77,6 +79,7 @@ export function SessionView({
   useEffect(() => {
     if (!terminalReady) return;
     let cancelled = false;
+    setReplayState({ loaded: false, hasHistory: false });
 
     request({
       id: `replay-${session.id}-${Date.now()}`,
@@ -84,12 +87,19 @@ export function SessionView({
       args: { sessionId: session.id },
     })
       .then((res) => {
-        if (cancelled || !res.ok || !isTerminalReplayData(res.data, session.id)) return;
+        if (cancelled) return;
+        if (!res.ok || !isTerminalReplayData(res.data, session.id)) {
+          setReplayState({ loaded: true, hasHistory: false });
+          return;
+        }
         for (const chunk of res.data.chunks) {
           termRef.current?.write(chunk);
         }
+        setReplayState({ loaded: true, hasHistory: res.data.chunks.length > 0 });
       })
-      .catch(() => {});
+      .catch(() => {
+        if (!cancelled) setReplayState({ loaded: true, hasHistory: false });
+      });
 
     return () => {
       cancelled = true;
@@ -168,6 +178,9 @@ export function SessionView({
     [session.id, session.status, send],
   );
 
+  const showEmptyEndedHistory =
+    session.status === 'ended' && replayState.loaded && !replayState.hasHistory;
+
   return (
     <div
       style={{
@@ -217,13 +230,39 @@ export function SessionView({
           )}
         </div>
       </div>
-      <div style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
+      <div style={{ flex: 1, minHeight: 0, overflow: 'hidden', position: 'relative' }}>
         <TerminalView
           ref={termRef}
           onData={handleData}
           onResize={handleResize}
           onReady={() => setTerminalReady(true)}
         />
+        {showEmptyEndedHistory && (
+          <div
+            data-testid="empty-terminal-history"
+            style={{
+              position: 'absolute',
+              inset: 0,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              padding: '24px',
+              background: '#1e1e2e',
+              color: '#8b93b5',
+              textAlign: 'center',
+              pointerEvents: 'none',
+            }}
+          >
+            <div>
+              <div style={{ color: '#cdd6f4', fontSize: '14px', fontWeight: 700 }}>
+                No terminal history captured
+              </div>
+              <div style={{ marginTop: '6px', fontSize: '12px' }}>
+                Resume to continue this session.
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

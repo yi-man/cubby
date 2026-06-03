@@ -127,6 +127,18 @@ function isSessionStatusData(
   );
 }
 
+function preferredSessionId(sessions: Session[]): string | null {
+  const liveSession = sessions.find(
+    (session) => session.status === 'running' || session.status === 'starting',
+  );
+  if (liveSession) return liveSession.id;
+
+  const inactiveSession = sessions.find(
+    (session) => session.status === 'idle' || session.status === 'draft',
+  );
+  return inactiveSession?.id ?? sessions[0]?.id ?? null;
+}
+
 export function App() {
   const { send, request, onMessage, connected } = useWebSocket(getWsUrl());
   const [sessions, setSessions] = useAtom(sessionsAtom);
@@ -158,7 +170,7 @@ export function App() {
     }
 
     if (currentId && sessions.some((session) => session.id === currentId)) return;
-    setCurrentId(sessions[0].id);
+    setCurrentId(preferredSessionId(sessions));
   }, [sessions, currentId, setCurrentId]);
 
   // Handle responses
