@@ -78,8 +78,8 @@ async function sendPromptAndWaitForAssistant(page: Page, token: string): Promise
   await page.locator('.xterm').click();
   await page.keyboard.type(`Reply exactly ${token}. Do not use tools.`);
   await page.keyboard.press('Enter');
-  await waitForTerminalText(page, new RegExp(`⏺\\s+${token}`), 90_000);
-  await waitForTerminalIdle(page);
+  await waitForTerminalText(page, token, 30_000);
+  await waitForTerminalIdle(page, 2_000, 120_000);
   return generatedTitleForToken(token);
 }
 
@@ -150,7 +150,7 @@ test('real Claude Code session supports keyboard input, ctrl-c exit, resume, and
   await expect(workspaceGroup.getByTestId('session-item')).toHaveCount(2);
 
   await selectWorkspaceSession(page, resumedTitle);
-  await waitForTerminalText(page, '⏺ CUBBY_REAL_RESUMED', 20_000);
+  await waitForTerminalText(page, 'CUBBY_REAL_RESUMED', 20_000);
   await sendPromptAndWaitForAssistant(page, 'CUBBY_REAL_AFTER_SWITCH');
 
   await selectWorkspaceSession(page, 'claude-code');

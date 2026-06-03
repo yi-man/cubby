@@ -93,6 +93,50 @@ test.describe('Cubby MVP', () => {
     expect(metrics.rootRect?.height).toBe(metrics.viewport.height);
   });
 
+  test('sidebar is expanded by default on desktop and remembers user collapse state', async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 1280, height: 720 });
+    await page.goto('/');
+
+    const sidebar = page.getByTestId('sidebar-shell');
+    await expect(sidebar).toHaveCSS('width', '240px');
+    await expect(page.getByRole('button', { name: '+ New Session' })).toBeVisible();
+
+    await page.getByRole('button', { name: 'Collapse sidebar' }).click();
+    await expect(sidebar).toHaveCSS('width', '44px');
+    await expect(page.getByTestId('sidebar-rail')).toBeVisible();
+    await expect(page.getByRole('button', { name: '+ New Session' })).toHaveCount(0);
+
+    await page.reload();
+    await expect(sidebar).toHaveCSS('width', '44px');
+    await expect(page.getByTestId('sidebar-rail')).toBeVisible();
+
+    await page.getByRole('button', { name: 'Expand sidebar' }).click();
+    await expect(sidebar).toHaveCSS('width', '240px');
+    await expect(page.getByRole('button', { name: '+ New Session' })).toBeVisible();
+
+    await page.reload();
+    await expect(sidebar).toHaveCSS('width', '240px');
+    await expect(page.getByRole('button', { name: '+ New Session' })).toBeVisible();
+  });
+
+  test('sidebar is collapsed by default on mobile without stored browser state', async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto('/');
+
+    const sidebar = page.getByTestId('sidebar-shell');
+    await expect(sidebar).toHaveCSS('width', '44px');
+    await expect(page.getByTestId('sidebar-rail')).toBeVisible();
+    await expect(page.getByRole('button', { name: '+ New Session' })).toHaveCount(0);
+
+    await page.getByRole('button', { name: 'Expand sidebar' }).click();
+    await expect(sidebar).toHaveCSS('width', '240px');
+    await expect(page.getByRole('button', { name: '+ New Session' })).toBeVisible();
+  });
+
   test('switching sessions resets the right terminal pane', async ({ page }) => {
     const firstTitle = `Switch First ${Date.now()}`;
     const secondTitle = `Switch Second ${Date.now()}`;

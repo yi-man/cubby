@@ -73,7 +73,6 @@ export function SessionList({ sessions, currentId, onSelect, onCreate }: Session
     <div
       style={{
         padding: '10px',
-        borderRight: '1px solid #262a3b',
         height: '100%',
         overflowY: 'auto',
         background: '#171923',
