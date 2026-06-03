@@ -15,6 +15,7 @@ export class SessionManager {
   private processes = new Map<string, AgentProcess>();
   private outputBuffers = new Map<string, RingBuffer>();
   private firstInputBuffers = new Map<string, string>();
+  private sessionsNeedingResumeInputReset = new Set<string>();
   private statusListeners: ((sessionId: string, status: string) => void)[] = [];
 
   constructor(private store: SessionStore) {}
@@ -91,7 +92,8 @@ export class SessionManager {
 
     const provider = this.providers.get(session.provider);
     if (!provider) throw new Error(`Provider not found: ${session.provider}`);
-    const outputBuffer = this.getOrCreateOutputBuffer(sessionId);
+    const outputBuffer = new RingBuffer(OUTPUT_HISTORY_LIMIT);
+    this.outputBuffers.set(sessionId, outputBuffer);
 
     this.store.updateStatus(sessionId, 'starting');
     this.notifyStatusChange(sessionId, 'starting');
@@ -119,6 +121,11 @@ export class SessionManager {
       );
 
       this.processes.set(sessionId, process);
+      if (resume) {
+        this.sessionsNeedingResumeInputReset.add(sessionId);
+      } else {
+        this.sessionsNeedingResumeInputReset.delete(sessionId);
+      }
       this.store.updateStatus(sessionId, 'running', { pid: process.pid });
       this.notifyStatusChange(sessionId, 'running');
     } catch (err) {
@@ -136,22 +143,36 @@ export class SessionManager {
     }
     this.store.updateStatus(sessionId, 'ended');
     this.notifyStatusChange(sessionId, 'ended');
+    this.sessionsNeedingResumeInputReset.delete(sessionId);
   }
 
   getProcess(sessionId: string): AgentProcess | undefined {
     return this.processes.get(sessionId);
   }
 
+  consumeResumeInputResetPrefix(sessionId: string, data: string): string {
+    if (!this.sessionsNeedingResumeInputReset.has(sessionId)) return '';
+    if (!shouldResetBeforeResumeInput(data)) return '';
+    this.sessionsNeedingResumeInputReset.delete(sessionId);
+    return '\x15';
+  }
+
   getOutputHistory(sessionId: string): string[] {
+    if (this.processes.has(sessionId)) {
+      return this.outputBuffers.get(sessionId)?.getAll() ?? [];
+    }
+
+    const session = this.store.get(sessionId);
+    const provider = session ? this.providers.get(session.provider) : undefined;
     const persistedHistory = this.store.getTerminalOutputHistory(sessionId, OUTPUT_HISTORY_LIMIT);
     if (persistedHistory.length > 0) return persistedHistory;
     const bufferedHistory = this.outputBuffers.get(sessionId)?.getAll() ?? [];
     if (bufferedHistory.length > 0) return bufferedHistory;
-
-    const session = this.store.get(sessionId);
-    if (!session) return [];
-    const provider = this.providers.get(session.provider);
-    return provider?.getTranscriptHistory?.(sessionId, session.workspaceId) ?? [];
+    const transcriptHistory = session
+      ? (provider?.getTranscriptHistory?.(sessionId, session.workspaceId) ?? [])
+      : [];
+    if (transcriptHistory.length > 0) return transcriptHistory;
+    return [];
   }
 
   recordTerminalInput(sessionId: string, data: string): Session | null {
@@ -185,15 +206,6 @@ export class SessionManager {
     this.firstInputBuffers.set(sessionId, buffer);
     return null;
   }
-
-  private getOrCreateOutputBuffer(sessionId: string): RingBuffer {
-    let outputBuffer = this.outputBuffers.get(sessionId);
-    if (!outputBuffer) {
-      outputBuffer = new RingBuffer(5000);
-      this.outputBuffers.set(sessionId, outputBuffer);
-    }
-    return outputBuffer;
-  }
 }
 
 function summarizeFirstInput(input: string): string {
@@ -213,6 +225,20 @@ function summarizeFirstInput(input: string): string {
 
 function isSlashCommandTitle(title: string): boolean {
   return title.trim().startsWith('/');
+}
+
+function shouldResetBeforeResumeInput(data: string): boolean {
+  for (let index = 0; index < data.length; index++) {
+    const char = data[index];
+    if (char === '\x1b') {
+      index = skipEscapeSequence(data, index) - 1;
+      continue;
+    }
+    if (char === '\r' || char === '\n') return true;
+    if (char >= ' ') return true;
+  }
+
+  return false;
 }
 
 function skipEscapeSequence(input: string, startIndex: number): number {

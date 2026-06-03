@@ -120,9 +120,12 @@ export class ClaudeCodeProvider implements AgentProvider {
 
     const chunks: string[] = [];
     const lines = readFileSync(transcriptPath, 'utf8').split(/\r?\n/);
+    let skipNextLocalCommandStdout = false;
     for (const line of lines) {
       if (!line.trim()) continue;
-      const chunk = transcriptLineToHistoryChunk(line);
+      const entry = transcriptLineToHistoryEntry(line, skipNextLocalCommandStdout);
+      skipNextLocalCommandStdout = entry.skipNextLocalCommandStdout;
+      const { chunk } = entry;
       if (chunk) chunks.push(chunk);
     }
     return chunks;
@@ -147,34 +150,44 @@ export class ClaudeCodeProvider implements AgentProvider {
   }
 }
 
-function transcriptLineToHistoryChunk(line: string): string | null {
+function transcriptLineToHistoryEntry(
+  line: string,
+  skipLocalCommandStdout: boolean,
+): { chunk: string | null; skipNextLocalCommandStdout: boolean } {
   let record: unknown;
   try {
     record = JSON.parse(line);
   } catch {
-    return null;
+    return { chunk: null, skipNextLocalCommandStdout: false };
   }
-  if (!isTranscriptRecord(record)) return null;
-  if (record.type !== 'user') return null;
-  if (record.isMeta) return null;
+  if (!isTranscriptRecord(record)) return { chunk: null, skipNextLocalCommandStdout: false };
+  if (record.type !== 'user') return { chunk: null, skipNextLocalCommandStdout: false };
+  if (record.isMeta) return { chunk: null, skipNextLocalCommandStdout: false };
   const content = record.message?.content;
-  if (typeof content !== 'string') return null;
-  if (content.includes('<local-command-caveat>')) return null;
+  if (typeof content !== 'string') return { chunk: null, skipNextLocalCommandStdout: false };
+  if (content.includes('<local-command-caveat>')) {
+    return { chunk: null, skipNextLocalCommandStdout: false };
+  }
 
   const commandName = extractTag(content, 'command-name');
   if (commandName) {
-    return `> ${commandName.trim()}\r\n`;
+    const trimmedCommand = commandName.trim();
+    if (trimmedCommand.startsWith('/')) {
+      return { chunk: null, skipNextLocalCommandStdout: true };
+    }
+    return { chunk: `> ${trimmedCommand}\r\n`, skipNextLocalCommandStdout: false };
   }
 
   const stdout = extractTag(content, 'local-command-stdout');
   if (stdout) {
-    return `${stdout.trim()}\r\n`;
+    if (skipLocalCommandStdout) return { chunk: null, skipNextLocalCommandStdout: false };
+    return { chunk: `${stdout.trim()}\r\n`, skipNextLocalCommandStdout: false };
   }
 
   const trimmed = content.trim();
-  if (!trimmed) return null;
-  if (trimmed.startsWith('<')) return null;
-  return `> ${trimmed}\r\n`;
+  if (!trimmed) return { chunk: null, skipNextLocalCommandStdout: false };
+  if (trimmed.startsWith('<')) return { chunk: null, skipNextLocalCommandStdout: false };
+  return { chunk: `> ${trimmed}\r\n`, skipNextLocalCommandStdout: false };
 }
 
 function isTranscriptRecord(

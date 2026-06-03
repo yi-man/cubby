@@ -147,6 +147,78 @@ describe('WSCommandHandler', () => {
     expect(spawnOptions.at(-1)).toMatchObject({ cwd: '/tmp', cols: 132, rows: 41, resume: true });
   });
 
+  it('clears stale Claude resume input before the first terminal input', async () => {
+    const writes: string[] = [];
+    const provider: AgentProvider = {
+      name: 'mock',
+      async spawn() {
+        return {
+          pid: 457,
+          onData: (_callback) => {},
+          onExit: (_callback) => {},
+          write: (data) => writes.push(data),
+          resize: () => {},
+          kill: () => {},
+        };
+      },
+      async kill() {},
+    };
+    manager.registerProvider(provider);
+    const session = manager.createSession({ workspaceId: '/tmp', provider: 'mock' });
+    await manager.startSession(session.id, { cwd: '/tmp', cols: 80, rows: 24 });
+    await manager.killSession(session.id);
+    await manager.resumeSession(session.id, { cwd: '/tmp', cols: 80, rows: 24 });
+
+    await handler.handle({} as WebSocket, {
+      id: 'resume-input-1',
+      cmd: 'terminal.input',
+      args: { sessionId: session.id, data: '/' },
+    });
+    await handler.handle({} as WebSocket, {
+      id: 'resume-input-2',
+      cmd: 'terminal.input',
+      args: { sessionId: session.id, data: 'theme\r' },
+    });
+
+    expect(writes).toEqual(['\x15/', 'theme\r']);
+  });
+
+  it('does not attach stale Claude resume cleanup to a standalone escape key', async () => {
+    const writes: string[] = [];
+    const provider: AgentProvider = {
+      name: 'mock',
+      async spawn() {
+        return {
+          pid: 458,
+          onData: (_callback) => {},
+          onExit: (_callback) => {},
+          write: (data) => writes.push(data),
+          resize: () => {},
+          kill: () => {},
+        };
+      },
+      async kill() {},
+    };
+    manager.registerProvider(provider);
+    const session = manager.createSession({ workspaceId: '/tmp', provider: 'mock' });
+    await manager.startSession(session.id, { cwd: '/tmp', cols: 80, rows: 24 });
+    await manager.killSession(session.id);
+    await manager.resumeSession(session.id, { cwd: '/tmp', cols: 80, rows: 24 });
+
+    await handler.handle({} as WebSocket, {
+      id: 'resume-escape',
+      cmd: 'terminal.input',
+      args: { sessionId: session.id, data: '\x1b' },
+    });
+    await handler.handle({} as WebSocket, {
+      id: 'resume-slash',
+      cmd: 'terminal.input',
+      args: { sessionId: session.id, data: '/' },
+    });
+
+    expect(writes).toEqual(['\x1b', '\x15/']);
+  });
+
   it('starts a session with requested terminal dimensions', async () => {
     const spawnOptions: SpawnOptions[] = [];
     const provider: AgentProvider = {
@@ -179,6 +251,48 @@ describe('WSCommandHandler', () => {
 
     expect(response).toEqual({ id: 'start-sized', ok: true, data: { sessionId: session.id } });
     expect(spawnOptions.at(0)).toMatchObject({ cwd: '/tmp', cols: 142, rows: 53 });
+  });
+
+  it('subscribes the starting websocket before the first terminal output', async () => {
+    const sent: unknown[] = [];
+    const ws = {
+      readyState: 1,
+      send: (message: string) => sent.push(JSON.parse(message)),
+    } as unknown as WebSocket;
+    const provider: AgentProvider = {
+      name: 'mock',
+      async spawn(
+        sessionId: string,
+        _options: SpawnOptions,
+        onOutput: (data: string) => void = () => {},
+      ) {
+        onOutput(`first output for ${sessionId}`);
+        return {
+          pid: 655,
+          onData: (_callback) => {},
+          onExit: (_callback) => {},
+          write: () => {},
+          resize: () => {},
+          kill: () => {},
+        };
+      },
+      async kill() {},
+    };
+    hub.addClient(ws);
+    manager.registerProvider(provider);
+    const session = manager.createSession({ workspaceId: '/tmp', provider: 'mock' });
+
+    const response = await handler.handle(ws, {
+      id: 'start-streaming',
+      cmd: 'session.start',
+      args: { sessionId: session.id, cwd: '/tmp', cols: 80, rows: 24 },
+    });
+
+    expect(response).toEqual({ id: 'start-streaming', ok: true, data: { sessionId: session.id } });
+    expect(sent).toContainEqual({
+      evt: 'terminal.output',
+      data: { sessionId: session.id, data: `first output for ${session.id}` },
+    });
   });
 
   it('updates session title from the first terminal input and broadcasts it', async () => {

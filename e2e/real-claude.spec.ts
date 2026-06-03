@@ -9,7 +9,7 @@ test.skip(!REAL_CLAUDE_ENABLED, 'Unset CUBBY_SKIP_REAL_CLAUDE_E2E to run real Cl
 test.describe.configure({ mode: 'serial', retries: 0 });
 
 async function createSessionFromUi(page: Page): Promise<void> {
-  await page.getByRole('button', { name: '+ New Session' }).click();
+  await page.getByRole('button', { name: 'New Session' }).click();
   await page.getByLabel('Workspace path').fill(WORKSPACE);
   await page.getByRole('button', { name: 'Open' }).click();
   await expect(
@@ -26,6 +26,47 @@ async function createSessionFromUi(page: Page): Promise<void> {
 
 async function terminalText(page: Page): Promise<string> {
   return page.locator('.xterm-rows').evaluate((element) => element.textContent ?? '');
+}
+
+async function installWebSocketRecorder(page: Page): Promise<void> {
+  await page.addInitScript(() => {
+    const NativeWebSocket = window.WebSocket;
+    const recordedWindow = window as Window & { __cubbySent: string[] };
+    recordedWindow.__cubbySent = [];
+    window.WebSocket = class LoggedWebSocket extends NativeWebSocket {
+      send(data) {
+        recordedWindow.__cubbySent.push(String(data));
+        return super.send(data);
+      }
+    };
+  });
+}
+
+async function sentTerminalInputs(page: Page): Promise<Array<{ sessionId: string; data: string }>> {
+  return page.evaluate(() => {
+    const recordedWindow = window as Window & { __cubbySent?: string[] };
+    return (recordedWindow.__cubbySent ?? [])
+      .map((raw) => {
+        try {
+          return JSON.parse(raw);
+        } catch {
+          return null;
+        }
+      })
+      .filter((msg): msg is { cmd: string; args: { sessionId: string; data: string } } => {
+        return (
+          msg !== null &&
+          msg.cmd === 'terminal.input' &&
+          typeof msg.args?.sessionId === 'string' &&
+          typeof msg.args?.data === 'string'
+        );
+      })
+      .map((msg) => ({ sessionId: msg.args.sessionId, data: msg.args.data }));
+  });
+}
+
+async function activeElementAriaLabel(page: Page): Promise<string | null> {
+  return page.evaluate(() => document.activeElement?.getAttribute('aria-label') ?? null);
 }
 
 function countOccurrences(text: string, needle: string): number {
@@ -73,32 +114,36 @@ async function sendPromptAndWaitForAssistant(page: Page, token: string): Promise
   await page.locator('.xterm').click();
   await page.keyboard.type(`Reply exactly ${token}. Do not use tools.`);
   await page.keyboard.press('Enter');
-  await waitForTerminalText(page, token, 30_000);
+  await expect
+    .poll(async () => countOccurrences(await terminalText(page), token), { timeout: 60_000 })
+    .toBeGreaterThanOrEqual(2);
   await waitForTerminalIdle(page, 2_000, 120_000);
   return generatedTitleForToken(token);
 }
 
-async function chooseThemeAndAssertMenuClears(page: Page): Promise<void> {
+async function enterThemeCommand(page: Page): Promise<void> {
   await page.locator('.xterm').click();
-  await page.keyboard.type('/theme');
+  await page.keyboard.type('/theme', { delay: 15 });
+  await waitForTerminalText(page, 'Change the theme', 30_000);
   await page.keyboard.press('Enter');
+}
+
+async function chooseThemeAndAssertMenuClears(page: Page): Promise<void> {
+  await enterThemeCommand(page);
   await waitForTerminalText(page, 'Enter to select', 30_000);
   await expect
     .poll(async () => countOccurrences(await terminalText(page), 'Enter to select'), {
       timeout: 10_000,
     })
     .toBe(1);
-  await page.keyboard.press('Enter');
-  await waitForTerminalText(page, /Theme set to/i, 30_000);
+  await page.keyboard.press('Escape');
   await waitForTerminalIdle(page);
   await expect.poll(() => terminalText(page), { timeout: 10_000 }).not.toContain('Enter to select');
   await expect.poll(() => terminalText(page), { timeout: 10_000 }).not.toContain('function greet');
 }
 
 async function navigateThemeMenuAndAssertSingleMenu(page: Page): Promise<void> {
-  await page.locator('.xterm').click();
-  await page.keyboard.type('/theme');
-  await page.keyboard.press('Enter');
+  await enterThemeCommand(page);
   await waitForTerminalText(page, 'Enter to select', 30_000);
   await page.keyboard.press('ArrowDown');
   await page.waitForTimeout(250);
@@ -118,8 +163,7 @@ async function navigateThemeMenuAndAssertSingleMenu(page: Page): Promise<void> {
     })
     .toBe(1);
 
-  await page.keyboard.press('Enter');
-  await waitForTerminalText(page, /Theme set to/i, 30_000);
+  await page.keyboard.press('Escape');
   await waitForTerminalIdle(page);
   await expect.poll(() => terminalText(page), { timeout: 10_000 }).not.toContain('Enter to select');
   await expect.poll(() => terminalText(page), { timeout: 10_000 }).not.toContain('function greet');
@@ -132,9 +176,12 @@ async function selectWorkspaceSession(page: Page, title: string): Promise<void> 
 
 async function ctrlCExit(page: Page): Promise<void> {
   await page.locator('.xterm').click();
-  await page.keyboard.press('Control+C');
-  await page.waitForTimeout(500);
-  await page.keyboard.press('Control+C');
+  const status = page.getByTestId('session-detail-pane').getByTestId('session-status');
+  for (let attempt = 0; attempt < 4; attempt++) {
+    await page.keyboard.press('Control+C');
+    await page.waitForTimeout(700);
+    if ((await status.textContent()) === 'ended') break;
+  }
   await expect(page.getByTestId('session-detail-pane').getByTestId('session-status')).toHaveText(
     'ended',
     { timeout: 20_000 },
@@ -142,7 +189,21 @@ async function ctrlCExit(page: Page): Promise<void> {
   await expect(
     page.getByTestId('session-detail-pane').getByRole('button', { name: 'Resume' }),
   ).toBeVisible();
-  await waitForTerminalText(page, 'Resume this session with:', 20_000);
+  await expect(page.locator('.xterm')).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByTestId('ended-terminal-transcript')).toHaveCount(0);
+}
+
+async function stopFromUi(page: Page): Promise<void> {
+  await page.getByRole('button', { name: 'Stop', exact: true }).click();
+  await expect(page.getByTestId('session-detail-pane').getByTestId('session-status')).toHaveText(
+    'ended',
+    { timeout: 20_000 },
+  );
+  await expect(
+    page.getByTestId('session-detail-pane').getByRole('button', { name: 'Resume' }),
+  ).toBeVisible();
+  await expect(page.locator('.xterm')).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByTestId('ended-terminal-transcript')).toHaveCount(0);
 }
 
 async function createTitledSession(page: Page, title: string): Promise<void> {
@@ -172,7 +233,7 @@ test('real Claude Code session supports keyboard input, ctrl-c exit, resume, and
 
   await ctrlCExit(page);
 
-  await expect(terminalText(page)).resolves.toContain('Resume this session with:');
+  await expect.poll(() => terminalText(page), { timeout: 20_000 }).toContain('CUBBY_REAL_READY');
   await page.getByRole('button', { name: 'Resume', exact: true }).click();
   await expect(page.getByTestId('session-detail-pane').getByTestId('session-status')).toHaveText(
     'running',
@@ -203,6 +264,27 @@ test('real Claude Code session supports keyboard input, ctrl-c exit, resume, and
   await sendPromptAndWaitForAssistant(page, 'CUBBY_REAL_SECOND_TAB');
 });
 
+test('real ended session keeps xterm replay layout before resume', async ({ page }) => {
+  test.setTimeout(120_000);
+
+  const title = `real-ended-layout-${Date.now()}`;
+  await createTitledSession(page, title);
+
+  await page.goto('/');
+  await selectWorkspaceSession(page, title);
+  await page.getByRole('button', { name: 'Start', exact: true }).click();
+  await expect(page.getByTestId('session-detail-pane').getByTestId('session-status')).toHaveText(
+    'running',
+    { timeout: 20_000 },
+  );
+  await waitForTerminalText(page, 'Claude Code', 20_000);
+
+  await ctrlCExit(page);
+
+  await expect(page.locator('.xterm-rows')).toBeVisible();
+  await expect.poll(() => terminalText(page), { timeout: 20_000 }).toContain('Claude Code');
+});
+
 test('real slash-command titled session shows a single theme menu after resume', async ({
   page,
 }) => {
@@ -221,9 +303,9 @@ test('real slash-command titled session shows a single theme menu after resume',
   await waitForTerminalText(page, 'Claude Code', 20_000);
   await waitForTerminalIdle(page);
   await navigateThemeMenuAndAssertSingleMenu(page);
+  await sendPromptAndWaitForAssistant(page, 'CUBBY_REAL_SLASH_RESUME_READY');
 
-  await ctrlCExit(page);
-  await expect(terminalText(page)).resolves.toContain('Theme set to');
+  await stopFromUi(page);
 
   await page.getByRole('button', { name: 'Resume', exact: true }).click();
   await expect(page.getByTestId('session-detail-pane').getByTestId('session-status')).toHaveText(
@@ -233,4 +315,97 @@ test('real slash-command titled session shows a single theme menu after resume',
   await expect.poll(() => terminalText(page), { timeout: 20_000 }).not.toContain('Theme set to');
   await waitForTerminalIdle(page);
   await navigateThemeMenuAndAssertSingleMenu(page);
+});
+
+test('real titled session shows a single theme menu after resume', async ({ page }) => {
+  test.setTimeout(240_000);
+
+  const title = `当前有代码提交吗？-${Date.now()}`;
+  await createTitledSession(page, title);
+
+  await page.goto('/');
+  await selectWorkspaceSession(page, title);
+  await page.getByRole('button', { name: 'Start', exact: true }).click();
+  await expect(page.getByTestId('session-detail-pane').getByTestId('session-status')).toHaveText(
+    'running',
+    { timeout: 20_000 },
+  );
+  await waitForTerminalText(page, 'Claude Code', 20_000);
+  await waitForTerminalIdle(page);
+  await navigateThemeMenuAndAssertSingleMenu(page);
+  await sendPromptAndWaitForAssistant(page, 'CUBBY_REAL_TITLED_RESUME_READY');
+
+  await stopFromUi(page);
+
+  await page.getByRole('button', { name: 'Resume', exact: true }).click();
+  await expect(page.getByTestId('session-detail-pane').getByTestId('session-status')).toHaveText(
+    'running',
+    { timeout: 20_000 },
+  );
+  await expect.poll(() => terminalText(page), { timeout: 20_000 }).not.toContain('Theme set to');
+  await waitForTerminalIdle(page);
+  await navigateThemeMenuAndAssertSingleMenu(page);
+});
+
+test('real resumed session focuses the live terminal for slash commands and escape', async ({
+  page,
+}) => {
+  test.setTimeout(180_000);
+  await installWebSocketRecorder(page);
+
+  const title = `focus-after-resume-${Date.now()}`;
+  await createTitledSession(page, title);
+
+  await page.goto('/');
+  await selectWorkspaceSession(page, title);
+  await page.getByRole('button', { name: 'Start', exact: true }).click();
+  await expect(page.getByTestId('session-detail-pane').getByTestId('session-status')).toHaveText(
+    'running',
+    { timeout: 20_000 },
+  );
+  await waitForTerminalText(page, 'Claude Code', 20_000);
+  await waitForTerminalIdle(page);
+  await sendPromptAndWaitForAssistant(page, 'CUBBY_REAL_FOCUS_READY');
+
+  const inputsBeforePageEscape = await sentTerminalInputs(page);
+  await page.getByRole('button', { name: 'New Session' }).evaluate((button) => button.focus());
+  await page.keyboard.press('Escape');
+  await expect
+    .poll(
+      async () => {
+        const inputs = await sentTerminalInputs(page);
+        return inputs.slice(inputsBeforePageEscape.length).some((input) => input.data === '\x1b');
+      },
+      { timeout: 2_000 },
+    )
+    .toBe(true);
+  expect((await sentTerminalInputs(page)).length).toBeGreaterThan(inputsBeforePageEscape.length);
+  await expect.poll(() => activeElementAriaLabel(page), { timeout: 2_000 }).toBe('Terminal input');
+
+  await page.getByTestId('session-item').filter({ hasText: title }).click();
+  await expect.poll(() => activeElementAriaLabel(page), { timeout: 2_000 }).toBe('Terminal input');
+
+  await stopFromUi(page);
+  const inputsBeforeEndedEscape = await sentTerminalInputs(page);
+  await expect(page.locator('.xterm')).toBeVisible();
+  await page.keyboard.press('Escape');
+  await page.waitForTimeout(300);
+  expect(await sentTerminalInputs(page)).toHaveLength(inputsBeforeEndedEscape.length);
+
+  await page.getByRole('button', { name: 'Resume', exact: true }).click();
+  await expect(page.getByTestId('session-detail-pane').getByTestId('session-status')).toHaveText(
+    'running',
+    { timeout: 20_000 },
+  );
+  await waitForTerminalIdle(page);
+
+  await page.getByTestId('session-item').filter({ hasText: title }).click();
+  await page.waitForTimeout(300);
+  await page.keyboard.insertText('/theme');
+  await page.waitForTimeout(300);
+  await page.keyboard.press('Enter');
+  await waitForTerminalText(page, 'Enter to select', 30_000);
+  await page.keyboard.press('Escape');
+  await waitForTerminalIdle(page);
+  await expect.poll(() => terminalText(page), { timeout: 10_000 }).not.toContain('Enter to select');
 });

@@ -19,7 +19,7 @@ export class WSCommandHandler {
         case WS_COMMANDS.SESSION_START:
           return this.sessionStart(ws, request);
         case WS_COMMANDS.SESSION_RESUME:
-          return this.sessionResume(request);
+          return this.sessionResume(ws, request);
         case WS_COMMANDS.SESSION_KILL:
           return this.sessionKill(request);
         case WS_COMMANDS.SESSION_LIST:
@@ -60,7 +60,7 @@ export class WSCommandHandler {
     return { id: req.id, ok: true, data: session };
   }
 
-  private async sessionStart(_ws: WebSocket, req: WSRequest): Promise<WSResponse> {
+  private async sessionStart(ws: WebSocket, req: WSRequest): Promise<WSResponse> {
     const { sessionId, cwd, cols, rows } = req.args as {
       sessionId: string;
       cwd: string;
@@ -69,6 +69,7 @@ export class WSCommandHandler {
     };
     const topic = `terminal:${sessionId}`;
     const size = terminalSizeFromArgs(cols, rows);
+    this.hub.subscribe(ws, topic);
 
     await this.sessionManager.startSession(sessionId, { cwd, ...size }, (data) => {
       this.hub.broadcast(topic, { evt: 'terminal.output', data: { sessionId, data } });
@@ -83,7 +84,7 @@ export class WSCommandHandler {
     return { id: req.id, ok: true };
   }
 
-  private async sessionResume(req: WSRequest): Promise<WSResponse> {
+  private async sessionResume(ws: WebSocket, req: WSRequest): Promise<WSResponse> {
     const { sessionId, cwd, cols, rows } = req.args as {
       sessionId: string;
       cwd: string;
@@ -92,6 +93,7 @@ export class WSCommandHandler {
     };
     const topic = `terminal:${sessionId}`;
     const size = terminalSizeFromArgs(cols, rows);
+    this.hub.subscribe(ws, topic);
 
     await this.sessionManager.resumeSession(sessionId, { cwd, ...size }, (data) => {
       this.hub.broadcast(topic, { evt: 'terminal.output', data: { sessionId, data } });
@@ -124,7 +126,7 @@ export class WSCommandHandler {
         error: { code: 'NOT_FOUND', message: 'Session process not found' },
       };
     }
-    process.write(data);
+    process.write(`${this.sessionManager.consumeResumeInputResetPrefix(sessionId, data)}${data}`);
     const updated = this.sessionManager.recordTerminalInput(sessionId, data);
     if (updated) {
       this.hub.broadcastToAll({ evt: WS_EVENTS.SESSION_UPDATED, data: updated });

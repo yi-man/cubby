@@ -5,19 +5,25 @@ import '@xterm/xterm/css/xterm.css';
 
 export interface TerminalHandle {
   write: (data: string) => void;
+  writeAsync: (data: string) => Promise<void>;
   clear: () => void;
+  reset: () => void;
   fit: () => void;
+  focus: () => void;
+  scrollToTop: () => void;
+  scrollToBottom: () => void;
   getTerminal: () => Terminal | null;
 }
 
 interface TerminalViewProps {
+  interactive?: boolean;
   onData?: (data: string) => void;
   onResize?: (cols: number, rows: number) => void;
   onReady?: () => void;
 }
 
 export const TerminalView = forwardRef<TerminalHandle, TerminalViewProps>(function TerminalView(
-  { onData, onResize, onReady },
+  { interactive = true, onData, onResize, onReady },
   ref,
 ) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -26,28 +32,56 @@ export const TerminalView = forwardRef<TerminalHandle, TerminalViewProps>(functi
   const onDataRef = useRef(onData);
   const onResizeRef = useRef(onResize);
   const onReadyRef = useRef(onReady);
+  const interactiveRef = useRef(interactive);
+
+  interactiveRef.current = interactive;
+  onDataRef.current = onData;
+  onResizeRef.current = onResize;
+  onReadyRef.current = onReady;
 
   useEffect(() => {
-    onDataRef.current = onData;
-  }, [onData]);
-
-  useEffect(() => {
-    onResizeRef.current = onResize;
-  }, [onResize]);
-
-  useEffect(() => {
-    onReadyRef.current = onReady;
-  }, [onReady]);
+    const term = terminalRef.current;
+    if (!term) return;
+    term.options.disableStdin = !interactive;
+    if (!interactive) term.blur();
+  }, [interactive]);
 
   useImperativeHandle(ref, () => ({
     write: (data: string) => {
       terminalRef.current?.write(data);
     },
+    writeAsync: (data: string) => {
+      return new Promise((resolve) => {
+        const term = terminalRef.current;
+        if (!term) {
+          resolve();
+          return;
+        }
+        term.write(data, resolve);
+      });
+    },
     clear: () => {
       terminalRef.current?.clear();
     },
+    reset: () => {
+      const term = terminalRef.current;
+      if (!term) return;
+      term.reset();
+      term.clear();
+      term.options.disableStdin = !interactiveRef.current;
+      fitAddonRef.current?.fit();
+    },
     fit: () => {
       fitAddonRef.current?.fit();
+    },
+    focus: () => {
+      terminalRef.current?.focus();
+    },
+    scrollToTop: () => {
+      terminalRef.current?.scrollToTop();
+    },
+    scrollToBottom: () => {
+      terminalRef.current?.scrollToBottom();
     },
     getTerminal: () => terminalRef.current,
   }));
@@ -66,11 +100,30 @@ export const TerminalView = forwardRef<TerminalHandle, TerminalViewProps>(functi
 
     const term = new Terminal({
       cursorBlink: true,
+      disableStdin: !interactiveRef.current,
       fontSize: 14,
-      fontFamily: 'monospace',
+      fontFamily: '"SFMono-Regular", "SF Mono", Menlo, Consolas, monospace',
       theme: {
-        background: '#1e1e2e',
-        foreground: '#cdd6f4',
+        background: '#050606',
+        foreground: '#e6e2da',
+        cursor: '#22c8f2',
+        selectionBackground: '#263238',
+        black: '#050606',
+        brightBlack: '#6f6f6a',
+        red: '#d58c7f',
+        brightRed: '#f1a092',
+        green: '#9bd37f',
+        brightGreen: '#b6ed9b',
+        yellow: '#d0b873',
+        brightYellow: '#e6cf8a',
+        blue: '#8fb8ff',
+        brightBlue: '#a8c8ff',
+        magenta: '#c6a4f2',
+        brightMagenta: '#d7b8ff',
+        cyan: '#58d7f5',
+        brightCyan: '#78e4ff',
+        white: '#dedbd2',
+        brightWhite: '#ffffff',
       },
     });
 
@@ -85,7 +138,9 @@ export const TerminalView = forwardRef<TerminalHandle, TerminalViewProps>(functi
     fitAddonRef.current = fitAddon;
     onReadyRef.current?.();
 
-    term.onData((data) => onDataRef.current?.(data));
+    term.onData((data) => {
+      if (interactiveRef.current) onDataRef.current?.(data);
+    });
 
     const observer = new ResizeObserver(() => {
       fitAddon.fit();

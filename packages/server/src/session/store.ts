@@ -126,7 +126,7 @@ export class SessionStore {
       )
       .all(sessionId, limit) as Record<string, unknown>[];
 
-    return rows.map((row) => row.data as string);
+    return latestTerminalRunHistory(rows.map((row) => row.data as string));
   }
 
   private rowToSession(row: Record<string, unknown>): Session {
@@ -144,4 +144,18 @@ export class SessionStore {
       endedAt: row.ended_at as string | null,
     };
   }
+}
+
+function latestTerminalRunHistory(history: string[]): string[] {
+  for (let index = history.length - 1; index >= 0; index--) {
+    if (isTerminalRunInitialization(history[index])) return history.slice(index);
+  }
+  return history;
+}
+
+function isTerminalRunInitialization(data: string): boolean {
+  return (
+    data.includes('\x1b[?2004h') &&
+    (data.includes('\x1b[?1004h') || data.includes('\x1b[?2031h') || data.includes('\x1b[<u'))
+  );
 }

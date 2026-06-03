@@ -38,7 +38,7 @@ describe('ClaudeCodeProvider', () => {
     expect(args).toEqual(['--resume', '00000000-0000-4000-8000-000000000001']);
   });
 
-  it('reads slash command history from Claude transcript files', () => {
+  it('filters slash command history from Claude transcript files', () => {
     const claudeDir = join(tmpdir(), `cubby-claude-history-${randomUUID()}`);
     const sessionId = '00000000-0000-4000-8000-000000000001';
     const projectDir = join(claudeDir, 'projects', '-tmp-cubby-project');
@@ -62,6 +62,10 @@ describe('ClaudeCodeProvider', () => {
           type: 'user',
           message: { content: '<local-command-stdout>Theme set to light</local-command-stdout>' },
         }),
+        JSON.stringify({
+          type: 'user',
+          message: { content: 'Build the pinyin quiz' },
+        }),
       ].join('\n'),
     );
 
@@ -69,8 +73,9 @@ describe('ClaudeCodeProvider', () => {
       const provider = new ClaudeCodeProvider(undefined, claudeDir);
       const history = provider.getTranscriptHistory(sessionId, '/tmp/cubby/project').join('');
 
-      expect(history).toContain('> /theme');
-      expect(history).toContain('Theme set to light');
+      expect(history).toContain('> Build the pinyin quiz');
+      expect(history).not.toContain('> /theme');
+      expect(history).not.toContain('Theme set to light');
       expect(history).not.toContain('ignore me');
     } finally {
       rmSync(claudeDir, { recursive: true, force: true });

@@ -61,4 +61,17 @@ describe('SessionStore', () => {
   it('returns null for non-existent session', () => {
     expect(store.get('nonexistent')).toBeNull();
   });
+
+  it('returns only the latest terminal run when history contains shell initialization markers', () => {
+    const session = store.create({ workspaceId: '/tmp/test', provider: 'claude-code' });
+
+    store.appendTerminalOutput(session.id, 'old run output');
+    store.appendTerminalOutput(session.id, '\x1b[?25l\x1b[?2004h\x1b[?1004h\x1b[?2031h');
+    store.appendTerminalOutput(session.id, 'latest run output');
+
+    expect(store.getTerminalOutputHistory(session.id)).toEqual([
+      '\x1b[?25l\x1b[?2004h\x1b[?1004h\x1b[?2031h',
+      'latest run output',
+    ]);
+  });
 });

@@ -6,6 +6,7 @@ import {
   type WSResponse,
 } from '@cubby/core';
 import { useAtom } from 'jotai';
+import { Maximize2, PanelLeftClose, PanelLeftOpen, SlidersHorizontal } from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
 import { currentSessionIdAtom, sessionsAtom } from './atoms/session.js';
 import { SessionList } from './components/session/session-list.js';
@@ -14,78 +15,30 @@ import { DirPicker } from './components/workspace/dir-picker.js';
 import { useWebSocket } from './hooks/use-ws.js';
 
 const SIDEBAR_STATE_STORAGE_KEY = 'cubby.sidebarCollapsed';
+const CURRENT_SESSION_ID_STORAGE_KEY = 'cubby.currentSessionId';
 const MOBILE_MEDIA_QUERY = '(max-width: 767px)';
-const APP_HEADER_HEIGHT = 44;
+const APP_HEADER_HEIGHT = 52;
 const SIDEBAR_EXPANDED_WIDTH = 240;
 const ICON_BUTTON_STYLE = {
   width: '32px',
   height: '32px',
-  border: '1px solid #30344f',
+  border: '1px solid #262626',
   borderRadius: '6px',
-  background: '#1d2030',
-  color: '#cdd6f4',
+  background: '#151515',
+  color: '#b8b8b8',
   cursor: 'pointer',
   display: 'flex',
   alignItems: 'center',
   justifyContent: 'center',
   padding: 0,
 } as const;
+const APP_SURFACE = '#050606';
+const APP_PANEL = '#0b0c0c';
+const APP_BORDER = '#202020';
+const HEADER_ICON_PROPS = { size: 16, strokeWidth: 2.1, 'aria-hidden': true } as const;
 
-type AppIconName = 'sidebar-expand' | 'sidebar-collapse' | 'fullscreen' | 'settings';
-
-function AppIcon({ name }: { name: AppIconName }) {
-  const iconTitle = {
-    'sidebar-expand': 'Expand sidebar',
-    'sidebar-collapse': 'Collapse sidebar',
-    fullscreen: 'Toggle fullscreen',
-    settings: 'Settings',
-  }[name];
-  const iconProps = {
-    width: 16,
-    height: 16,
-    viewBox: '0 0 24 24',
-    fill: 'none',
-    stroke: 'currentColor',
-    strokeWidth: 2,
-    strokeLinecap: 'round' as const,
-    strokeLinejoin: 'round' as const,
-    role: 'img' as const,
-    'aria-label': iconTitle,
-    focusable: 'false',
-  };
-
-  if (name === 'sidebar-expand' || name === 'sidebar-collapse') {
-    return (
-      <svg {...iconProps}>
-        <title>{iconTitle}</title>
-        <rect x="3" y="4" width="18" height="16" rx="2" />
-        <path d="M9 4v16" />
-        <path d={name === 'sidebar-expand' ? 'M15 9l3 3-3 3' : 'M18 9l-3 3 3 3'} />
-      </svg>
-    );
-  }
-
-  if (name === 'fullscreen') {
-    return (
-      <svg {...iconProps}>
-        <title>{iconTitle}</title>
-        <path d="M8 3H5a2 2 0 0 0-2 2v3" />
-        <path d="M16 3h3a2 2 0 0 1 2 2v3" />
-        <path d="M21 16v3a2 2 0 0 1-2 2h-3" />
-        <path d="M8 21H5a2 2 0 0 1-2-2v-3" />
-      </svg>
-    );
-  }
-
-  return (
-    <svg {...iconProps}>
-      <title>{iconTitle}</title>
-      <path d="M4 7h16" />
-      <path d="M4 17h16" />
-      <circle cx="9" cy="7" r="2" />
-      <circle cx="15" cy="17" r="2" />
-    </svg>
-  );
+function sessionTitle(session: Session | null): string {
+  return session?.title ?? session?.provider ?? 'No session selected';
 }
 
 function getWsUrl() {
@@ -99,6 +52,20 @@ function initialSidebarCollapsed(): boolean {
   if (stored === 'true') return true;
   if (stored === 'false') return false;
   return window.matchMedia(MOBILE_MEDIA_QUERY).matches;
+}
+
+function storedCurrentSessionId(): string | null {
+  if (typeof window === 'undefined') return null;
+  return window.localStorage.getItem(CURRENT_SESSION_ID_STORAGE_KEY);
+}
+
+function persistCurrentSessionId(sessionId: string | null): void {
+  if (typeof window === 'undefined') return;
+  if (sessionId) {
+    window.localStorage.setItem(CURRENT_SESSION_ID_STORAGE_KEY, sessionId);
+  } else {
+    window.localStorage.removeItem(CURRENT_SESSION_ID_STORAGE_KEY);
+  }
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -139,6 +106,21 @@ function preferredSessionId(sessions: Session[]): string | null {
   return inactiveSession?.id ?? sessions[0]?.id ?? null;
 }
 
+function isLiveSession(session: Session | null): session is Session {
+  return session?.status === 'running' || session?.status === 'starting';
+}
+
+function isTerminalInputElement(element: Element | null): boolean {
+  return element?.getAttribute('aria-label') === 'Terminal input';
+}
+
+function isEditableElement(element: Element | null): boolean {
+  if (!(element instanceof HTMLElement)) return false;
+  if (isTerminalInputElement(element)) return false;
+  if (element.isContentEditable) return true;
+  return element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement;
+}
+
 export function App() {
   const { send, request, onMessage, connected } = useWebSocket(getWsUrl());
   const [sessions, setSessions] = useAtom(sessionsAtom);
@@ -146,7 +128,9 @@ export function App() {
   const currentSession = sessions.find((s) => s.id === currentId) ?? null;
   const [showPicker, setShowPicker] = useState(false);
   const [autoStartSessionId, setAutoStartSessionId] = useState<string | null>(null);
+  const [terminalFocusRequest, setTerminalFocusRequest] = useState(0);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(initialSidebarCollapsed);
+  const [sessionSearchQuery, setSessionSearchQuery] = useState('');
 
   const handleFullscreen = useCallback(() => {
     if (document.fullscreenElement) {
@@ -155,6 +139,28 @@ export function App() {
     }
     void document.documentElement.requestFullscreen();
   }, []);
+
+  useEffect(() => {
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      if (!isLiveSession(currentSession)) return;
+      if (showPicker || isEditableElement(document.activeElement)) return;
+
+      event.preventDefault();
+      if (isTerminalInputElement(document.activeElement)) return;
+
+      event.stopPropagation();
+      setTerminalFocusRequest((request) => request + 1);
+      send({
+        id: `input-${Date.now()}`,
+        cmd: 'terminal.input',
+        args: { sessionId: currentSession.id, data: '\x1b' },
+      });
+    };
+
+    window.addEventListener('keydown', handleEscape, { capture: true });
+    return () => window.removeEventListener('keydown', handleEscape, { capture: true });
+  }, [currentSession, send, showPicker]);
 
   // Load sessions on connect
   useEffect(() => {
@@ -170,7 +176,13 @@ export function App() {
     }
 
     if (currentId && sessions.some((session) => session.id === currentId)) return;
-    setCurrentId(preferredSessionId(sessions));
+
+    const storedId = storedCurrentSessionId();
+    const restoredId =
+      storedId && sessions.some((session) => session.id === storedId) ? storedId : null;
+    const nextId = restoredId ?? preferredSessionId(sessions);
+    setCurrentId(nextId);
+    persistCurrentSessionId(nextId);
   }, [sessions, currentId, setCurrentId]);
 
   // Handle responses
@@ -195,6 +207,7 @@ export function App() {
       ) {
         setSessions((prev) => [msg.data, ...prev]);
         setCurrentId(msg.data.id);
+        persistCurrentSessionId(msg.data.id);
       }
       if ('evt' in msg && msg.evt === 'session.status' && isSessionStatusData(msg.data)) {
         setSessions((prev) =>
@@ -226,9 +239,19 @@ export function App() {
       const session = createRes.data;
       setSessions((prev) => [session, ...prev]);
       setCurrentId(session.id);
+      persistCurrentSessionId(session.id);
       setAutoStartSessionId(session.id);
     },
     [request, setSessions, setCurrentId],
+  );
+
+  const handleSelectSession = useCallback(
+    (id: string) => {
+      setCurrentId(id);
+      persistCurrentSessionId(id);
+      setTerminalFocusRequest((request) => request + 1);
+    },
+    [setCurrentId],
   );
 
   return (
@@ -240,8 +263,8 @@ export function App() {
         width: '100vw',
         height: '100dvh',
         overflow: 'hidden',
-        background: '#1e1e2e',
-        color: '#cdd6f4',
+        background: APP_SURFACE,
+        color: '#e7e4dd',
         fontFamily: 'system-ui, sans-serif',
       }}
     >
@@ -252,10 +275,11 @@ export function App() {
           flexShrink: 0,
           display: 'flex',
           alignItems: 'center',
-          gap: '10px',
-          padding: '0 10px',
-          borderBottom: '1px solid #262a3b',
-          background: '#11131d',
+          gap: '8px',
+          padding: '0 8px',
+          borderBottom: `1px solid ${APP_BORDER}`,
+          background: APP_SURFACE,
+          position: 'relative',
         }}
       >
         <button
@@ -266,30 +290,38 @@ export function App() {
           onClick={() => setSidebarCollapsed((collapsed) => !collapsed)}
           style={{
             ...ICON_BUTTON_STYLE,
-            color: '#89b4fa',
+            color: '#d7d7d2',
           }}
         >
-          <AppIcon name={sidebarCollapsed ? 'sidebar-expand' : 'sidebar-collapse'} />
+          {sidebarCollapsed ? (
+            <PanelLeftOpen {...HEADER_ICON_PROPS} />
+          ) : (
+            <PanelLeftClose {...HEADER_ICON_PROPS} />
+          )}
         </button>
         <div
           style={{
-            minWidth: 0,
+            position: 'absolute',
+            left: '50%',
+            transform: 'translateX(-50%)',
             display: 'flex',
-            alignItems: 'baseline',
+            alignItems: 'center',
             gap: '8px',
+            pointerEvents: 'none',
           }}
         >
-          <span style={{ fontSize: '13px', fontWeight: 800, color: '#cdd6f4' }}>Cubby</span>
           <span
             style={{
-              color: '#7f849c',
-              fontSize: '11px',
+              maxWidth: 'min(520px, 42vw)',
               overflow: 'hidden',
               textOverflow: 'ellipsis',
               whiteSpace: 'nowrap',
+              fontSize: '13px',
+              fontWeight: 650,
+              color: currentSession ? '#a9a9a3' : '#777773',
             }}
           >
-            Claude sessions
+            {sessionTitle(currentSession)}
           </span>
         </div>
         <div style={{ flex: 1 }} />
@@ -300,7 +332,7 @@ export function App() {
           onClick={handleFullscreen}
           style={ICON_BUTTON_STYLE}
         >
-          <AppIcon name="fullscreen" />
+          <Maximize2 {...HEADER_ICON_PROPS} />
         </button>
         <button
           type="button"
@@ -314,7 +346,7 @@ export function App() {
             opacity: 0.75,
           }}
         >
-          <AppIcon name="settings" />
+          <SlidersHorizontal {...HEADER_ICON_PROPS} />
         </button>
       </header>
       <div
@@ -332,8 +364,8 @@ export function App() {
             height: '100%',
             flexShrink: 0,
             overflow: 'hidden',
-            borderRight: sidebarCollapsed ? 'none' : '1px solid #262a3b',
-            background: '#171923',
+            borderRight: sidebarCollapsed ? 'none' : `1px solid ${APP_BORDER}`,
+            background: APP_PANEL,
             transition: 'width 140ms ease',
           }}
         >
@@ -342,7 +374,9 @@ export function App() {
               <SessionList
                 sessions={sessions}
                 currentId={currentId}
-                onSelect={setCurrentId}
+                searchQuery={sessionSearchQuery}
+                onSearchQueryChange={setSessionSearchQuery}
+                onSelect={handleSelectSession}
                 onCreate={() => setShowPicker(true)}
               />
             </div>
@@ -356,6 +390,8 @@ export function App() {
             height: '100%',
             overflow: 'hidden',
             display: 'flex',
+            background: APP_SURFACE,
+            position: 'relative',
           }}
         >
           {currentSession ? (
@@ -363,6 +399,7 @@ export function App() {
               key={currentSession.id}
               session={currentSession}
               autoStart={currentSession.id === autoStartSessionId}
+              focusRequest={terminalFocusRequest}
               onAutoStartConsumed={() => setAutoStartSessionId(null)}
               send={send}
               request={request}
@@ -375,7 +412,8 @@ export function App() {
                 alignItems: 'center',
                 justifyContent: 'center',
                 height: '100%',
-                color: '#666',
+                color: '#777773',
+                background: APP_SURFACE,
               }}
             >
               Select or create a session

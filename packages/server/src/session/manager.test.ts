@@ -105,6 +105,63 @@ describe('SessionManager', () => {
     expect(restartedManager.getOutputHistory(session.id)).toContain('hello from mock');
   });
 
+  it('prefers captured terminal history over provider transcript history for ended sessions', async () => {
+    const provider: AgentProvider = {
+      name: 'transcript',
+      getTranscriptHistory: () => ['> clean transcript\r\n'],
+      async spawn(
+        _sessionId: string,
+        _options: SpawnOptions,
+        onOutput: (data: string) => void = () => {},
+      ) {
+        queueMicrotask(() => onOutput('\x1b[?2026hraw tui redraw'));
+        return {
+          pid: 30_000,
+          onData: (_callback) => {},
+          onExit: (_callback) => {},
+          write: () => {},
+          resize: () => {},
+          kill: () => {},
+        };
+      },
+      async kill() {},
+    };
+    manager.registerProvider(provider);
+    const session = manager.createSession({ workspaceId: '/tmp', provider: 'transcript' });
+
+    await manager.startSession(session.id, { cwd: '/tmp', cols: 80, rows: 24 });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await manager.killSession(session.id);
+
+    expect(manager.getSession(session.id)?.status).toBe('ended');
+    expect(manager.getOutputHistory(session.id)).toEqual(['\x1b[?2026hraw tui redraw']);
+  });
+
+  it('falls back to provider transcript history when no terminal output was captured', async () => {
+    const provider: AgentProvider = {
+      name: 'transcript-only',
+      getTranscriptHistory: () => ['> clean transcript\r\n'],
+      async spawn() {
+        return {
+          pid: 30_001,
+          onData: (_callback) => {},
+          onExit: (_callback) => {},
+          write: () => {},
+          resize: () => {},
+          kill: () => {},
+        };
+      },
+      async kill() {},
+    };
+    manager.registerProvider(provider);
+    const session = manager.createSession({ workspaceId: '/tmp', provider: 'transcript-only' });
+
+    await manager.startSession(session.id, { cwd: '/tmp', cols: 80, rows: 24 });
+    await manager.killSession(session.id);
+
+    expect(manager.getOutputHistory(session.id)).toEqual(['> clean transcript\r\n']);
+  });
+
   it('rejects starting a non-draft session', async () => {
     const session = manager.createSession({ workspaceId: '/tmp', provider: 'mock' });
     await manager.startSession(session.id, { cwd: '/tmp', cols: 80, rows: 24 });
@@ -130,7 +187,47 @@ describe('SessionManager', () => {
       rows: 30,
       resume: true,
     });
+    await new Promise((r) => setTimeout(r, 20));
     expect(manager.getOutputHistory(session.id)).toContain('hello from mock');
+  });
+
+  it('replays only the current live process buffer while a resumed session is running', async () => {
+    const outputs = ['first run output', 'second run output'];
+    let spawnCount = 0;
+    const provider: AgentProvider = {
+      name: 'manual',
+      async spawn(
+        _sessionId: string,
+        _options: SpawnOptions,
+        onOutput: (data: string) => void = () => {},
+      ) {
+        const output = outputs[spawnCount++] ?? 'unexpected output';
+        queueMicrotask(() => onOutput(output));
+        return {
+          pid: 20_000 + spawnCount,
+          onData: (_callback) => {},
+          onExit: (_callback) => {},
+          write: () => {},
+          resize: () => {},
+          kill: () => {},
+        };
+      },
+      async kill() {},
+    };
+    manager.registerProvider(provider);
+    const session = manager.createSession({ workspaceId: '/tmp', provider: 'manual' });
+
+    await manager.startSession(session.id, { cwd: '/tmp', cols: 80, rows: 24 });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(manager.getOutputHistory(session.id)).toEqual(['first run output']);
+
+    await manager.killSession(session.id);
+    expect(manager.getOutputHistory(session.id)).toEqual(['first run output']);
+
+    await manager.resumeSession(session.id, { cwd: '/tmp', cols: 80, rows: 24 });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(manager.getOutputHistory(session.id)).toEqual(['second run output']);
   });
 
   it('rejects resuming a running session', async () => {

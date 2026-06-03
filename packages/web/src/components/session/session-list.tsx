@@ -1,9 +1,12 @@
 import type { Session } from '@cubby/core';
+import { ChevronDown, ChevronRight, Plus, Search } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 
 interface SessionListProps {
   sessions: Session[];
   currentId: string | null;
+  searchQuery: string;
+  onSearchQueryChange: (query: string) => void;
   onSelect: (id: string) => void;
   onCreate: () => void;
 }
@@ -14,6 +17,13 @@ interface WorkspaceGroup {
 }
 
 const VISIBLE_SESSION_LIMIT = 5;
+const SIDEBAR_ICON_PROPS = { size: 16, strokeWidth: 2.2, 'aria-hidden': true } as const;
+const SIDEBAR_SURFACE = '#0b0c0c';
+const SIDEBAR_BORDER = '#202020';
+
+function normalizeSearch(value: string): string {
+  return value.trim().toLowerCase();
+}
 
 function workspaceName(workspaceId: string): string {
   const parts = workspaceId.split(/[\\/]/).filter(Boolean);
@@ -51,6 +61,41 @@ function visibleSessions(groupSessions: Session[], currentId: string | null): Se
 
 function sessionTitle(session: Session): string {
   return session.title ?? session.provider;
+}
+
+function matchesSessionSearch(session: Session, query: string): boolean {
+  if (!query) return true;
+  return [sessionTitle(session), session.workspaceId, session.provider, session.status].some(
+    (value) => value.toLowerCase().includes(query),
+  );
+}
+
+function sessionTone(status: Session['status']) {
+  if (status === 'running' || status === 'starting') {
+    return {
+      background: '#182915',
+      border: '#31442d',
+      activeBorder: '#5d8d48',
+      text: '#dcebd4',
+      meta: '#96aa8a',
+    };
+  }
+  if (status === 'ended') {
+    return {
+      background: '#242424',
+      border: '#3b3b3b',
+      activeBorder: '#5b5b57',
+      text: '#dedbd2',
+      meta: '#8e8d86',
+    };
+  }
+  return {
+    background: '#2c1715',
+    border: '#4b2825',
+    activeBorder: '#745047',
+    text: '#ead9d4',
+    meta: '#ad8981',
+  };
 }
 
 function slashCommandName(title: string): string | null {
@@ -113,8 +158,20 @@ function SessionTitle({ session, fontSize }: { session: Session; fontSize: strin
   );
 }
 
-export function SessionList({ sessions, currentId, onSelect, onCreate }: SessionListProps) {
-  const groups = useMemo(() => groupSessions(sessions), [sessions]);
+export function SessionList({
+  sessions,
+  currentId,
+  searchQuery,
+  onSearchQueryChange,
+  onSelect,
+  onCreate,
+}: SessionListProps) {
+  const normalizedSearch = normalizeSearch(searchQuery);
+  const filteredSessions = useMemo(
+    () => sessions.filter((session) => matchesSessionSearch(session, normalizedSearch)),
+    [sessions, normalizedSearch],
+  );
+  const groups = useMemo(() => groupSessions(filteredSessions), [filteredSessions]);
   const [collapsedWorkspaces, setCollapsedWorkspaces] = useState<Set<string>>(() => new Set());
   const [openMoreWorkspace, setOpenMoreWorkspace] = useState<string | null>(null);
   const [activeSessionByWorkspace, setActiveSessionByWorkspace] = useState<Map<string, string>>(
@@ -136,9 +193,9 @@ export function SessionList({ sessions, currentId, onSelect, onCreate }: Session
   return (
     <div
       style={{
-        padding: '10px',
+        padding: 0,
         height: '100%',
-        background: '#171923',
+        background: SIDEBAR_SURFACE,
         display: 'flex',
         flexDirection: 'column',
         minHeight: 0,
@@ -146,12 +203,90 @@ export function SessionList({ sessions, currentId, onSelect, onCreate }: Session
     >
       <div
         style={{
+          height: '52px',
+          flexShrink: 0,
+          display: 'flex',
+          alignItems: 'center',
+          gap: '8px',
+          padding: '0 8px',
+          borderBottom: `1px solid ${SIDEBAR_BORDER}`,
+        }}
+      >
+        <label
+          style={{
+            flex: 1,
+            minWidth: 0,
+            height: '32px',
+            border: '1px solid #171717',
+            borderRadius: '6px',
+            background: '#111111',
+            color: '#8d8d87',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '7px',
+            padding: '0 8px',
+          }}
+        >
+          <Search size={15} strokeWidth={2.1} aria-hidden="true" />
+          <input
+            type="search"
+            aria-label="Search sessions"
+            placeholder="Search sessions"
+            value={searchQuery}
+            onChange={(event) => onSearchQueryChange(event.target.value)}
+            style={{
+              minWidth: 0,
+              width: '100%',
+              border: 'none',
+              outline: 'none',
+              background: 'transparent',
+              color: '#d8d8d4',
+              font: 'inherit',
+              fontSize: '12px',
+            }}
+          />
+        </label>
+        <button
+          type="button"
+          aria-label="New Session"
+          title="New Session"
+          onClick={onCreate}
+          style={{
+            width: '30px',
+            height: '30px',
+            border: 'none',
+            background: 'transparent',
+            color: '#a8a8a1',
+            cursor: 'pointer',
+            display: 'inline-flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: 0,
+          }}
+        >
+          <Plus {...SIDEBAR_ICON_PROPS} />
+        </button>
+      </div>
+      <div
+        style={{
           flex: 1,
           minHeight: 0,
           overflowY: 'auto',
-          paddingBottom: '8px',
+          padding: '10px 8px 12px',
         }}
       >
+        {groups.length === 0 && normalizedSearch && (
+          <div
+            style={{
+              padding: '18px 8px',
+              color: '#777773',
+              fontSize: '12px',
+              lineHeight: 1.4,
+            }}
+          >
+            No matching sessions
+          </div>
+        )}
         {groups.map((group) => {
           const collapsed = collapsedWorkspaces.has(group.workspaceId);
           const workspaceActive = group.sessions.some((session) => session.id === currentId);
@@ -171,20 +306,18 @@ export function SessionList({ sessions, currentId, onSelect, onCreate }: Session
               key={group.workspaceId}
               data-testid="workspace-group"
               style={{
-                marginBottom: '10px',
-                borderBottom: '1px solid #24283b',
-                paddingBottom: '8px',
+                marginBottom: '12px',
+                borderBottom: `1px solid ${SIDEBAR_BORDER}`,
+                paddingBottom: '10px',
               }}
             >
               <div
                 style={{
                   display: 'grid',
-                  gridTemplateColumns: '34px minmax(0, 1fr)',
-                  gap: '8px',
+                  gridTemplateColumns: '28px minmax(0, 1fr)',
+                  gap: '7px',
                   alignItems: 'center',
-                  padding: '3px 0',
-                  borderRadius: '6px',
-                  outline: workspaceActive ? '1px solid #313a5f' : 'none',
+                  padding: '2px 2px 7px',
                 }}
               >
                 <button
@@ -207,19 +340,23 @@ export function SessionList({ sessions, currentId, onSelect, onCreate }: Session
                     });
                   }}
                   style={{
-                    width: '34px',
-                    height: '34px',
-                    border: '1px solid #30344f',
+                    width: '28px',
+                    height: '28px',
+                    border: '1px solid #252525',
                     borderRadius: '6px',
-                    background: collapsed ? '#1d2030' : '#24283b',
-                    color: '#89b4fa',
+                    background: workspaceActive ? '#151515' : 'transparent',
+                    color: workspaceActive ? '#22c8f2' : '#7f7f78',
                     cursor: 'pointer',
-                    fontSize: '20px',
-                    lineHeight: 1,
-                    fontWeight: 800,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
                   }}
                 >
-                  {collapsed ? '+' : '-'}
+                  {collapsed ? (
+                    <ChevronRight {...SIDEBAR_ICON_PROPS} />
+                  ) : (
+                    <ChevronDown {...SIDEBAR_ICON_PROPS} />
+                  )}
                 </button>
                 <button
                   type="button"
@@ -244,7 +381,7 @@ export function SessionList({ sessions, currentId, onSelect, onCreate }: Session
                     gridTemplateColumns: 'minmax(0, 1fr) auto',
                     gap: '8px',
                     alignItems: 'center',
-                    padding: '6px 2px 6px 0',
+                    padding: '4px 2px 4px 0',
                     textAlign: 'left',
                   }}
                 >
@@ -252,8 +389,9 @@ export function SessionList({ sessions, currentId, onSelect, onCreate }: Session
                     <span
                       style={{
                         display: 'block',
-                        fontSize: '13px',
-                        fontWeight: 700,
+                        fontSize: '12px',
+                        fontWeight: 650,
+                        color: workspaceActive ? '#d7d7d2' : '#a8a8a1',
                         overflow: 'hidden',
                         textOverflow: 'ellipsis',
                         whiteSpace: 'nowrap',
@@ -264,8 +402,8 @@ export function SessionList({ sessions, currentId, onSelect, onCreate }: Session
                     <span
                       style={{
                         display: 'block',
-                        color: '#7f849c',
-                        fontSize: '11px',
+                        color: '#6f6f6a',
+                        fontSize: '10px',
                         overflow: 'hidden',
                         textOverflow: 'ellipsis',
                         whiteSpace: 'nowrap',
@@ -276,8 +414,8 @@ export function SessionList({ sessions, currentId, onSelect, onCreate }: Session
                   </span>
                   <span
                     style={{
-                      color: hasLiveSession ? '#a6e3a1' : '#7f849c',
-                      fontSize: '11px',
+                      color: hasLiveSession ? '#8aa777' : '#6f6f6a',
+                      fontSize: '10px',
                       fontVariantNumeric: 'tabular-nums',
                     }}
                   >
@@ -287,43 +425,52 @@ export function SessionList({ sessions, currentId, onSelect, onCreate }: Session
               </div>
 
               {!collapsed && (
-                <div style={{ marginTop: '4px', position: 'relative' }}>
-                  {visible.map((session) => (
-                    <button
-                      type="button"
-                      key={session.id}
-                      aria-label={`Session ${sessionTitle(session)}`}
-                      data-testid="session-item"
-                      onClick={() => onSelect(session.id)}
-                      style={{
-                        padding: '7px 8px 7px 26px',
-                        cursor: 'pointer',
-                        background: session.id === currentId ? '#31364f' : 'transparent',
-                        borderRadius: '6px',
-                        marginBottom: '4px',
-                        border:
-                          session.id === currentId ? '1px solid #89b4fa' : '1px solid transparent',
-                        color: 'inherit',
-                        display: 'block',
-                        width: '100%',
-                        textAlign: 'left',
-                      }}
-                    >
-                      <div
+                <div style={{ marginTop: '2px', position: 'relative' }}>
+                  {visible.map((session) => {
+                    const active = session.id === currentId;
+                    const tone = sessionTone(session.status);
+
+                    return (
+                      <button
+                        type="button"
+                        key={session.id}
+                        aria-label={`Session ${sessionTitle(session)}`}
+                        data-testid="session-item"
+                        onClick={() => onSelect(session.id)}
                         style={{
-                          display: 'block',
-                          fontWeight: 700,
-                          fontSize: '13px',
+                          position: 'relative',
                           overflow: 'hidden',
-                          textOverflow: 'ellipsis',
-                          whiteSpace: 'nowrap',
+                          padding: '10px 10px 9px 12px',
+                          cursor: 'pointer',
+                          background: active ? tone.background : '#141414',
+                          borderRadius: '6px',
+                          marginBottom: '7px',
+                          border: `1px solid ${active ? tone.activeBorder : tone.border}`,
+                          color: tone.text,
+                          display: 'block',
+                          width: '100%',
+                          textAlign: 'left',
+                          boxShadow: active ? 'inset 0 0 0 1px rgba(255,255,255,0.04)' : 'none',
                         }}
                       >
-                        <SessionTitle session={session} fontSize="13px" />
-                      </div>
-                      <div style={{ fontSize: '11px', color: '#8b93b5' }}>{session.status}</div>
-                    </button>
-                  ))}
+                        <div
+                          style={{
+                            display: 'block',
+                            fontWeight: 650,
+                            fontSize: '13px',
+                            overflow: 'hidden',
+                            textOverflow: 'ellipsis',
+                            whiteSpace: 'nowrap',
+                          }}
+                        >
+                          <SessionTitle session={session} fontSize="13px" />
+                        </div>
+                        <div style={{ marginTop: '5px', fontSize: '11px', color: tone.meta }}>
+                          {session.status}
+                        </div>
+                      </button>
+                    );
+                  })}
                   {hidden.length > 0 && (
                     <div style={{ position: 'relative' }}>
                       <button
@@ -336,10 +483,10 @@ export function SessionList({ sessions, currentId, onSelect, onCreate }: Session
                         style={{
                           width: '100%',
                           padding: '6px 8px 6px 26px',
-                          border: '1px solid #30344f',
+                          border: '1px solid #2a2a2a',
                           borderRadius: '6px',
-                          background: '#1d2030',
-                          color: '#bac2de',
+                          background: '#141414',
+                          color: '#b8b8b0',
                           cursor: 'pointer',
                           textAlign: 'left',
                           fontSize: '12px',
@@ -354,10 +501,10 @@ export function SessionList({ sessions, currentId, onSelect, onCreate }: Session
                             marginLeft: '24px',
                             maxHeight: '220px',
                             overflowY: 'auto',
-                            border: '1px solid #3b4261',
+                            border: '1px solid #2c2c2c',
                             borderRadius: '6px',
-                            background: '#11131d',
-                            boxShadow: '0 12px 30px rgba(0, 0, 0, 0.35)',
+                            background: '#090a0a',
+                            boxShadow: '0 12px 30px rgba(0, 0, 0, 0.45)',
                             padding: '4px',
                           }}
                         >
@@ -377,7 +524,7 @@ export function SessionList({ sessions, currentId, onSelect, onCreate }: Session
                                 border: 'none',
                                 borderRadius: '4px',
                                 background: 'transparent',
-                                color: '#cdd6f4',
+                                color: '#dedbd2',
                                 cursor: 'pointer',
                                 padding: '7px 8px',
                                 textAlign: 'left',
@@ -395,7 +542,7 @@ export function SessionList({ sessions, currentId, onSelect, onCreate }: Session
                               >
                                 <SessionTitle session={session} fontSize="12px" />
                               </div>
-                              <div style={{ fontSize: '11px', color: '#8b93b5' }}>
+                              <div style={{ fontSize: '11px', color: '#8e8d86' }}>
                                 {session.status}
                               </div>
                             </button>
@@ -409,29 +556,6 @@ export function SessionList({ sessions, currentId, onSelect, onCreate }: Session
             </section>
           );
         })}
-      </div>
-      <div
-        style={{
-          borderTop: '1px solid #24283b',
-          paddingTop: '10px',
-        }}
-      >
-        <button
-          type="button"
-          onClick={onCreate}
-          style={{
-            width: '100%',
-            padding: '8px 10px',
-            border: '1px solid #3b4261',
-            borderRadius: '6px',
-            background: '#24283b',
-            color: '#cdd6f4',
-            cursor: 'pointer',
-            fontWeight: 600,
-          }}
-        >
-          + New Session
-        </button>
       </div>
     </div>
   );

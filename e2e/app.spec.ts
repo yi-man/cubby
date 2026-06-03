@@ -8,6 +8,7 @@ interface SessionFixture {
 }
 
 const MOCK_CLAUDE_PROVIDER_ENABLED = process.env.CUBBY_MOCK_CLAUDE_PROVIDER === '1';
+const ACTIVE_DRAFT_SESSION_BORDER = 'rgb(116, 80, 71)';
 
 async function createSession(
   page: Page,
@@ -58,6 +59,10 @@ async function terminalText(page: Page): Promise<string> {
   return page.locator('.xterm-rows').evaluate((element) => element.textContent ?? '');
 }
 
+function countOccurrences(value: string, needle: string): number {
+  return value.split(needle).length - 1;
+}
+
 async function selectSessionTab(group: Locator, title: string): Promise<void> {
   const visibleTab = group.getByRole('button', { name: `Session ${title}`, exact: true });
   const moreButton = group.getByRole('button', { name: /^More \d+$/ });
@@ -78,7 +83,72 @@ test.describe('Cubby MVP', () => {
   test('app loads and shows empty state', async ({ page }) => {
     await page.goto('/');
     await expect(page.locator('text=Select or create a session')).toBeVisible();
-    await expect(page.locator('text=+ New Session')).toBeVisible();
+    await expect(page.getByRole('button', { name: 'New Session' })).toBeVisible();
+  });
+
+  test('app controls render Lucide icons', async ({ page }) => {
+    const stamp = Date.now();
+    const workspaceId = `/tmp/cubby-lucide-controls-${stamp}`;
+    await createSession(page, { workspaceId, title: `Lucide Controls ${stamp}` });
+
+    await page.goto('/');
+
+    const group = page.getByTestId('workspace-group').filter({ hasText: workspaceId });
+    await expect(page.getByTestId('sidebar-toggle').locator('svg.lucide')).toHaveCount(1);
+    await expect(
+      page.getByRole('button', { name: 'Toggle fullscreen' }).locator('svg.lucide'),
+    ).toHaveCount(1);
+    await expect(page.getByRole('button', { name: 'Settings' }).locator('svg.lucide')).toHaveCount(
+      1,
+    );
+    await expect(
+      page.getByRole('button', { name: 'New Session' }).locator('svg.lucide-plus'),
+    ).toHaveCount(1);
+    await expect(
+      group.getByTestId('workspace-toggle').locator('svg.lucide-chevron-down'),
+    ).toHaveCount(1);
+  });
+
+  test('chrome keeps search in the sidebar and titles the active session', async ({ page }) => {
+    const stamp = Date.now();
+    const workspaceId = `/tmp/cubby-chrome-${stamp}`;
+    const session = await createSession(page, {
+      workspaceId,
+      title: `Chrome Layout ${stamp}`,
+    });
+
+    await page.goto('/');
+
+    const header = page.getByTestId('app-header');
+    const sidebar = page.getByTestId('sidebar-shell');
+    const group = page.getByTestId('workspace-group').filter({ hasText: workspaceId });
+    const selectedSession = group.getByTestId('session-item').filter({ hasText: session.title });
+
+    await expect(header).toContainText(session.title);
+    await expect(header.getByLabel('Search sessions')).toHaveCount(0);
+    await expect(sidebar.getByLabel('Search sessions')).toBeVisible();
+
+    await expect
+      .poll(() =>
+        page
+          .getByTestId('session-detail-pane')
+          .evaluate(
+            (pane) =>
+              Array.from(pane.children).filter(
+                (child) => child.tagName === 'SPAN' && child.getAttribute('aria-hidden') === 'true',
+              ).length,
+          ),
+      )
+      .toBe(0);
+    await expect
+      .poll(() =>
+        selectedSession.evaluate((item) =>
+          Array.from(item.children).some(
+            (child) => child.tagName === 'SPAN' && child.getAttribute('aria-hidden') === 'true',
+          ),
+        ),
+      )
+      .toBe(false);
   });
 
   test('app shell fills the viewport with no browser default gaps', async ({ page }) => {
@@ -121,11 +191,11 @@ test.describe('Cubby MVP', () => {
     const detail = page.getByTestId('session-detail-pane');
     await expect(page.getByTestId('app-header')).toBeVisible();
     await expect(sidebar).toHaveCSS('width', '240px');
-    await expect(page.getByRole('button', { name: '+ New Session' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'New Session' })).toBeVisible();
 
     await page.getByRole('button', { name: 'Collapse sidebar' }).click();
     await expect(sidebar).toHaveCSS('width', '0px');
-    await expect(page.getByRole('button', { name: '+ New Session' })).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'New Session' })).toHaveCount(0);
     await expect
       .poll(async () => {
         return Math.round(
@@ -139,11 +209,11 @@ test.describe('Cubby MVP', () => {
 
     await page.getByRole('button', { name: 'Expand sidebar' }).click();
     await expect(sidebar).toHaveCSS('width', '240px');
-    await expect(page.getByRole('button', { name: '+ New Session' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'New Session' })).toBeVisible();
 
     await page.reload();
     await expect(sidebar).toHaveCSS('width', '240px');
-    await expect(page.getByRole('button', { name: '+ New Session' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'New Session' })).toBeVisible();
   });
 
   test('sidebar is collapsed by default on mobile without stored browser state', async ({
@@ -154,11 +224,11 @@ test.describe('Cubby MVP', () => {
 
     const sidebar = page.getByTestId('sidebar-shell');
     await expect(sidebar).toHaveCSS('width', '0px');
-    await expect(page.getByRole('button', { name: '+ New Session' })).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'New Session' })).toHaveCount(0);
 
     await page.getByRole('button', { name: 'Expand sidebar' }).click();
     await expect(sidebar).toHaveCSS('width', '240px');
-    await expect(page.getByRole('button', { name: '+ New Session' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'New Session' })).toBeVisible();
   });
 
   test('switching sessions resets the right terminal pane', async ({ page }) => {
@@ -229,10 +299,70 @@ test.describe('Cubby MVP', () => {
       .toBeGreaterThan(0);
   });
 
+  test('selecting a running session does not force a terminal redraw resize', async ({ page }) => {
+    test.skip(
+      !MOCK_CLAUDE_PROVIDER_ENABLED,
+      'Requires CUBBY_MOCK_CLAUDE_PROVIDER=1 to start a deterministic running session',
+    );
+
+    await page.addInitScript(() => {
+      const observedWindow = window as typeof window & { __wsCommands?: unknown[] };
+      observedWindow.__wsCommands = [];
+      const NativeWebSocket = window.WebSocket;
+
+      window.WebSocket = class CommandLoggingWebSocket extends NativeWebSocket {
+        send(data: string | ArrayBufferLike | Blob | ArrayBufferView) {
+          try {
+            observedWindow.__wsCommands?.push(JSON.parse(String(data)));
+          } catch {}
+          return super.send(data);
+        }
+      };
+    });
+
+    const stamp = Date.now();
+    const workspaceId = `/tmp/cubby-running-no-redraw-${stamp}`;
+    const running = await createSession(page, {
+      workspaceId,
+      title: `Running No Redraw ${stamp}`,
+    });
+    await startSession(page, running);
+
+    await page.goto('/');
+
+    const group = page.getByTestId('workspace-group').filter({ hasText: workspaceId });
+    await selectSessionTab(group, running.title);
+    await assertActiveDetail(page, { title: running.title, status: 'running', action: 'Stop' });
+    await expect
+      .poll(
+        () =>
+          page.evaluate(() => {
+            const commands =
+              (window as typeof window & { __wsCommands?: Array<{ cmd?: string }> }).__wsCommands ??
+              [];
+            return commands.some((command) => command.cmd === 'terminal.subscribe');
+          }),
+        { timeout: 10000 },
+      )
+      .toBe(true);
+
+    const redrawCommands = await page.evaluate(() => {
+      const commands =
+        (window as typeof window & { __wsCommands?: Array<{ id?: string; cmd?: string }> })
+          .__wsCommands ?? [];
+      return commands.filter(
+        (command) =>
+          command.cmd === 'terminal.resize' &&
+          (command.id?.startsWith('redraw-start-') || command.id?.startsWith('redraw-finish-')),
+      );
+    });
+    expect(redrawCommands).toEqual([]);
+  });
+
   test('new session button opens workspace picker', async ({ page }) => {
     await page.goto('/');
 
-    await page.getByText('+ New Session').click();
+    await page.getByRole('button', { name: 'New Session' }).click();
 
     await expect(page.getByRole('dialog', { name: 'Open Workspace' })).toBeVisible();
     await expect(page.getByLabel('Workspace path')).toBeVisible();
@@ -301,7 +431,42 @@ test.describe('Cubby MVP', () => {
         .filter({
           hasText: latest.title,
         }),
-    ).toHaveCSS('border-color', 'rgb(137, 180, 250)');
+    ).toHaveCSS('border-color', ACTIVE_DRAFT_SESSION_BORDER);
+  });
+
+  test('refresh keeps the selected session tab active', async ({ page }) => {
+    const stamp = Date.now();
+    const workspaceId = `/tmp/cubby-refresh-selected-${stamp}`;
+    const first = await createSession(page, {
+      workspaceId,
+      title: `Refresh Selected First ${stamp}`,
+    });
+    await createSession(page, {
+      workspaceId,
+      title: `Refresh Selected Latest ${stamp}`,
+    });
+
+    await page.goto('/');
+
+    const group = page.getByTestId('workspace-group').filter({ hasText: workspaceId });
+    await selectSessionTab(group, first.title);
+    await assertActiveDetail(page, {
+      title: first.title,
+      status: 'draft',
+      action: 'Start',
+    });
+
+    await page.reload();
+
+    await assertActiveDetail(page, {
+      title: first.title,
+      status: 'draft',
+      action: 'Start',
+    });
+    await expect(group.getByTestId('session-item').filter({ hasText: first.title })).toHaveCSS(
+      'border-color',
+      ACTIVE_DRAFT_SESSION_BORDER,
+    );
   });
 
   test('default active session prefers running work over newer ended empty sessions', async ({
@@ -348,6 +513,7 @@ test.describe('Cubby MVP', () => {
       action: 'Resume',
     });
     await expect(page.getByTestId('empty-terminal-history')).toBeVisible();
+    await expect(page.locator('.xterm')).toBeVisible();
   });
 
   test('workspace tabs switch the right pane to that workspace session', async ({ page }) => {
@@ -459,7 +625,154 @@ test.describe('Cubby MVP', () => {
 
     await selectSessionTab(group, ended.title);
     await assertActiveDetail(page, { title: ended.title, status: 'ended', action: 'Resume' });
-    await expect.poll(() => terminalTextLength(page), { timeout: 10000 }).toBeGreaterThan(0);
+    await expect(page.locator('.xterm')).toBeVisible();
+    await expect(page.getByTestId('ended-terminal-transcript')).toHaveCount(0);
+    await expect.poll(() => terminalText(page), { timeout: 10000 }).not.toHaveLength(0);
+  });
+
+  test('ending a live session does not append replayed history onto existing output', async ({
+    page,
+  }) => {
+    test.skip(
+      !MOCK_CLAUDE_PROVIDER_ENABLED,
+      'Requires CUBBY_MOCK_CLAUDE_PROVIDER=1 for deterministic terminal output',
+    );
+
+    await page.addInitScript(() => {
+      const replayWindow = window as typeof window & { __terminalReplayResponses?: number };
+      replayWindow.__terminalReplayResponses = 0;
+      const NativeWebSocket = window.WebSocket;
+
+      window.WebSocket = class ReplayCountingWebSocket extends NativeWebSocket {
+        constructor(url: string | URL, protocols?: string | string[]) {
+          super(url, protocols);
+          this.addEventListener('message', (event: MessageEvent) => {
+            try {
+              const message = JSON.parse(String(event.data));
+              if (
+                message &&
+                typeof message === 'object' &&
+                typeof message.id === 'string' &&
+                message.id.startsWith('replay-') &&
+                message.ok === true
+              ) {
+                replayWindow.__terminalReplayResponses =
+                  (replayWindow.__terminalReplayResponses ?? 0) + 1;
+              }
+            } catch {}
+          });
+        }
+      };
+    });
+
+    const stamp = Date.now();
+    const workspaceId = `/tmp/cubby-ended-no-append-${stamp}`;
+    const session = await createSession(page, {
+      workspaceId,
+      title: `Ended No Append ${stamp}`,
+    });
+    const marker = `Mock Claude Code ready for ${session.id.slice(0, 8)}`;
+
+    await page.goto('/');
+
+    const group = page.getByTestId('workspace-group').filter({ hasText: workspaceId });
+    await selectSessionTab(group, session.title);
+    await page.getByRole('button', { name: 'Start', exact: true }).click();
+    await assertActiveDetail(page, { title: session.title, status: 'running', action: 'Stop' });
+    await expect
+      .poll(async () => countOccurrences(await terminalText(page), marker), { timeout: 10000 })
+      .toBe(3);
+
+    const liveReplayResponses = await page.evaluate(
+      () =>
+        (window as typeof window & { __terminalReplayResponses?: number })
+          .__terminalReplayResponses ?? 0,
+    );
+    const liveMarkerCount = countOccurrences(await terminalText(page), marker);
+
+    await page.getByRole('button', { name: 'Stop', exact: true }).click();
+    await assertActiveDetail(page, { title: session.title, status: 'ended', action: 'Resume' });
+    await expect
+      .poll(
+        () =>
+          page.evaluate(
+            () =>
+              (window as typeof window & { __terminalReplayResponses?: number })
+                .__terminalReplayResponses ?? 0,
+          ),
+        { timeout: 10000 },
+      )
+      .toBeGreaterThan(liveReplayResponses);
+
+    await expect(page.locator('.xterm')).toBeVisible();
+    await expect(page.getByTestId('ended-terminal-transcript')).toHaveCount(0);
+    expect(countOccurrences(await terminalText(page), marker)).toBe(liveMarkerCount);
+  });
+
+  test('ended replay opens at the latest terminal screen when history has scrollback', async ({
+    page,
+  }) => {
+    test.skip(
+      !MOCK_CLAUDE_PROVIDER_ENABLED,
+      'Requires CUBBY_MOCK_CLAUDE_PROVIDER=1 for deterministic terminal output',
+    );
+
+    await page.addInitScript(() => {
+      const socketWindow = window as typeof window & { __cubbyWs?: WebSocket };
+      const NativeWebSocket = window.WebSocket;
+
+      window.WebSocket = class CapturedWebSocket extends NativeWebSocket {
+        constructor(url: string | URL, protocols?: string | string[]) {
+          super(url, protocols);
+          socketWindow.__cubbyWs = this;
+        }
+      };
+    });
+
+    const stamp = Date.now();
+    const workspaceId = `/tmp/cubby-ended-scrollback-${stamp}`;
+    const session = await createSession(page, {
+      workspaceId,
+      title: `Ended Scrollback ${stamp}`,
+    });
+    const lastLine = `scroll-bottom-${stamp}-79`;
+    const scrollback = Array.from(
+      { length: 80 },
+      (_, index) => `scroll-bottom-${stamp}-${index}\r\n`,
+    ).join('');
+
+    await page.goto('/');
+
+    const group = page.getByTestId('workspace-group').filter({ hasText: workspaceId });
+    await selectSessionTab(group, session.title);
+    await page.getByRole('button', { name: 'Start', exact: true }).click();
+    await assertActiveDetail(page, { title: session.title, status: 'running', action: 'Stop' });
+    await expect
+      .poll(() => terminalText(page), { timeout: 10000 })
+      .toContain('Mock Claude Code ready');
+
+    await page.evaluate(
+      ({ sessionId, data }) => {
+        const socket = (window as typeof window & { __cubbyWs?: WebSocket }).__cubbyWs;
+        if (!socket || socket.readyState !== WebSocket.OPEN) {
+          throw new Error('WebSocket is not open');
+        }
+        socket.send(
+          JSON.stringify({
+            id: `scrollback-input-${Date.now()}`,
+            cmd: 'terminal.input',
+            args: { sessionId, data },
+          }),
+        );
+      },
+      { sessionId: session.id, data: scrollback },
+    );
+    await expect.poll(() => terminalText(page), { timeout: 10000 }).toContain(lastLine);
+
+    await page.getByRole('button', { name: 'Stop', exact: true }).click();
+    await assertActiveDetail(page, { title: session.title, status: 'ended', action: 'Resume' });
+    await expect(page.locator('.xterm')).toBeVisible();
+    await expect.poll(() => terminalText(page), { timeout: 10000 }).toContain(lastLine);
   });
 
   test('resume starts from a clean live terminal after showing ended history', async ({ page }) => {
@@ -467,6 +780,21 @@ test.describe('Cubby MVP', () => {
       !MOCK_CLAUDE_PROVIDER_ENABLED,
       'Requires CUBBY_MOCK_CLAUDE_PROVIDER=1 for deterministic terminal output',
     );
+
+    await page.addInitScript(() => {
+      const commandWindow = window as typeof window & { __wsCommands?: unknown[] };
+      commandWindow.__wsCommands = [];
+      const NativeWebSocket = window.WebSocket;
+
+      window.WebSocket = class CommandLoggingWebSocket extends NativeWebSocket {
+        send(data: string | ArrayBufferLike | Blob | ArrayBufferView) {
+          try {
+            commandWindow.__wsCommands?.push(JSON.parse(String(data)));
+          } catch {}
+          return super.send(data);
+        }
+      };
+    });
 
     const stamp = Date.now();
     const workspaceId = `/tmp/cubby-clean-resume-${stamp}`;
@@ -484,16 +812,45 @@ test.describe('Cubby MVP', () => {
 
     await page.getByRole('button', { name: 'Stop', exact: true }).click();
     await assertActiveDetail(page, { title: session.title, status: 'ended', action: 'Resume' });
+    await expect(page.locator('.xterm')).toBeVisible();
+    await expect(page.getByTestId('ended-terminal-transcript')).toHaveCount(0);
     await expect(terminalText(page)).resolves.toContain('Mock Claude Code ready');
+
+    const commandsBeforeResume = await page.evaluate(
+      () => (window as typeof window & { __wsCommands?: unknown[] }).__wsCommands?.length ?? 0,
+    );
 
     await page.getByRole('button', { name: 'Resume', exact: true }).click();
     await assertActiveDetail(page, { title: session.title, status: 'running', action: 'Stop' });
+    await expect(page.getByTestId('ended-terminal-transcript')).toHaveCount(0);
+    await expect(page.locator('.xterm')).toBeVisible();
     await expect
       .poll(() => terminalText(page), { timeout: 10000 })
       .toContain('Mock Claude Code resumed');
     await expect
       .poll(() => terminalText(page), { timeout: 10000 })
       .not.toContain('Mock Claude Code ready');
+
+    const resumeTerminalCommands = await page.evaluate(
+      ({ startIndex, sessionId }) => {
+        const commands =
+          (
+            window as typeof window & {
+              __wsCommands?: Array<{ cmd?: string; args?: { sessionId?: string } }>;
+            }
+          ).__wsCommands ?? [];
+        return commands
+          .slice(startIndex)
+          .filter(
+            (command) =>
+              command.args?.sessionId === sessionId && command.cmd?.startsWith('terminal.'),
+          );
+      },
+      { startIndex: commandsBeforeResume, sessionId: session.id },
+    );
+    expect(
+      resumeTerminalCommands.filter((command) => command.cmd === 'terminal.unsubscribe'),
+    ).toEqual([]);
   });
 
   test('groups sessions by workspace and limits visible second-level tabs', async ({ page }) => {
@@ -547,7 +904,7 @@ test.describe('Cubby MVP', () => {
     await expect(group.getByTestId('session-item').filter({ hasText: title })).toHaveCount(1);
   });
 
-  test('workspace tab has a large independent expand and collapse control', async ({ page }) => {
+  test('workspace tab has an independent expand and collapse control', async ({ page }) => {
     const stamp = Date.now();
     const firstWorkspaceId = `/tmp/cubby-toggle-a-${stamp}`;
     const secondWorkspaceId = `/tmp/cubby-toggle-b-${stamp}`;
@@ -571,8 +928,8 @@ test.describe('Cubby MVP', () => {
     const firstGroup = page.getByTestId('workspace-group').filter({ hasText: firstWorkspaceId });
     const toggle = firstGroup.getByTestId('workspace-toggle');
 
-    await expect(toggle).toHaveCSS('width', '34px');
-    await expect(toggle).toHaveCSS('height', '34px');
+    await expect(toggle).toHaveCSS('width', '28px');
+    await expect(toggle).toHaveCSS('height', '28px');
 
     await toggle.click();
     await expect(firstGroup.getByTestId('session-item')).toHaveCount(0);
