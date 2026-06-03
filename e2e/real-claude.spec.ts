@@ -95,6 +95,36 @@ async function chooseThemeAndAssertMenuClears(page: Page): Promise<void> {
   await expect.poll(() => terminalText(page), { timeout: 10_000 }).not.toContain('function greet');
 }
 
+async function navigateThemeMenuAndAssertSingleMenu(page: Page): Promise<void> {
+  await page.locator('.xterm').click();
+  await page.keyboard.type('/theme');
+  await page.keyboard.press('Enter');
+  await waitForTerminalText(page, 'Enter to select', 30_000);
+  await page.keyboard.press('ArrowDown');
+  await page.waitForTimeout(250);
+  await page.keyboard.press('ArrowDown');
+  await page.waitForTimeout(250);
+  await page.keyboard.press('ArrowUp');
+  await page.waitForTimeout(250);
+
+  await expect
+    .poll(async () => countOccurrences(await terminalText(page), 'Enter to select'), {
+      timeout: 10_000,
+    })
+    .toBe(1);
+  await expect
+    .poll(async () => countOccurrences(await terminalText(page), 'Auto (match terminal)'), {
+      timeout: 10_000,
+    })
+    .toBe(1);
+
+  await page.keyboard.press('Enter');
+  await waitForTerminalText(page, /Theme set to/i, 30_000);
+  await waitForTerminalIdle(page);
+  await expect.poll(() => terminalText(page), { timeout: 10_000 }).not.toContain('Enter to select');
+  await expect.poll(() => terminalText(page), { timeout: 10_000 }).not.toContain('function greet');
+}
+
 async function selectWorkspaceSession(page: Page, title: string): Promise<void> {
   const workspaceGroup = page.getByTestId('workspace-group').filter({ hasText: WORKSPACE });
   await workspaceGroup.getByTestId('session-item').filter({ hasText: title }).click();
@@ -190,7 +220,7 @@ test('real slash-command titled session shows a single theme menu after resume',
   );
   await waitForTerminalText(page, 'Claude Code', 20_000);
   await waitForTerminalIdle(page);
-  await chooseThemeAndAssertMenuClears(page);
+  await navigateThemeMenuAndAssertSingleMenu(page);
 
   await ctrlCExit(page);
   await expect(terminalText(page)).resolves.toContain('Theme set to');
@@ -202,5 +232,5 @@ test('real slash-command titled session shows a single theme menu after resume',
   );
   await expect.poll(() => terminalText(page), { timeout: 20_000 }).not.toContain('Theme set to');
   await waitForTerminalIdle(page);
-  await chooseThemeAndAssertMenuClears(page);
+  await navigateThemeMenuAndAssertSingleMenu(page);
 });
