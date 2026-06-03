@@ -8,6 +8,7 @@ import { SessionStore } from './session/store.js';
 
 describe('createServer', () => {
   const previousDataDir = process.env.CUBBY_DATA_DIR;
+  const previousMockClaudeProvider = process.env.CUBBY_MOCK_CLAUDE_PROVIDER;
   const dataDirs: string[] = [];
 
   afterEach(() => {
@@ -15,6 +16,11 @@ describe('createServer', () => {
       delete process.env.CUBBY_DATA_DIR;
     } else {
       process.env.CUBBY_DATA_DIR = previousDataDir;
+    }
+    if (previousMockClaudeProvider === undefined) {
+      delete process.env.CUBBY_MOCK_CLAUDE_PROVIDER;
+    } else {
+      process.env.CUBBY_MOCK_CLAUDE_PROVIDER = previousMockClaudeProvider;
     }
 
     for (const dataDir of dataDirs.splice(0)) {
@@ -52,5 +58,33 @@ describe('createServer', () => {
     expect(response.json()).toContainEqual(
       expect.objectContaining({ id: session.id, status: 'ended' }),
     );
+  });
+
+  it('can start sessions with the mock Claude provider for CI E2E', async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'cubby-server-'));
+    dataDirs.push(dataDir);
+    process.env.CUBBY_DATA_DIR = dataDir;
+    process.env.CUBBY_MOCK_CLAUDE_PROVIDER = '1';
+
+    const { app } = await createServer(0);
+    const createResponse = await app.inject({
+      method: 'POST',
+      url: '/api/sessions',
+      payload: { workspaceId: '/tmp', provider: 'claude-code', title: 'Mock Claude' },
+    });
+    const session = createResponse.json();
+
+    const startResponse = await app.inject({
+      method: 'POST',
+      url: `/api/sessions/${session.id}/start`,
+      payload: { cwd: '/tmp' },
+    });
+    const getResponse = await app.inject({ method: 'GET', url: `/api/sessions/${session.id}` });
+
+    await app.inject({ method: 'POST', url: `/api/sessions/${session.id}/kill` });
+    await app.close();
+
+    expect(startResponse.statusCode).toBe(200);
+    expect(getResponse.json()).toMatchObject({ id: session.id, status: 'running' });
   });
 });
