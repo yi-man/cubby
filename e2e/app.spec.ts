@@ -100,17 +100,24 @@ test.describe('Cubby MVP', () => {
     await page.goto('/');
 
     const sidebar = page.getByTestId('sidebar-shell');
+    const detail = page.getByTestId('session-detail-pane');
+    await expect(page.getByTestId('app-header')).toBeVisible();
     await expect(sidebar).toHaveCSS('width', '240px');
     await expect(page.getByRole('button', { name: '+ New Session' })).toBeVisible();
 
     await page.getByRole('button', { name: 'Collapse sidebar' }).click();
-    await expect(sidebar).toHaveCSS('width', '44px');
-    await expect(page.getByTestId('sidebar-rail')).toBeVisible();
+    await expect(sidebar).toHaveCSS('width', '0px');
     await expect(page.getByRole('button', { name: '+ New Session' })).toHaveCount(0);
+    await expect
+      .poll(async () => {
+        return Math.round(
+          await detail.evaluate((element) => element.getBoundingClientRect().width),
+        );
+      })
+      .toBe(1280);
 
     await page.reload();
-    await expect(sidebar).toHaveCSS('width', '44px');
-    await expect(page.getByTestId('sidebar-rail')).toBeVisible();
+    await expect(sidebar).toHaveCSS('width', '0px');
 
     await page.getByRole('button', { name: 'Expand sidebar' }).click();
     await expect(sidebar).toHaveCSS('width', '240px');
@@ -128,8 +135,7 @@ test.describe('Cubby MVP', () => {
     await page.goto('/');
 
     const sidebar = page.getByTestId('sidebar-shell');
-    await expect(sidebar).toHaveCSS('width', '44px');
-    await expect(page.getByTestId('sidebar-rail')).toBeVisible();
+    await expect(sidebar).toHaveCSS('width', '0px');
     await expect(page.getByRole('button', { name: '+ New Session' })).toHaveCount(0);
 
     await page.getByRole('button', { name: 'Expand sidebar' }).click();

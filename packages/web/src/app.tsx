@@ -15,8 +15,78 @@ import { useWebSocket } from './hooks/use-ws.js';
 
 const SIDEBAR_STATE_STORAGE_KEY = 'cubby.sidebarCollapsed';
 const MOBILE_MEDIA_QUERY = '(max-width: 767px)';
+const APP_HEADER_HEIGHT = 44;
 const SIDEBAR_EXPANDED_WIDTH = 240;
-const SIDEBAR_COLLAPSED_WIDTH = 44;
+const ICON_BUTTON_STYLE = {
+  width: '32px',
+  height: '32px',
+  border: '1px solid #30344f',
+  borderRadius: '6px',
+  background: '#1d2030',
+  color: '#cdd6f4',
+  cursor: 'pointer',
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  padding: 0,
+} as const;
+
+type AppIconName = 'sidebar-expand' | 'sidebar-collapse' | 'fullscreen' | 'settings';
+
+function AppIcon({ name }: { name: AppIconName }) {
+  const iconTitle = {
+    'sidebar-expand': 'Expand sidebar',
+    'sidebar-collapse': 'Collapse sidebar',
+    fullscreen: 'Toggle fullscreen',
+    settings: 'Settings',
+  }[name];
+  const iconProps = {
+    width: 16,
+    height: 16,
+    viewBox: '0 0 24 24',
+    fill: 'none',
+    stroke: 'currentColor',
+    strokeWidth: 2,
+    strokeLinecap: 'round' as const,
+    strokeLinejoin: 'round' as const,
+    role: 'img' as const,
+    'aria-label': iconTitle,
+    focusable: 'false',
+  };
+
+  if (name === 'sidebar-expand' || name === 'sidebar-collapse') {
+    return (
+      <svg {...iconProps}>
+        <title>{iconTitle}</title>
+        <rect x="3" y="4" width="18" height="16" rx="2" />
+        <path d="M9 4v16" />
+        <path d={name === 'sidebar-expand' ? 'M15 9l3 3-3 3' : 'M18 9l-3 3 3 3'} />
+      </svg>
+    );
+  }
+
+  if (name === 'fullscreen') {
+    return (
+      <svg {...iconProps}>
+        <title>{iconTitle}</title>
+        <path d="M8 3H5a2 2 0 0 0-2 2v3" />
+        <path d="M16 3h3a2 2 0 0 1 2 2v3" />
+        <path d="M21 16v3a2 2 0 0 1-2 2h-3" />
+        <path d="M8 21H5a2 2 0 0 1-2-2v-3" />
+      </svg>
+    );
+  }
+
+  return (
+    <svg {...iconProps}>
+      <title>{iconTitle}</title>
+      <path d="M4 7h16" />
+      <path d="M4 17h16" />
+      <circle cx="9" cy="7" r="2" />
+      <circle cx="15" cy="17" r="2" />
+    </svg>
+  );
+}
 
 function getWsUrl() {
   const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -65,6 +135,14 @@ export function App() {
   const [showPicker, setShowPicker] = useState(false);
   const [autoStartSessionId, setAutoStartSessionId] = useState<string | null>(null);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(initialSidebarCollapsed);
+
+  const handleFullscreen = useCallback(() => {
+    if (document.fullscreenElement) {
+      void document.exitFullscreen();
+      return;
+    }
+    void document.documentElement.requestFullscreen();
+  }, []);
 
   // Load sessions on connect
   useEffect(() => {
@@ -146,6 +224,7 @@ export function App() {
       data-testid="app-shell"
       style={{
         display: 'flex',
+        flexDirection: 'column',
         width: '100vw',
         height: '100dvh',
         overflow: 'hidden',
@@ -154,82 +233,100 @@ export function App() {
         fontFamily: 'system-ui, sans-serif',
       }}
     >
-      <div
-        data-testid="sidebar-shell"
+      <header
+        data-testid="app-header"
         style={{
-          width: sidebarCollapsed ? `${SIDEBAR_COLLAPSED_WIDTH}px` : `${SIDEBAR_EXPANDED_WIDTH}px`,
-          height: '100%',
+          height: `${APP_HEADER_HEIGHT}px`,
           flexShrink: 0,
-          overflow: 'hidden',
-          borderRight: '1px solid #262a3b',
-          background: '#171923',
           display: 'flex',
-          flexDirection: 'column',
-          transition: 'width 140ms ease',
+          alignItems: 'center',
+          gap: '10px',
+          padding: '0 10px',
+          borderBottom: '1px solid #262a3b',
+          background: '#11131d',
         }}
       >
-        {sidebarCollapsed ? (
-          <div
-            data-testid="sidebar-rail"
+        <button
+          type="button"
+          aria-label={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+          data-testid="sidebar-toggle"
+          title={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+          onClick={() => setSidebarCollapsed((collapsed) => !collapsed)}
+          style={{
+            ...ICON_BUTTON_STYLE,
+            color: '#89b4fa',
+          }}
+        >
+          <AppIcon name={sidebarCollapsed ? 'sidebar-expand' : 'sidebar-collapse'} />
+        </button>
+        <div
+          style={{
+            minWidth: 0,
+            display: 'flex',
+            alignItems: 'baseline',
+            gap: '8px',
+          }}
+        >
+          <span style={{ fontSize: '13px', fontWeight: 800, color: '#cdd6f4' }}>Cubby</span>
+          <span
             style={{
-              height: '100%',
-              display: 'flex',
-              justifyContent: 'center',
-              paddingTop: '10px',
+              color: '#7f849c',
+              fontSize: '11px',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
             }}
           >
-            <button
-              type="button"
-              aria-label="Expand sidebar"
-              data-testid="sidebar-toggle"
-              onClick={() => setSidebarCollapsed(false)}
-              style={{
-                width: '32px',
-                height: '32px',
-                border: '1px solid #3b4261',
-                borderRadius: '6px',
-                background: '#24283b',
-                color: '#89b4fa',
-                cursor: 'pointer',
-                fontSize: '20px',
-                lineHeight: 1,
-                fontWeight: 800,
-              }}
-            >
-              ›
-            </button>
-          </div>
-        ) : (
-          <>
-            <div
-              style={{
-                display: 'flex',
-                justifyContent: 'flex-end',
-                padding: '10px 10px 0',
-              }}
-            >
-              <button
-                type="button"
-                aria-label="Collapse sidebar"
-                data-testid="sidebar-toggle"
-                onClick={() => setSidebarCollapsed(true)}
-                style={{
-                  width: '32px',
-                  height: '32px',
-                  border: '1px solid #3b4261',
-                  borderRadius: '6px',
-                  background: '#24283b',
-                  color: '#89b4fa',
-                  cursor: 'pointer',
-                  fontSize: '20px',
-                  lineHeight: 1,
-                  fontWeight: 800,
-                }}
-              >
-                ‹
-              </button>
-            </div>
-            <div style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
+            Claude sessions
+          </span>
+        </div>
+        <div style={{ flex: 1 }} />
+        <button
+          type="button"
+          aria-label="Toggle fullscreen"
+          title="Toggle fullscreen"
+          onClick={handleFullscreen}
+          style={ICON_BUTTON_STYLE}
+        >
+          <AppIcon name="fullscreen" />
+        </button>
+        <button
+          type="button"
+          aria-label="Settings"
+          title="Settings"
+          disabled
+          style={{
+            ...ICON_BUTTON_STYLE,
+            cursor: 'not-allowed',
+            color: '#6c7086',
+            opacity: 0.75,
+          }}
+        >
+          <AppIcon name="settings" />
+        </button>
+      </header>
+      <div
+        style={{
+          overflow: 'hidden',
+          display: 'flex',
+          flex: 1,
+          minHeight: 0,
+        }}
+      >
+        <div
+          data-testid="sidebar-shell"
+          style={{
+            width: sidebarCollapsed ? '0px' : `${SIDEBAR_EXPANDED_WIDTH}px`,
+            height: '100%',
+            flexShrink: 0,
+            overflow: 'hidden',
+            borderRight: sidebarCollapsed ? 'none' : '1px solid #262a3b',
+            background: '#171923',
+            transition: 'width 140ms ease',
+          }}
+        >
+          {!sidebarCollapsed && (
+            <div style={{ width: `${SIDEBAR_EXPANDED_WIDTH}px`, height: '100%' }}>
               <SessionList
                 sessions={sessions}
                 currentId={currentId}
@@ -237,42 +334,42 @@ export function App() {
                 onCreate={() => setShowPicker(true)}
               />
             </div>
-          </>
-        )}
-      </div>
-      <div
-        data-testid="session-detail-pane"
-        style={{
-          flex: 1,
-          minWidth: 0,
-          height: '100%',
-          overflow: 'hidden',
-          display: 'flex',
-        }}
-      >
-        {currentSession ? (
-          <SessionView
-            key={currentSession.id}
-            session={currentSession}
-            autoStart={currentSession.id === autoStartSessionId}
-            onAutoStartConsumed={() => setAutoStartSessionId(null)}
-            send={send}
-            request={request}
-            onMessage={onMessage}
-          />
-        ) : (
-          <div
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              height: '100%',
-              color: '#666',
-            }}
-          >
-            Select or create a session
-          </div>
-        )}
+          )}
+        </div>
+        <div
+          data-testid="session-detail-pane"
+          style={{
+            flex: 1,
+            minWidth: 0,
+            height: '100%',
+            overflow: 'hidden',
+            display: 'flex',
+          }}
+        >
+          {currentSession ? (
+            <SessionView
+              key={currentSession.id}
+              session={currentSession}
+              autoStart={currentSession.id === autoStartSessionId}
+              onAutoStartConsumed={() => setAutoStartSessionId(null)}
+              send={send}
+              request={request}
+              onMessage={onMessage}
+            />
+          ) : (
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                height: '100%',
+                color: '#666',
+              }}
+            >
+              Select or create a session
+            </div>
+          )}
+        </div>
       </div>
       {showPicker && (
         <DirPicker onConfirm={handleDirConfirm} onCancel={() => setShowPicker(false)} />
