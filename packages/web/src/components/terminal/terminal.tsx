@@ -5,6 +5,7 @@ import '@xterm/xterm/css/xterm.css';
 
 export interface TerminalHandle {
   write: (data: string) => void;
+  clear: () => void;
   fit: () => void;
   getTerminal: () => Terminal | null;
 }
@@ -41,6 +42,9 @@ export const TerminalView = forwardRef<TerminalHandle, TerminalViewProps>(functi
   useImperativeHandle(ref, () => ({
     write: (data: string) => {
       terminalRef.current?.write(data);
+    },
+    clear: () => {
+      terminalRef.current?.clear();
     },
     fit: () => {
       fitAddonRef.current?.fit();

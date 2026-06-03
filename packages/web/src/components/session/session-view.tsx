@@ -146,6 +146,8 @@ export function SessionView({
 
   const handleResume = useCallback(async () => {
     const { cols, rows } = terminalSizeRef.current;
+    termRef.current?.clear();
+    setReplayState({ loaded: true, hasHistory: true });
     const res = await request({
       id: `resume-${Date.now()}`,
       cmd: 'session.resume',

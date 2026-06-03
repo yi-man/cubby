@@ -7,6 +7,8 @@ interface SessionFixture {
   status: string;
 }
 
+const MOCK_CLAUDE_PROVIDER_ENABLED = process.env.CUBBY_MOCK_CLAUDE_PROVIDER === '1';
+
 async function createSession(
   page: Page,
   input: { workspaceId: string; title: string },
@@ -50,6 +52,10 @@ async function terminalTextLength(page: Page): Promise<number> {
     const rows = document.querySelector('.xterm-rows');
     return rows?.textContent?.trim().length ?? 0;
   });
+}
+
+async function terminalText(page: Page): Promise<string> {
+  return page.locator('.xterm-rows').evaluate((element) => element.textContent ?? '');
 }
 
 async function selectSessionTab(group: Locator, title: string): Promise<void> {
@@ -454,6 +460,40 @@ test.describe('Cubby MVP', () => {
     await selectSessionTab(group, ended.title);
     await assertActiveDetail(page, { title: ended.title, status: 'ended', action: 'Resume' });
     await expect.poll(() => terminalTextLength(page), { timeout: 10000 }).toBeGreaterThan(0);
+  });
+
+  test('resume starts from a clean live terminal after showing ended history', async ({ page }) => {
+    test.skip(
+      !MOCK_CLAUDE_PROVIDER_ENABLED,
+      'Requires CUBBY_MOCK_CLAUDE_PROVIDER=1 for deterministic terminal output',
+    );
+
+    const stamp = Date.now();
+    const workspaceId = `/tmp/cubby-clean-resume-${stamp}`;
+    const session = await createSession(page, { workspaceId, title: `Clean Resume ${stamp}` });
+
+    await page.goto('/');
+
+    const group = page.getByTestId('workspace-group').filter({ hasText: workspaceId });
+    await selectSessionTab(group, session.title);
+    await page.getByRole('button', { name: 'Start', exact: true }).click();
+    await assertActiveDetail(page, { title: session.title, status: 'running', action: 'Stop' });
+    await expect
+      .poll(() => terminalText(page), { timeout: 10000 })
+      .toContain('Mock Claude Code ready');
+
+    await page.getByRole('button', { name: 'Stop', exact: true }).click();
+    await assertActiveDetail(page, { title: session.title, status: 'ended', action: 'Resume' });
+    await expect(terminalText(page)).resolves.toContain('Mock Claude Code ready');
+
+    await page.getByRole('button', { name: 'Resume', exact: true }).click();
+    await assertActiveDetail(page, { title: session.title, status: 'running', action: 'Stop' });
+    await expect
+      .poll(() => terminalText(page), { timeout: 10000 })
+      .toContain('Mock Claude Code resumed');
+    await expect
+      .poll(() => terminalText(page), { timeout: 10000 })
+      .not.toContain('Mock Claude Code ready');
   });
 
   test('groups sessions by workspace and limits visible second-level tabs', async ({ page }) => {
