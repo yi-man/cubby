@@ -1,12 +1,46 @@
-import { spawn } from 'node:child_process';
 import type { AgentProcess, AgentProvider, SpawnOptions } from '@cubby/core';
 import { RingBuffer } from '../terminal/ring-buffer.js';
+
+interface PtyDisposable {
+  dispose(): void;
+}
+
+interface PtyProcess {
+  pid: number;
+  onData(listener: (data: string) => void): PtyDisposable;
+  onExit(listener: (event: { exitCode: number; signal?: string | number }) => void): PtyDisposable;
+  write(data: string): void;
+  resize(cols: number, rows: number): void;
+  kill(signal?: string): void;
+}
+
+interface PtySpawner {
+  spawn(
+    file: string,
+    args: string[],
+    options: { cwd: string; env: Record<string, string>; cols: number; rows: number; name: string },
+  ): PtyProcess;
+}
+
+async function loadBunPty(): Promise<PtySpawner> {
+  const { spawn } = await import('bun-pty');
+  return { spawn };
+}
 
 export class ClaudeCodeProvider implements AgentProvider {
   readonly name = 'claude-code';
 
-  buildArgs(options: { model?: string }): string[] {
-    const args = ['--print'];
+  constructor(private ptySpawner?: PtySpawner) {}
+
+  buildArgs(options: { model?: string; resume?: boolean; sessionId?: string }): string[] {
+    const args: string[] = [];
+    if (options.resume && options.sessionId) {
+      args.push('--resume', options.sessionId);
+    } else if (options.resume) {
+      args.push('--continue');
+    } else if (options.sessionId) {
+      args.push('--session-id', options.sessionId);
+    }
     if (options.model) {
       args.push('--model', options.model);
     }
@@ -14,50 +48,59 @@ export class ClaudeCodeProvider implements AgentProvider {
   }
 
   async spawn(
-    _sessionId: string,
+    sessionId: string,
     options: SpawnOptions,
-    onOutput: (data: string) => void,
-    onExit: (code: number) => void,
+    onOutput: (data: string) => void = () => {},
+    onExit: (code: number) => void = () => {},
   ): Promise<AgentProcess & { ringBuffer: RingBuffer }> {
-    const args = this.buildArgs({});
+    const args = this.buildArgs({
+      model: options.model,
+      resume: options.resume,
+      sessionId,
+    });
     const ringBuffer = new RingBuffer(5000);
+    const spawner = this.ptySpawner ?? (await loadBunPty());
+    const env = {
+      ...process.env,
+      ...options.env,
+      TERM: 'xterm-256color',
+      COLORTERM: 'truecolor',
+      FORCE_COLOR: '3',
+    } as Record<string, string>;
 
-    const child = spawn('claude', args, {
+    const pty = spawner.spawn('claude', args, {
       cwd: options.cwd,
-      env: { ...process.env, ...options.env },
-      stdio: ['pipe', 'pipe', 'pipe'],
+      env,
+      cols: options.cols,
+      rows: options.rows,
+      name: 'xterm-256color',
     });
 
-    child.stdout?.on('data', (data: Buffer) => {
-      const text = data.toString();
+    pty.onData((text) => {
       ringBuffer.push(text);
       onOutput(text);
     });
 
-    child.stderr?.on('data', (data: Buffer) => {
-      const text = data.toString();
-      ringBuffer.push(text);
-      onOutput(text);
-    });
-
-    child.on('exit', (code) => {
-      onExit(code ?? 1);
+    pty.onExit((event) => {
+      onExit(event.exitCode ?? 1);
     });
 
     const agentProcess: AgentProcess & { ringBuffer: RingBuffer } = {
-      pid: child.pid ?? 0,
+      pid: pty.pid,
       onData: (cb) => {
-        child.stdout?.on('data', (d: Buffer) => cb(d.toString()));
+        pty.onData(cb);
       },
       onExit: (cb) => {
-        child.on('exit', (c) => cb(c ?? 1));
+        pty.onExit((event) => cb(event.exitCode ?? 1));
       },
       write: (data) => {
-        child.stdin?.write(data);
+        pty.write(data);
       },
-      resize: () => {},
+      resize: (cols, rows) => {
+        pty.resize(cols, rows);
+      },
       kill: () => {
-        child.kill('SIGTERM');
+        pty.kill('SIGTERM');
       },
       ringBuffer,
     };

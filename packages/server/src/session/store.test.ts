@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { unlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -11,7 +12,7 @@ describe('SessionStore', () => {
   let dbPath: string;
 
   beforeEach(() => {
-    dbPath = join(tmpdir(), `cubby-test-${Date.now()}.db`);
+    dbPath = join(tmpdir(), `cubby-test-${randomUUID()}.db`);
     db = new Database(dbPath);
     store = new SessionStore(db);
   });
@@ -48,6 +49,13 @@ describe('SessionStore', () => {
     store.updateStatus(session.id, 'running');
     const updated = store.get(session.id);
     expect(updated?.status).toBe('running');
+  });
+
+  it('updates session title', () => {
+    const session = store.create({ workspaceId: '/tmp/test', provider: 'claude-code' });
+    store.updateTitle(session.id, 'Build pinyin drills');
+    const updated = store.get(session.id);
+    expect(updated?.title).toBe('Build pinyin drills');
   });
 
   it('returns null for non-existent session', () => {

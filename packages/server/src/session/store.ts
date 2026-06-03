@@ -70,9 +70,18 @@ export class SessionStore {
         .run(status, extra?.pid ?? null, extra?.exitCode ?? null, now, now, id);
     } else {
       this.db
-        .prepare('UPDATE sessions SET status = ?, pid = ?, updated_at = ? WHERE id = ?')
+        .prepare(
+          'UPDATE sessions SET status = ?, pid = ?, exit_code = NULL, updated_at = ?, ended_at = NULL WHERE id = ?',
+        )
         .run(status, extra?.pid ?? null, now, id);
     }
+  }
+
+  updateTitle(id: string, title: string): void {
+    const now = new Date().toISOString();
+    this.db
+      .prepare('UPDATE sessions SET title = ?, updated_at = ? WHERE id = ?')
+      .run(title, now, id);
   }
 
   private rowToSession(row: Record<string, unknown>): Session {

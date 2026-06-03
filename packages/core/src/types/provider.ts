@@ -3,6 +3,8 @@ export interface SpawnOptions {
   env?: Record<string, string>;
   cols: number;
   rows: number;
+  model?: string;
+  resume?: boolean;
 }
 
 export interface AgentProvider {

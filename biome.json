@@ -27,11 +27,22 @@
     }
   },
   "files": {
-    "includes": ["**", "!**/node_modules", "!**/dist", "!**/*.json"]
+    "includes": [
+      "scripts/**/*.ts",
+      "packages/**/*.ts",
+      "packages/**/*.tsx",
+      "e2e/**/*.ts",
+      "playwright.config.ts",
+      "vitest.config.ts",
+      "!**/node_modules",
+      "!**/dist",
+      "!test-results",
+      "!.playwright-mcp"
+    ]
   },
   "overrides": [
     {
-      "includes": ["**/vite.config.ts", "**/vitest.config.ts"],
+      "includes": ["**/vite.config.ts", "**/vitest.config.ts", "playwright.config.ts"],
       "linter": {
         "rules": {
           "style": {

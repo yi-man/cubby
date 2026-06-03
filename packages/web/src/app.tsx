@@ -1,16 +1,56 @@
-import type { WSEvent, WSResponse } from '@cubby/core';
+import {
+  SESSION_STATUS,
+  type Session,
+  type SessionStatus,
+  type WSEvent,
+  type WSResponse,
+} from '@cubby/core';
 import { useAtom } from 'jotai';
-import { useCallback, useEffect } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { currentSessionIdAtom, sessionsAtom } from './atoms/session.js';
 import { SessionList } from './components/session/session-list.js';
 import { SessionView } from './components/session/session-view.js';
+import { DirPicker } from './components/workspace/dir-picker.js';
 import { useWebSocket } from './hooks/use-ws.js';
 
+function getWsUrl() {
+  const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+  return `${proto}//${window.location.host}/ws`;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
+function isSession(value: unknown): value is Session {
+  return (
+    isRecord(value) &&
+    typeof value.id === 'string' &&
+    typeof value.workspaceId === 'string' &&
+    typeof value.provider === 'string' &&
+    typeof value.status === 'string' &&
+    SESSION_STATUS.includes(value.status as SessionStatus)
+  );
+}
+
+function isSessionStatusData(
+  value: unknown,
+): value is { sessionId: string; status: SessionStatus } {
+  return (
+    isRecord(value) &&
+    typeof value.sessionId === 'string' &&
+    typeof value.status === 'string' &&
+    SESSION_STATUS.includes(value.status as SessionStatus)
+  );
+}
+
 export function App() {
-  const { send, onMessage, connected } = useWebSocket('ws://localhost:3000/ws');
+  const { send, request, onMessage, connected } = useWebSocket(getWsUrl());
   const [sessions, setSessions] = useAtom(sessionsAtom);
   const [currentId, setCurrentId] = useAtom(currentSessionIdAtom);
   const currentSession = sessions.find((s) => s.id === currentId) ?? null;
+  const [showPicker, setShowPicker] = useState(false);
+  const [autoStartSessionId, setAutoStartSessionId] = useState<string | null>(null);
 
   // Load sessions on connect
   useEffect(() => {
@@ -19,53 +59,111 @@ export function App() {
     }
   }, [connected, send]);
 
+  useEffect(() => {
+    if (sessions.length === 0) {
+      if (currentId !== null) setCurrentId(null);
+      return;
+    }
+
+    if (currentId && sessions.some((session) => session.id === currentId)) return;
+    setCurrentId(sessions[0].id);
+  }, [sessions, currentId, setCurrentId]);
+
   // Handle responses
   useEffect(() => {
     return onMessage((msg: WSResponse | WSEvent) => {
-      if (msg.ok && msg.id === 'init' && Array.isArray(msg.data)) {
+      if (
+        'ok' in msg &&
+        msg.ok &&
+        'id' in msg &&
+        msg.id === 'init' &&
+        Array.isArray(msg.data) &&
+        msg.data.every(isSession)
+      ) {
         setSessions(msg.data);
       }
-      if (msg.ok && msg.id === 'create' && msg.data) {
+      if (
+        'ok' in msg &&
+        msg.ok &&
+        'id' in msg &&
+        msg.id.startsWith('create-') &&
+        isSession(msg.data)
+      ) {
         setSessions((prev) => [msg.data, ...prev]);
         setCurrentId(msg.data.id);
       }
-      if (msg.evt === 'session.status') {
+      if ('evt' in msg && msg.evt === 'session.status' && isSessionStatusData(msg.data)) {
         setSessions((prev) =>
           prev.map((s) => (s.id === msg.data.sessionId ? { ...s, status: msg.data.status } : s)),
         );
       }
+      if ('evt' in msg && msg.evt === 'session.updated' && isSession(msg.data)) {
+        setSessions((prev) => prev.map((s) => (s.id === msg.data.id ? msg.data : s)));
+      }
     });
   }, [onMessage, setSessions, setCurrentId]);
 
-  const handleCreate = useCallback(() => {
-    send({
-      id: 'create',
-      cmd: 'session.create',
-      args: { workspaceId: '/', provider: 'claude-code' },
-    });
-  }, [send]);
+  const handleDirConfirm = useCallback(
+    async (workspaceId: string) => {
+      setShowPicker(false);
+      // Create session
+      const createRes = await request({
+        id: `create-${Date.now()}`,
+        cmd: 'session.create',
+        args: { workspaceId, provider: 'claude-code' },
+      });
+      if (!createRes.ok || !createRes.data) return;
+      if (!isSession(createRes.data)) return;
+
+      const session = createRes.data;
+      setSessions((prev) => [session, ...prev]);
+      setCurrentId(session.id);
+      setAutoStartSessionId(session.id);
+    },
+    [request, setSessions, setCurrentId],
+  );
 
   return (
     <div
+      data-testid="app-shell"
       style={{
         display: 'flex',
-        height: '100vh',
+        width: '100vw',
+        height: '100dvh',
+        overflow: 'hidden',
         background: '#1e1e2e',
         color: '#cdd6f4',
         fontFamily: 'system-ui, sans-serif',
       }}
     >
-      <div style={{ width: '240px', flexShrink: 0 }}>
+      <div style={{ width: '240px', height: '100%', flexShrink: 0, overflow: 'hidden' }}>
         <SessionList
           sessions={sessions}
           currentId={currentId}
           onSelect={setCurrentId}
-          onCreate={handleCreate}
+          onCreate={() => setShowPicker(true)}
         />
       </div>
-      <div style={{ flex: 1 }}>
+      <div
+        data-testid="session-detail-pane"
+        style={{
+          flex: 1,
+          minWidth: 0,
+          height: '100%',
+          overflow: 'hidden',
+          display: 'flex',
+        }}
+      >
         {currentSession ? (
-          <SessionView session={currentSession} send={send} onMessage={onMessage} />
+          <SessionView
+            key={currentSession.id}
+            session={currentSession}
+            autoStart={currentSession.id === autoStartSessionId}
+            onAutoStartConsumed={() => setAutoStartSessionId(null)}
+            send={send}
+            request={request}
+            onMessage={onMessage}
+          />
         ) : (
           <div
             style={{
@@ -80,6 +178,9 @@ export function App() {
           </div>
         )}
       </div>
+      {showPicker && (
+        <DirPicker onConfirm={handleDirConfirm} onCancel={() => setShowPicker(false)} />
+      )}
     </div>
   );
 }
