@@ -145,7 +145,13 @@ export class SessionManager {
   getOutputHistory(sessionId: string): string[] {
     const persistedHistory = this.store.getTerminalOutputHistory(sessionId, OUTPUT_HISTORY_LIMIT);
     if (persistedHistory.length > 0) return persistedHistory;
-    return this.outputBuffers.get(sessionId)?.getAll() ?? [];
+    const bufferedHistory = this.outputBuffers.get(sessionId)?.getAll() ?? [];
+    if (bufferedHistory.length > 0) return bufferedHistory;
+
+    const session = this.store.get(sessionId);
+    if (!session) return [];
+    const provider = this.providers.get(session.provider);
+    return provider?.getTranscriptHistory?.(sessionId, session.workspaceId) ?? [];
   }
 
   recordTerminalInput(sessionId: string, data: string): Session | null {

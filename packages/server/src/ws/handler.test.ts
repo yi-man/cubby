@@ -71,6 +71,41 @@ describe('WSCommandHandler', () => {
     });
   });
 
+  it('replays provider transcript history when terminal output history is empty', async () => {
+    const provider: AgentProvider = {
+      name: 'mock',
+      getTranscriptHistory: (sessionId, cwd) => [`transcript for ${sessionId} in ${cwd}`, '\r\n'],
+      async spawn() {
+        return {
+          pid: 123,
+          onData: (_callback) => {},
+          onExit: (_callback) => {},
+          write: () => {},
+          resize: () => {},
+          kill: () => {},
+        };
+      },
+      async kill() {},
+    };
+    manager.registerProvider(provider);
+    const session = manager.createSession({ workspaceId: '/tmp/transcript', provider: 'mock' });
+
+    const response = await handler.handle({} as WebSocket, {
+      id: 'replay-transcript',
+      cmd: 'terminal.replay',
+      args: { sessionId: session.id },
+    });
+
+    expect(response).toEqual({
+      id: 'replay-transcript',
+      ok: true,
+      data: {
+        sessionId: session.id,
+        chunks: [`transcript for ${session.id} in /tmp/transcript`, '\r\n'],
+      },
+    });
+  });
+
   it('resumes an ended session through websocket command', async () => {
     const spawnOptions: SpawnOptions[] = [];
     const provider: AgentProvider = {

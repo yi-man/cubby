@@ -1,3 +1,6 @@
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 import type { AgentProcess, AgentProvider, SpawnOptions } from '@cubby/core';
 import { RingBuffer } from '../terminal/ring-buffer.js';
 
@@ -30,7 +33,10 @@ async function loadBunPty(): Promise<PtySpawner> {
 export class ClaudeCodeProvider implements AgentProvider {
   readonly name = 'claude-code';
 
-  constructor(private ptySpawner?: PtySpawner) {}
+  constructor(
+    private ptySpawner?: PtySpawner,
+    private claudeDir = join(homedir(), '.claude'),
+  ) {}
 
   buildArgs(options: { model?: string; resume?: boolean; sessionId?: string }): string[] {
     const args: string[] = [];
@@ -108,7 +114,76 @@ export class ClaudeCodeProvider implements AgentProvider {
     return agentProcess;
   }
 
+  getTranscriptHistory(sessionId: string, cwd: string): string[] {
+    const transcriptPath = this.findTranscriptPath(sessionId, cwd);
+    if (!transcriptPath) return [];
+
+    const chunks: string[] = [];
+    const lines = readFileSync(transcriptPath, 'utf8').split(/\r?\n/);
+    for (const line of lines) {
+      if (!line.trim()) continue;
+      const chunk = transcriptLineToHistoryChunk(line);
+      if (chunk) chunks.push(chunk);
+    }
+    return chunks;
+  }
+
+  private findTranscriptPath(sessionId: string, cwd: string): string | null {
+    const encodedCwd = cwd.replace(/[\\/]/g, '-');
+    const directPath = join(this.claudeDir, 'projects', encodedCwd, `${sessionId}.jsonl`);
+    if (existsSync(directPath)) return directPath;
+
+    const projectsDir = join(this.claudeDir, 'projects');
+    if (!existsSync(projectsDir)) return null;
+    for (const projectName of readdirSync(projectsDir)) {
+      const candidate = join(projectsDir, projectName, `${sessionId}.jsonl`);
+      if (existsSync(candidate)) return candidate;
+    }
+    return null;
+  }
+
   async kill(agentProcess: AgentProcess): Promise<void> {
     agentProcess.kill();
   }
+}
+
+function transcriptLineToHistoryChunk(line: string): string | null {
+  let record: unknown;
+  try {
+    record = JSON.parse(line);
+  } catch {
+    return null;
+  }
+  if (!isTranscriptRecord(record)) return null;
+  if (record.type !== 'user') return null;
+  if (record.isMeta) return null;
+  const content = record.message?.content;
+  if (typeof content !== 'string') return null;
+  if (content.includes('<local-command-caveat>')) return null;
+
+  const commandName = extractTag(content, 'command-name');
+  if (commandName) {
+    return `> ${commandName.trim()}\r\n`;
+  }
+
+  const stdout = extractTag(content, 'local-command-stdout');
+  if (stdout) {
+    return `${stdout.trim()}\r\n`;
+  }
+
+  const trimmed = content.trim();
+  if (!trimmed) return null;
+  if (trimmed.startsWith('<')) return null;
+  return `> ${trimmed}\r\n`;
+}
+
+function isTranscriptRecord(
+  value: unknown,
+): value is { type?: string; isMeta?: boolean; message?: { content?: unknown } } {
+  return typeof value === 'object' && value !== null;
+}
+
+function extractTag(content: string, tagName: string): string | null {
+  const match = content.match(new RegExp(`<${tagName}>([\\s\\S]*?)</${tagName}>`));
+  return match?.[1] ?? null;
 }

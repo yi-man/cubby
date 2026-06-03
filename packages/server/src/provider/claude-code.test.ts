@@ -1,3 +1,7 @@
+import { randomUUID } from 'node:crypto';
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { ClaudeCodeProvider } from './claude-code.js';
 
@@ -32,6 +36,45 @@ describe('ClaudeCodeProvider', () => {
       sessionId: '00000000-0000-4000-8000-000000000001',
     });
     expect(args).toEqual(['--resume', '00000000-0000-4000-8000-000000000001']);
+  });
+
+  it('reads slash command history from Claude transcript files', () => {
+    const claudeDir = join(tmpdir(), `cubby-claude-history-${randomUUID()}`);
+    const sessionId = '00000000-0000-4000-8000-000000000001';
+    const projectDir = join(claudeDir, 'projects', '-tmp-cubby-project');
+    mkdirSync(projectDir, { recursive: true });
+    writeFileSync(
+      join(projectDir, `${sessionId}.jsonl`),
+      [
+        JSON.stringify({
+          type: 'user',
+          isMeta: true,
+          message: { content: '<local-command-caveat>ignore me</local-command-caveat>' },
+        }),
+        JSON.stringify({
+          type: 'user',
+          message: {
+            content:
+              '<command-name>/theme</command-name>\n<command-message>theme</command-message>',
+          },
+        }),
+        JSON.stringify({
+          type: 'user',
+          message: { content: '<local-command-stdout>Theme set to light</local-command-stdout>' },
+        }),
+      ].join('\n'),
+    );
+
+    try {
+      const provider = new ClaudeCodeProvider(undefined, claudeDir);
+      const history = provider.getTranscriptHistory(sessionId, '/tmp/cubby/project').join('');
+
+      expect(history).toContain('> /theme');
+      expect(history).toContain('Theme set to light');
+      expect(history).not.toContain('ignore me');
+    } finally {
+      rmSync(claudeDir, { recursive: true, force: true });
+    }
   });
 
   it('spawns claude in a pty and forwards terminal io', async () => {
