@@ -9,4 +9,8 @@ describe('schema', () => {
   it('contains terminals table', () => {
     expect(SCHEMA_SQL).toContain('CREATE TABLE IF NOT EXISTS terminals');
   });
+
+  it('contains terminal outputs table', () => {
+    expect(SCHEMA_SQL).toContain('CREATE TABLE IF NOT EXISTS terminal_outputs');
+  });
 });

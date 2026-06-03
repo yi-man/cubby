@@ -8,6 +8,8 @@ import type {
 import { RingBuffer } from '../terminal/ring-buffer.js';
 import type { SessionStore } from './store.js';
 
+const OUTPUT_HISTORY_LIMIT = 5000;
+
 export class SessionManager {
   private providers = new Map<string, AgentProvider>();
   private processes = new Map<string, AgentProcess>();
@@ -100,6 +102,7 @@ export class SessionManager {
         { ...options, model: session.model ?? undefined, resume },
         (data) => {
           outputBuffer.push(data);
+          this.store.appendTerminalOutput(sessionId, data, OUTPUT_HISTORY_LIMIT);
           if (this.processes.has(sessionId)) {
             this.store.updateStatus(sessionId, 'running');
             this.notifyStatusChange(sessionId, 'running');
@@ -140,6 +143,8 @@ export class SessionManager {
   }
 
   getOutputHistory(sessionId: string): string[] {
+    const persistedHistory = this.store.getTerminalOutputHistory(sessionId, OUTPUT_HISTORY_LIMIT);
+    if (persistedHistory.length > 0) return persistedHistory;
     return this.outputBuffers.get(sessionId)?.getAll() ?? [];
   }
 

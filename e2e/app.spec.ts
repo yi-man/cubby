@@ -45,14 +45,26 @@ async function assertActiveDetail(
   }
 }
 
+async function terminalTextLength(page: Page): Promise<number> {
+  return page.evaluate(() => {
+    const rows = document.querySelector('.xterm-rows');
+    return rows?.textContent?.trim().length ?? 0;
+  });
+}
+
 async function selectSessionTab(group: Locator, title: string): Promise<void> {
   const visibleTab = group.getByTestId('session-item').filter({ hasText: title });
+  const moreButton = group.getByRole('button', { name: /^More \d+$/ });
+  await expect
+    .poll(async () => (await visibleTab.count()) > 0 || (await moreButton.count()) > 0)
+    .toBe(true);
+
   if ((await visibleTab.count()) > 0) {
     await visibleTab.click();
     return;
   }
 
-  await group.getByRole('button', { name: /^More \d+$/ }).click();
+  await moreButton.click();
   await group.getByTestId('session-more-item').filter({ hasText: title }).click();
 }
 
@@ -339,6 +351,31 @@ test.describe('Cubby MVP', () => {
       action: 'Resume',
     });
     await expect(group.getByTestId('session-item').filter({ hasText: ended.title })).toHaveCount(1);
+  });
+
+  test('ended session tab replays terminal history before resume', async ({ page }) => {
+    const stamp = Date.now();
+    const workspaceId = `/tmp/cubby-ended-replay-${stamp}`;
+    const ended = await createSession(page, { workspaceId, title: `Ended Replay ${stamp}` });
+    const draft = await createSession(page, { workspaceId, title: `Ended Replay Draft ${stamp}` });
+
+    await page.goto('/');
+
+    const group = page.getByTestId('workspace-group').filter({ hasText: workspaceId });
+    await selectSessionTab(group, ended.title);
+    await page.getByRole('button', { name: 'Start', exact: true }).click();
+    await assertActiveDetail(page, { title: ended.title, status: 'running', action: 'Stop' });
+    await expect.poll(() => terminalTextLength(page), { timeout: 10000 }).toBeGreaterThan(0);
+
+    await page.getByRole('button', { name: 'Stop', exact: true }).click();
+    await assertActiveDetail(page, { title: ended.title, status: 'ended', action: 'Resume' });
+
+    await selectSessionTab(group, draft.title);
+    await assertActiveDetail(page, { title: draft.title, status: 'draft', action: 'Start' });
+
+    await selectSessionTab(group, ended.title);
+    await assertActiveDetail(page, { title: ended.title, status: 'ended', action: 'Resume' });
+    await expect.poll(() => terminalTextLength(page), { timeout: 10000 }).toBeGreaterThan(0);
   });
 
   test('groups sessions by workspace and limits visible second-level tabs', async ({ page }) => {

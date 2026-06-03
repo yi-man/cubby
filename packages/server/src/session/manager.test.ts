@@ -93,6 +93,18 @@ describe('SessionManager', () => {
     expect(manager.getOutputHistory(session.id)).toContain('hello from mock');
   });
 
+  it('keeps ended session output history available after manager restart', async () => {
+    const session = manager.createSession({ workspaceId: '/tmp', provider: 'mock' });
+    await manager.startSession(session.id, { cwd: '/tmp', cols: 80, rows: 24 });
+    await new Promise((r) => setTimeout(r, 100));
+
+    expect(manager.getSession(session.id)?.status).toBe('ended');
+
+    const restartedManager = new SessionManager(store);
+
+    expect(restartedManager.getOutputHistory(session.id)).toContain('hello from mock');
+  });
+
   it('rejects starting a non-draft session', async () => {
     const session = manager.createSession({ workspaceId: '/tmp', provider: 'mock' });
     await manager.startSession(session.id, { cwd: '/tmp', cols: 80, rows: 24 });

@@ -2,6 +2,8 @@ import { randomUUID } from 'node:crypto';
 import type { CreateSessionInput, Session, SessionStatus } from '@cubby/core';
 import type { Database } from '../db/index.js';
 
+const TERMINAL_OUTPUT_HISTORY_LIMIT = 5000;
+
 export class SessionStore {
   constructor(private db: Database) {}
 
@@ -82,6 +84,49 @@ export class SessionStore {
     this.db
       .prepare('UPDATE sessions SET title = ?, updated_at = ? WHERE id = ?')
       .run(title, now, id);
+  }
+
+  appendTerminalOutput(
+    sessionId: string,
+    data: string,
+    limit = TERMINAL_OUTPUT_HISTORY_LIMIT,
+  ): void {
+    const now = new Date().toISOString();
+    this.db
+      .prepare('INSERT INTO terminal_outputs (session_id, data, created_at) VALUES (?, ?, ?)')
+      .run(sessionId, data, now);
+
+    this.db
+      .prepare(
+        `DELETE FROM terminal_outputs
+         WHERE session_id = ?
+           AND id NOT IN (
+             SELECT id
+             FROM terminal_outputs
+             WHERE session_id = ?
+             ORDER BY id DESC
+             LIMIT ?
+           )`,
+      )
+      .run(sessionId, sessionId, limit);
+  }
+
+  getTerminalOutputHistory(sessionId: string, limit = TERMINAL_OUTPUT_HISTORY_LIMIT): string[] {
+    const rows = this.db
+      .prepare(
+        `SELECT data
+         FROM (
+           SELECT id, data
+           FROM terminal_outputs
+           WHERE session_id = ?
+           ORDER BY id DESC
+           LIMIT ?
+         )
+         ORDER BY id ASC`,
+      )
+      .all(sessionId, limit) as Record<string, unknown>[];
+
+    return rows.map((row) => row.data as string);
   }
 
   private rowToSession(row: Record<string, unknown>): Session {
