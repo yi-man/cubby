@@ -53,7 +53,7 @@ async function terminalTextLength(page: Page): Promise<number> {
 }
 
 async function selectSessionTab(group: Locator, title: string): Promise<void> {
-  const visibleTab = group.getByTestId('session-item').filter({ hasText: title });
+  const visibleTab = group.getByRole('button', { name: `Session ${title}`, exact: true });
   const moreButton = group.getByRole('button', { name: /^More \d+$/ });
   await expect
     .poll(async () => (await visibleTab.count()) > 0 || (await moreButton.count()) > 0)
@@ -65,7 +65,7 @@ async function selectSessionTab(group: Locator, title: string): Promise<void> {
   }
 
   await moreButton.click();
-  await group.getByTestId('session-more-item').filter({ hasText: title }).click();
+  await group.getByRole('button', { name: `Session ${title}`, exact: true }).click();
 }
 
 test.describe('Cubby MVP', () => {
@@ -246,6 +246,30 @@ test.describe('Cubby MVP', () => {
     await expect(page.getByTestId('session-item').filter({ hasText: title })).toHaveCount(1, {
       timeout: 5000,
     });
+  });
+
+  test('slash command session tabs render distinctly and select exactly', async ({ page }) => {
+    const stamp = Date.now();
+    const workspaceId = `/tmp/cubby-slash-tabs-${stamp}`;
+    const theme = await createSession(page, { workspaceId, title: '/theme' });
+    const th = await createSession(page, { workspaceId, title: '/th' });
+
+    await page.goto('/');
+
+    const group = page.getByTestId('workspace-group').filter({ hasText: workspaceId });
+    await expect(group.getByTestId('session-command-prefix')).toHaveCount(2);
+    await expect(
+      group.getByTestId('session-command-title').filter({ hasText: /^theme$/ }),
+    ).toHaveCount(1);
+    await expect(
+      group.getByTestId('session-command-title').filter({ hasText: /^th$/ }),
+    ).toHaveCount(1);
+
+    await group.getByRole('button', { name: `Session ${th.title}`, exact: true }).click();
+    await assertActiveDetail(page, { title: th.title, status: 'draft', action: 'Start' });
+
+    await group.getByRole('button', { name: `Session ${theme.title}`, exact: true }).click();
+    await assertActiveDetail(page, { title: theme.title, status: 'draft', action: 'Start' });
   });
 
   test('loads existing sessions with an active detail pane', async ({ page }) => {

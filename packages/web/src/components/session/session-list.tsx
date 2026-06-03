@@ -49,6 +49,70 @@ function visibleSessions(groupSessions: Session[], currentId: string | null): Se
   ];
 }
 
+function sessionTitle(session: Session): string {
+  return session.title ?? session.provider;
+}
+
+function slashCommandName(title: string): string | null {
+  if (!title.startsWith('/')) return null;
+  const command = title.slice(1).trim();
+  return command || null;
+}
+
+function SessionTitle({ session, fontSize }: { session: Session; fontSize: string }) {
+  const title = sessionTitle(session);
+  const commandName = slashCommandName(title);
+  if (!commandName) {
+    return <>{title}</>;
+  }
+
+  return (
+    <span
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: '5px',
+        maxWidth: '100%',
+        minWidth: 0,
+      }}
+    >
+      <span
+        data-testid="session-command-prefix"
+        style={{
+          flexShrink: 0,
+          width: '16px',
+          height: '16px',
+          border: '1px solid #454b6f',
+          borderRadius: '4px',
+          background: '#1d2030',
+          color: '#89b4fa',
+          display: 'inline-flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          fontFamily: 'monospace',
+          fontSize: '11px',
+          fontWeight: 800,
+        }}
+      >
+        /
+      </span>
+      <span
+        data-testid="session-command-title"
+        style={{
+          minWidth: 0,
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          whiteSpace: 'nowrap',
+          fontFamily: 'monospace',
+          fontSize,
+        }}
+      >
+        {commandName}
+      </span>
+    </span>
+  );
+}
+
 export function SessionList({ sessions, currentId, onSelect, onCreate }: SessionListProps) {
   const groups = useMemo(() => groupSessions(sessions), [sessions]);
   const [collapsedWorkspaces, setCollapsedWorkspaces] = useState<Set<string>>(() => new Set());
@@ -228,6 +292,7 @@ export function SessionList({ sessions, currentId, onSelect, onCreate }: Session
                     <button
                       type="button"
                       key={session.id}
+                      aria-label={`Session ${sessionTitle(session)}`}
                       data-testid="session-item"
                       onClick={() => onSelect(session.id)}
                       style={{
@@ -254,7 +319,7 @@ export function SessionList({ sessions, currentId, onSelect, onCreate }: Session
                           whiteSpace: 'nowrap',
                         }}
                       >
-                        {session.title ?? session.provider}
+                        <SessionTitle session={session} fontSize="13px" />
                       </div>
                       <div style={{ fontSize: '11px', color: '#8b93b5' }}>{session.status}</div>
                     </button>
@@ -300,6 +365,7 @@ export function SessionList({ sessions, currentId, onSelect, onCreate }: Session
                             <button
                               type="button"
                               key={session.id}
+                              aria-label={`Session ${sessionTitle(session)}`}
                               data-testid="session-more-item"
                               onClick={() => {
                                 setOpenMoreWorkspace(null);
@@ -327,7 +393,7 @@ export function SessionList({ sessions, currentId, onSelect, onCreate }: Session
                                   whiteSpace: 'nowrap',
                                 }}
                               >
-                                {session.title ?? session.provider}
+                                <SessionTitle session={session} fontSize="12px" />
                               </div>
                               <div style={{ fontSize: '11px', color: '#8b93b5' }}>
                                 {session.status}
