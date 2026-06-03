@@ -359,6 +359,72 @@ test.describe('Cubby MVP', () => {
     expect(redrawCommands).toEqual([]);
   });
 
+  test('selecting a running session subscribes before replaying terminal history', async ({
+    page,
+  }) => {
+    test.skip(
+      !MOCK_CLAUDE_PROVIDER_ENABLED,
+      'Requires CUBBY_MOCK_CLAUDE_PROVIDER=1 to start a deterministic running session',
+    );
+
+    await page.addInitScript(() => {
+      const observedWindow = window as typeof window & { __wsCommands?: unknown[] };
+      observedWindow.__wsCommands = [];
+      const NativeWebSocket = window.WebSocket;
+
+      window.WebSocket = class CommandLoggingWebSocket extends NativeWebSocket {
+        send(data: string | ArrayBufferLike | Blob | ArrayBufferView) {
+          try {
+            observedWindow.__wsCommands?.push(JSON.parse(String(data)));
+          } catch {}
+          return super.send(data);
+        }
+      };
+    });
+
+    const stamp = Date.now();
+    const workspaceId = `/tmp/cubby-running-subscribe-first-${stamp}`;
+    const running = await createSession(page, {
+      workspaceId,
+      title: `Running Subscribe First ${stamp}`,
+    });
+    await startSession(page, running);
+
+    await page.goto('/');
+
+    const group = page.getByTestId('workspace-group').filter({ hasText: workspaceId });
+    await selectSessionTab(group, running.title);
+    await assertActiveDetail(page, { title: running.title, status: 'running', action: 'Stop' });
+    await expect
+      .poll(
+        () =>
+          page.evaluate(() => {
+            const commands =
+              (window as typeof window & { __wsCommands?: Array<{ cmd?: string }> }).__wsCommands ??
+              [];
+            return (
+              commands.some((command) => command.cmd === 'terminal.subscribe') &&
+              commands.some((command) => command.cmd === 'terminal.replay')
+            );
+          }),
+        { timeout: 10000 },
+      )
+      .toBe(true);
+
+    const terminalCommands = await page.evaluate(() => {
+      const commands =
+        (window as typeof window & { __wsCommands?: Array<{ cmd?: string }> }).__wsCommands ?? [];
+      return commands
+        .map((command) => command.cmd)
+        .filter((cmd) => cmd === 'terminal.subscribe' || cmd === 'terminal.replay');
+    });
+    const subscribeIndex = terminalCommands.indexOf('terminal.subscribe');
+    const replayIndex = terminalCommands.indexOf('terminal.replay');
+    expect(subscribeIndex).toBeGreaterThanOrEqual(0);
+    expect(replayIndex).toBeGreaterThanOrEqual(0);
+    expect(subscribeIndex).toBeLessThan(replayIndex);
+  });
+
   test('new session button opens workspace picker', async ({ page }) => {
     await page.goto('/');
 

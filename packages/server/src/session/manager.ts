@@ -99,6 +99,7 @@ export class SessionManager {
     this.notifyStatusChange(sessionId, 'starting');
 
     try {
+      let earlyExitCode: number | null = null;
       const process = await provider.spawn(
         sessionId,
         { ...options, model: session.model ?? undefined, resume },
@@ -112,13 +113,23 @@ export class SessionManager {
           onOutput?.(data);
         },
         (code) => {
-          if (this.processes.has(sessionId)) {
-            this.store.updateStatus(sessionId, 'ended', { exitCode: code, pid: process.pid });
+          const activeProcess = this.processes.get(sessionId);
+          if (activeProcess) {
+            this.store.updateStatus(sessionId, 'ended', { exitCode: code, pid: activeProcess.pid });
             this.notifyStatusChange(sessionId, 'ended');
             this.processes.delete(sessionId);
+          } else {
+            earlyExitCode = code;
           }
         },
       );
+
+      if (earlyExitCode !== null) {
+        this.store.updateStatus(sessionId, 'ended', { exitCode: earlyExitCode, pid: process.pid });
+        this.notifyStatusChange(sessionId, 'ended');
+        this.sessionsNeedingResumeInputReset.delete(sessionId);
+        return;
+      }
 
       this.processes.set(sessionId, process);
       if (resume) {
@@ -137,13 +148,36 @@ export class SessionManager {
 
   async killSession(sessionId: string): Promise<void> {
     const process = this.processes.get(sessionId);
+    let killError: unknown;
     if (process) {
-      process.kill();
-      this.processes.delete(sessionId);
+      try {
+        process.kill();
+      } catch (err) {
+        killError = err;
+      } finally {
+        this.processes.delete(sessionId);
+      }
     }
     this.store.updateStatus(sessionId, 'ended');
     this.notifyStatusChange(sessionId, 'ended');
     this.sessionsNeedingResumeInputReset.delete(sessionId);
+    if (killError) {
+      throw killError;
+    }
+  }
+
+  async shutdown(): Promise<void> {
+    const errors: unknown[] = [];
+    for (const sessionId of Array.from(this.processes.keys())) {
+      try {
+        await this.killSession(sessionId);
+      } catch (err) {
+        errors.push(err);
+      }
+    }
+    if (errors.length > 0) {
+      throw new Error(`Failed to stop ${errors.length} session process(es) during shutdown`);
+    }
   }
 
   getProcess(sessionId: string): AgentProcess | undefined {

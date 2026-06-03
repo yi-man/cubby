@@ -170,6 +170,36 @@ describe('SessionManager', () => {
     ).rejects.toThrow('not in draft status');
   });
 
+  it('keeps a session ended when the provider exits before spawn returns', async () => {
+    const provider: AgentProvider = {
+      name: 'instant-exit',
+      async spawn(
+        _sessionId: string,
+        _options: SpawnOptions,
+        _onOutput: (data: string) => void = () => {},
+        onExit: (code: number) => void = () => {},
+      ) {
+        onExit(7);
+        return {
+          pid: 30_002,
+          onData: (_callback) => {},
+          onExit: (_callback) => {},
+          write: () => {},
+          resize: () => {},
+          kill: () => {},
+        };
+      },
+      async kill() {},
+    };
+    manager.registerProvider(provider);
+    const session = manager.createSession({ workspaceId: '/tmp', provider: 'instant-exit' });
+
+    await manager.startSession(session.id, { cwd: '/tmp', cols: 80, rows: 24 });
+
+    expect(manager.getProcess(session.id)).toBeUndefined();
+    expect(store.get(session.id)).toMatchObject({ status: 'ended', exitCode: 7 });
+  });
+
   it('resumes an ended session and keeps output history', async () => {
     const session = manager.createSession({ workspaceId: '/tmp', provider: 'mock' });
     await manager.startSession(session.id, { cwd: '/tmp', cols: 80, rows: 24 });
@@ -259,6 +289,66 @@ describe('SessionManager', () => {
 
     expect(reconciled).toHaveLength(0);
     expect(store.get(session.id)?.status).toBe('running');
+  });
+
+  it('kills active processes and marks sessions ended on shutdown', async () => {
+    const killed: string[] = [];
+    const provider: AgentProvider = {
+      name: 'shutdown',
+      async spawn(sessionId: string) {
+        return {
+          pid: 31_000,
+          onData: (_callback) => {},
+          onExit: (_callback) => {},
+          write: () => {},
+          resize: () => {},
+          kill: () => {
+            killed.push(sessionId);
+          },
+        };
+      },
+      async kill(process) {
+        process.kill();
+      },
+    };
+    manager.registerProvider(provider);
+    const session = manager.createSession({ workspaceId: '/tmp', provider: 'shutdown' });
+    await manager.startSession(session.id, { cwd: '/tmp', cols: 80, rows: 24 });
+
+    await manager.shutdown();
+
+    expect(killed).toEqual([session.id]);
+    expect(manager.getProcess(session.id)).toBeUndefined();
+    expect(store.get(session.id)?.status).toBe('ended');
+  });
+
+  it('clears process state and marks a session ended when process kill throws', async () => {
+    const provider: AgentProvider = {
+      name: 'throwing-kill',
+      async spawn() {
+        return {
+          pid: 31_001,
+          onData: (_callback) => {},
+          onExit: (_callback) => {},
+          write: () => {},
+          resize: () => {},
+          kill: () => {
+            throw new Error('kill failed');
+          },
+        };
+      },
+      async kill(process) {
+        process.kill();
+      },
+    };
+    manager.registerProvider(provider);
+    const session = manager.createSession({ workspaceId: '/tmp', provider: 'throwing-kill' });
+    await manager.startSession(session.id, { cwd: '/tmp', cols: 80, rows: 24 });
+
+    await expect(() => manager.killSession(session.id)).rejects.toThrow('kill failed');
+
+    expect(manager.getProcess(session.id)).toBeUndefined();
+    expect(store.get(session.id)?.status).toBe('ended');
   });
 
   it('sets a concise title from the first terminal input', () => {

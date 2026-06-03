@@ -1,8 +1,7 @@
 import { expect, type Page, test } from '@playwright/test';
 
 const REAL_CLAUDE_ENABLED = process.env.CUBBY_SKIP_REAL_CLAUDE_E2E !== '1';
-const WORKSPACE =
-  process.env.CUBBY_REAL_CLAUDE_WORKSPACE ?? '/Users/xxwade/code/my/pinyin-learning';
+const WORKSPACE = process.env.CUBBY_REAL_CLAUDE_WORKSPACE ?? process.cwd();
 
 test.skip(!REAL_CLAUDE_ENABLED, 'Unset CUBBY_SKIP_REAL_CLAUDE_E2E to run real Claude Code E2E');
 

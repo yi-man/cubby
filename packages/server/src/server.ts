@@ -101,7 +101,11 @@ export async function createServer(port = 6300) {
 
   // Graceful shutdown
   app.addHook('onClose', async () => {
-    db.close();
+    try {
+      await sessionManager.shutdown();
+    } finally {
+      db.close();
+    }
   });
 
   return { app, port };
