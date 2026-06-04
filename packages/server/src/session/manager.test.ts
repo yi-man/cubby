@@ -322,6 +322,33 @@ describe('SessionManager', () => {
     expect(manager.listSessions().map((session) => session.id)).not.toContain(ended.id);
   });
 
+  it('lists live sessions before the provider conversation exists', () => {
+    const provider = {
+      name: 'live-before-conversation',
+      hasConversation: () => false,
+      async spawn() {
+        return {
+          pid: 30_013,
+          onData: (_callback: (data: string) => void) => {},
+          onExit: (_callback: (code: number) => void) => {},
+          write: () => {},
+          resize: () => {},
+          kill: () => {},
+        };
+      },
+      async kill() {},
+    };
+    manager.registerProvider(provider);
+    const starting = manager.createSession({ workspaceId: '/tmp', provider: provider.name });
+    const running = manager.createSession({ workspaceId: '/tmp', provider: provider.name });
+    store.updateStatus(starting.id, 'starting');
+    store.updateStatus(running.id, 'running', { pid: 30_013 });
+
+    expect(manager.listSessions().map((session) => session.id)).toEqual(
+      expect.arrayContaining([starting.id, running.id]),
+    );
+  });
+
   it('lists sessions when the provider conversation exists', () => {
     const provider = {
       name: 'existing-conversation',

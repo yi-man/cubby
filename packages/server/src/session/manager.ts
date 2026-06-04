@@ -57,7 +57,9 @@ export class SessionManager {
   }
 
   listSessions(): Session[] {
-    return this.store.list().filter((session) => this.hasConversation(session));
+    return this.store
+      .list()
+      .filter((session) => isLiveSession(session.status) || this.hasConversation(session));
   }
 
   reconcileDetachedLiveSessions(): Session[] {
@@ -391,6 +393,10 @@ function canReplayOutputChunks(chunks: TerminalOutputChunk[], lastSeq: number): 
 function normalizeSequence(value: number): number {
   if (!Number.isFinite(value) || value <= 0) return 0;
   return Math.floor(value);
+}
+
+function isLiveSession(status: Session['status']): boolean {
+  return status === 'starting' || status === 'running';
 }
 
 function summarizeFirstInput(input: string): string {
