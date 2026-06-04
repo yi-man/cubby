@@ -52,6 +52,10 @@ function activeSessionView(page: Page): Locator {
   return page.locator('[data-testid="session-view"][data-active="true"]');
 }
 
+function activeTerminal(page: Page): Locator {
+  return activeSessionView(page).locator('.xterm');
+}
+
 function activeTerminalRows(page: Page): Locator {
   return activeSessionView(page).locator('.xterm-rows');
 }
@@ -801,11 +805,14 @@ test.describe('Cubby MVP', () => {
                   item.data?.status === 'ok' &&
                   item.data.sessionId === sessionId,
               );
+              const activeView = document.querySelector(
+                '[data-testid="session-view"][data-active="true"]',
+              );
               const terminalWidth = Math.round(
-                document.querySelector('.xterm')?.getBoundingClientRect().width ?? 0,
+                activeView?.querySelector('.xterm')?.getBoundingClientRect().width ?? 0,
               );
               const screenWidth = Math.round(
-                document.querySelector('.xterm-screen')?.getBoundingClientRect().width ?? 0,
+                activeView?.querySelector('.xterm-screen')?.getBoundingClientRect().width ?? 0,
               );
               const responseCols = response?.data?.cols ?? 0;
 
@@ -1054,7 +1061,7 @@ test.describe('Cubby MVP', () => {
       action: 'Resume',
     });
     await expect(page.getByTestId('empty-terminal-history')).toBeVisible();
-    await expect(page.locator('.xterm')).toBeVisible();
+    await expect(activeTerminal(page)).toBeVisible();
   });
 
   test('workspace tabs switch the right pane to that workspace session', async ({ page }) => {
@@ -1166,7 +1173,7 @@ test.describe('Cubby MVP', () => {
 
     await selectSessionTab(group, ended.title);
     await assertActiveDetail(page, { title: ended.title, status: 'ended', action: 'Resume' });
-    await expect(page.locator('.xterm')).toBeVisible();
+    await expect(activeTerminal(page)).toBeVisible();
     await expect(page.getByTestId('ended-terminal-transcript')).toHaveCount(0);
     await expect.poll(() => terminalText(page), { timeout: 10000 }).not.toHaveLength(0);
   });
@@ -1245,7 +1252,7 @@ test.describe('Cubby MVP', () => {
       )
       .toBeGreaterThan(liveReplayResponses);
 
-    await expect(page.locator('.xterm')).toBeVisible();
+    await expect(activeTerminal(page)).toBeVisible();
     await expect(page.getByTestId('ended-terminal-transcript')).toHaveCount(0);
     expect(countOccurrences(await terminalText(page), marker)).toBe(liveMarkerCount);
   });
@@ -1312,7 +1319,7 @@ test.describe('Cubby MVP', () => {
 
     await page.getByRole('button', { name: 'Stop', exact: true }).click();
     await assertActiveDetail(page, { title: session.title, status: 'ended', action: 'Resume' });
-    await expect(page.locator('.xterm')).toBeVisible();
+    await expect(activeTerminal(page)).toBeVisible();
     await expect.poll(() => terminalText(page), { timeout: 10000 }).toContain(lastLine);
   });
 
@@ -1353,7 +1360,7 @@ test.describe('Cubby MVP', () => {
 
     await page.getByRole('button', { name: 'Stop', exact: true }).click();
     await assertActiveDetail(page, { title: session.title, status: 'ended', action: 'Resume' });
-    await expect(page.locator('.xterm')).toBeVisible();
+    await expect(activeTerminal(page)).toBeVisible();
     await expect(page.getByTestId('ended-terminal-transcript')).toHaveCount(0);
     await expect(terminalText(page)).resolves.toContain('Mock Claude Code ready');
 
@@ -1364,7 +1371,7 @@ test.describe('Cubby MVP', () => {
     await page.getByRole('button', { name: 'Resume', exact: true }).click();
     await assertActiveDetail(page, { title: session.title, status: 'running', action: 'Stop' });
     await expect(page.getByTestId('ended-terminal-transcript')).toHaveCount(0);
-    await expect(page.locator('.xterm')).toBeVisible();
+    await expect(activeTerminal(page)).toBeVisible();
     await expect
       .poll(() => terminalText(page), { timeout: 10000 })
       .toContain('Mock Claude Code resumed');
@@ -1502,7 +1509,7 @@ test.describe('Cubby MVP', () => {
     await group.getByTestId('workspace-toggle').click();
     await expect(group.getByTestId('session-item')).toHaveCount(0);
 
-    await page.locator('.xterm').click();
+    await activeTerminal(page).click();
     await page.keyboard.type('Build pinyin tone cards');
     await page.keyboard.press('Enter');
     await assertActiveDetail(page, {
@@ -1551,7 +1558,7 @@ test.describe('Cubby MVP', () => {
     await assertActiveDetail(page, { title, status: 'running', action: 'Stop' });
 
     // Terminal should be visible (xterm.js renders a canvas)
-    await expect(page.locator('.xterm')).toBeVisible({ timeout: 5000 });
+    await expect(activeTerminal(page)).toBeVisible({ timeout: 5000 });
   });
 
   test('stop and resume an ended session', async ({ page }) => {

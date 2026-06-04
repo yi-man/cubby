@@ -1,4 +1,4 @@
-import { expect, type Page, test } from '@playwright/test';
+import { expect, type Locator, type Page, test } from '@playwright/test';
 
 const REAL_CLAUDE_ENABLED = process.env.CUBBY_SKIP_REAL_CLAUDE_E2E !== '1';
 const WORKSPACE = process.env.CUBBY_REAL_CLAUDE_WORKSPACE ?? process.cwd();
@@ -7,24 +7,35 @@ test.skip(!REAL_CLAUDE_ENABLED, 'Unset CUBBY_SKIP_REAL_CLAUDE_E2E to run real Cl
 
 test.describe.configure({ mode: 'serial', retries: 0 });
 
+function activeSessionView(page: Page): Locator {
+  return page.locator('[data-testid="session-view"][data-active="true"]');
+}
+
+function activeTerminal(page: Page): Locator {
+  return activeSessionView(page).locator('.xterm');
+}
+
+function activeTerminalRows(page: Page): Locator {
+  return activeSessionView(page).locator('.xterm-rows');
+}
+
 async function createSessionFromUi(page: Page): Promise<void> {
   await page.getByRole('button', { name: 'New Session' }).click();
   await page.getByLabel('Workspace path').fill(WORKSPACE);
   await page.getByRole('button', { name: 'Open' }).click();
-  await expect(
-    page.getByTestId('session-detail-pane').getByText(WORKSPACE, { exact: true }),
-  ).toBeVisible({ timeout: 20_000 });
-  await expect(page.getByTestId('session-detail-pane').getByTestId('session-status')).toHaveText(
-    'running',
-    { timeout: 20_000 },
-  );
-  await expect(page.locator('.xterm')).toBeVisible({ timeout: 20_000 });
+  await expect(activeSessionView(page).getByText(WORKSPACE, { exact: true })).toBeVisible({
+    timeout: 20_000,
+  });
+  await expect(activeSessionView(page).getByTestId('session-status')).toHaveText('running', {
+    timeout: 20_000,
+  });
+  await expect(activeTerminal(page)).toBeVisible({ timeout: 20_000 });
   await waitForTerminalText(page, 'Claude Code', 20_000);
   await waitForTerminalIdle(page);
 }
 
 async function terminalText(page: Page): Promise<string> {
-  return page.locator('.xterm-rows').evaluate((element) => element.textContent ?? '');
+  return activeTerminalRows(page).evaluate((element) => element.textContent ?? '');
 }
 
 async function installWebSocketRecorder(page: Page): Promise<void> {
@@ -110,7 +121,7 @@ function generatedTitleForToken(token: string): string {
 }
 
 async function sendPromptAndWaitForAssistant(page: Page, token: string): Promise<string> {
-  await page.locator('.xterm').click();
+  await activeTerminal(page).click();
   await page.keyboard.type(`Reply exactly ${token}. Do not use tools.`);
   await page.keyboard.press('Enter');
   await expect
@@ -121,7 +132,7 @@ async function sendPromptAndWaitForAssistant(page: Page, token: string): Promise
 }
 
 async function enterThemeCommand(page: Page): Promise<void> {
-  await page.locator('.xterm').click();
+  await activeTerminal(page).click();
   await page.keyboard.type('/theme', { delay: 15 });
   await waitForTerminalText(page, 'Change the theme', 30_000);
   await page.keyboard.press('Enter');
@@ -174,34 +185,28 @@ async function selectWorkspaceSession(page: Page, title: string): Promise<void> 
 }
 
 async function ctrlCExit(page: Page): Promise<void> {
-  await page.locator('.xterm').click();
-  const status = page.getByTestId('session-detail-pane').getByTestId('session-status');
+  await activeTerminal(page).click();
+  const status = activeSessionView(page).getByTestId('session-status');
   for (let attempt = 0; attempt < 4; attempt++) {
     await page.keyboard.press('Control+C');
     await page.waitForTimeout(700);
     if ((await status.textContent()) === 'ended') break;
   }
-  await expect(page.getByTestId('session-detail-pane').getByTestId('session-status')).toHaveText(
-    'ended',
-    { timeout: 20_000 },
-  );
-  await expect(
-    page.getByTestId('session-detail-pane').getByRole('button', { name: 'Resume' }),
-  ).toBeVisible();
-  await expect(page.locator('.xterm')).toBeVisible({ timeout: 20_000 });
+  await expect(activeSessionView(page).getByTestId('session-status')).toHaveText('ended', {
+    timeout: 20_000,
+  });
+  await expect(activeSessionView(page).getByRole('button', { name: 'Resume' })).toBeVisible();
+  await expect(activeTerminal(page)).toBeVisible({ timeout: 20_000 });
   await expect(page.getByTestId('ended-terminal-transcript')).toHaveCount(0);
 }
 
 async function stopFromUi(page: Page): Promise<void> {
   await page.getByRole('button', { name: 'Stop', exact: true }).click();
-  await expect(page.getByTestId('session-detail-pane').getByTestId('session-status')).toHaveText(
-    'ended',
-    { timeout: 20_000 },
-  );
-  await expect(
-    page.getByTestId('session-detail-pane').getByRole('button', { name: 'Resume' }),
-  ).toBeVisible();
-  await expect(page.locator('.xterm')).toBeVisible({ timeout: 20_000 });
+  await expect(activeSessionView(page).getByTestId('session-status')).toHaveText('ended', {
+    timeout: 20_000,
+  });
+  await expect(activeSessionView(page).getByRole('button', { name: 'Resume' })).toBeVisible();
+  await expect(activeTerminal(page)).toBeVisible({ timeout: 20_000 });
   await expect(page.getByTestId('ended-terminal-transcript')).toHaveCount(0);
 }
 
@@ -234,10 +239,9 @@ test('real Claude Code session supports keyboard input, ctrl-c exit, resume, and
 
   await expect.poll(() => terminalText(page), { timeout: 20_000 }).toContain('CUBBY_REAL_READY');
   await page.getByRole('button', { name: 'Resume', exact: true }).click();
-  await expect(page.getByTestId('session-detail-pane').getByTestId('session-status')).toHaveText(
-    'running',
-    { timeout: 20_000 },
-  );
+  await expect(activeSessionView(page).getByTestId('session-status')).toHaveText('running', {
+    timeout: 20_000,
+  });
   await waitForTerminalText(page, 'Claude Code', 30_000);
   await expect
     .poll(() => terminalText(page), { timeout: 20_000 })
@@ -255,10 +259,9 @@ test('real Claude Code session supports keyboard input, ctrl-c exit, resume, and
   await sendPromptAndWaitForAssistant(page, 'CUBBY_REAL_AFTER_SWITCH');
 
   await selectWorkspaceSession(page, 'claude-code');
-  await expect(page.getByTestId('session-detail-pane').getByTestId('session-status')).toHaveText(
-    'running',
-    { timeout: 20_000 },
-  );
+  await expect(activeSessionView(page).getByTestId('session-status')).toHaveText('running', {
+    timeout: 20_000,
+  });
   await waitForTerminalText(page, 'Claude Code', 20_000);
   await sendPromptAndWaitForAssistant(page, 'CUBBY_REAL_SECOND_TAB');
 });
@@ -272,15 +275,14 @@ test('real ended session keeps xterm replay layout before resume', async ({ page
   await page.goto('/');
   await selectWorkspaceSession(page, title);
   await page.getByRole('button', { name: 'Start', exact: true }).click();
-  await expect(page.getByTestId('session-detail-pane').getByTestId('session-status')).toHaveText(
-    'running',
-    { timeout: 20_000 },
-  );
+  await expect(activeSessionView(page).getByTestId('session-status')).toHaveText('running', {
+    timeout: 20_000,
+  });
   await waitForTerminalText(page, 'Claude Code', 20_000);
 
   await ctrlCExit(page);
 
-  await expect(page.locator('.xterm-rows')).toBeVisible();
+  await expect(activeTerminalRows(page)).toBeVisible();
   await expect.poll(() => terminalText(page), { timeout: 20_000 }).toContain('Claude Code');
 });
 
@@ -295,10 +297,9 @@ test('real slash-command titled session shows a single theme menu after resume',
   await page.goto('/');
   await selectWorkspaceSession(page, title);
   await page.getByRole('button', { name: 'Start', exact: true }).click();
-  await expect(page.getByTestId('session-detail-pane').getByTestId('session-status')).toHaveText(
-    'running',
-    { timeout: 20_000 },
-  );
+  await expect(activeSessionView(page).getByTestId('session-status')).toHaveText('running', {
+    timeout: 20_000,
+  });
   await waitForTerminalText(page, 'Claude Code', 20_000);
   await waitForTerminalIdle(page);
   await navigateThemeMenuAndAssertSingleMenu(page);
@@ -307,10 +308,9 @@ test('real slash-command titled session shows a single theme menu after resume',
   await stopFromUi(page);
 
   await page.getByRole('button', { name: 'Resume', exact: true }).click();
-  await expect(page.getByTestId('session-detail-pane').getByTestId('session-status')).toHaveText(
-    'running',
-    { timeout: 20_000 },
-  );
+  await expect(activeSessionView(page).getByTestId('session-status')).toHaveText('running', {
+    timeout: 20_000,
+  });
   await expect.poll(() => terminalText(page), { timeout: 20_000 }).not.toContain('Theme set to');
   await waitForTerminalIdle(page);
   await navigateThemeMenuAndAssertSingleMenu(page);
@@ -325,10 +325,9 @@ test('real titled session shows a single theme menu after resume', async ({ page
   await page.goto('/');
   await selectWorkspaceSession(page, title);
   await page.getByRole('button', { name: 'Start', exact: true }).click();
-  await expect(page.getByTestId('session-detail-pane').getByTestId('session-status')).toHaveText(
-    'running',
-    { timeout: 20_000 },
-  );
+  await expect(activeSessionView(page).getByTestId('session-status')).toHaveText('running', {
+    timeout: 20_000,
+  });
   await waitForTerminalText(page, 'Claude Code', 20_000);
   await waitForTerminalIdle(page);
   await navigateThemeMenuAndAssertSingleMenu(page);
@@ -337,10 +336,9 @@ test('real titled session shows a single theme menu after resume', async ({ page
   await stopFromUi(page);
 
   await page.getByRole('button', { name: 'Resume', exact: true }).click();
-  await expect(page.getByTestId('session-detail-pane').getByTestId('session-status')).toHaveText(
-    'running',
-    { timeout: 20_000 },
-  );
+  await expect(activeSessionView(page).getByTestId('session-status')).toHaveText('running', {
+    timeout: 20_000,
+  });
   await expect.poll(() => terminalText(page), { timeout: 20_000 }).not.toContain('Theme set to');
   await waitForTerminalIdle(page);
   await navigateThemeMenuAndAssertSingleMenu(page);
@@ -358,10 +356,9 @@ test('real resumed session focuses the live terminal for slash commands and esca
   await page.goto('/');
   await selectWorkspaceSession(page, title);
   await page.getByRole('button', { name: 'Start', exact: true }).click();
-  await expect(page.getByTestId('session-detail-pane').getByTestId('session-status')).toHaveText(
-    'running',
-    { timeout: 20_000 },
-  );
+  await expect(activeSessionView(page).getByTestId('session-status')).toHaveText('running', {
+    timeout: 20_000,
+  });
   await waitForTerminalText(page, 'Claude Code', 20_000);
   await waitForTerminalIdle(page);
   await sendPromptAndWaitForAssistant(page, 'CUBBY_REAL_FOCUS_READY');
@@ -386,16 +383,15 @@ test('real resumed session focuses the live terminal for slash commands and esca
 
   await stopFromUi(page);
   const inputsBeforeEndedEscape = await sentTerminalInputs(page);
-  await expect(page.locator('.xterm')).toBeVisible();
+  await expect(activeTerminal(page)).toBeVisible();
   await page.keyboard.press('Escape');
   await page.waitForTimeout(300);
   expect(await sentTerminalInputs(page)).toHaveLength(inputsBeforeEndedEscape.length);
 
   await page.getByRole('button', { name: 'Resume', exact: true }).click();
-  await expect(page.getByTestId('session-detail-pane').getByTestId('session-status')).toHaveText(
-    'running',
-    { timeout: 20_000 },
-  );
+  await expect(activeSessionView(page).getByTestId('session-status')).toHaveText('running', {
+    timeout: 20_000,
+  });
   await waitForTerminalIdle(page);
 
   await page.getByTestId('session-item').filter({ hasText: title }).click();
