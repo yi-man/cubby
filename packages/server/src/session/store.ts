@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import type { CreateSessionInput, Session, SessionStatus } from '@cubby/core';
+import type { CreateSessionInput, Session, SessionStatus, TerminalOutputChunk } from '@cubby/core';
 import type { Database } from '../db/index.js';
 
 const TERMINAL_OUTPUT_HISTORY_LIMIT = 5000;
@@ -88,13 +88,19 @@ export class SessionStore {
 
   appendTerminalOutput(
     sessionId: string,
-    data: string,
+    output: string | TerminalOutputChunk,
     limit = TERMINAL_OUTPUT_HISTORY_LIMIT,
   ): void {
     const now = new Date().toISOString();
+    const data = typeof output === 'string' ? output : output.data;
+    const seqStart = typeof output === 'string' ? null : output.seqStart;
+    const seqEnd = typeof output === 'string' ? null : output.seq;
+
     this.db
-      .prepare('INSERT INTO terminal_outputs (session_id, data, created_at) VALUES (?, ?, ?)')
-      .run(sessionId, data, now);
+      .prepare(
+        'INSERT INTO terminal_outputs (session_id, data, seq_start, seq_end, created_at) VALUES (?, ?, ?, ?, ?)',
+      )
+      .run(sessionId, data, seqStart, seqEnd, now);
 
     this.db
       .prepare(

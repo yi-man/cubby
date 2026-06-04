@@ -28,6 +28,8 @@ CREATE TABLE IF NOT EXISTS terminal_outputs (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   session_id TEXT NOT NULL,
   data TEXT NOT NULL,
+  seq_start INTEGER,
+  seq_end INTEGER,
   created_at TEXT NOT NULL,
   FOREIGN KEY (session_id) REFERENCES sessions(id)
 );

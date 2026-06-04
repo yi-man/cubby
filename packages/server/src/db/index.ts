@@ -26,12 +26,27 @@ if (isBun) {
   NativeDb = BetterSqlite3;
 }
 
+function ensureTerminalOutputSequenceColumns(db: SqliteDb): void {
+  const columns = db.prepare('PRAGMA table_info(terminal_outputs)').all() as Array<{
+    name?: unknown;
+  }>;
+  const names = new Set(columns.map((column) => String(column.name)));
+
+  if (!names.has('seq_start')) {
+    db.exec('ALTER TABLE terminal_outputs ADD COLUMN seq_start INTEGER');
+  }
+  if (!names.has('seq_end')) {
+    db.exec('ALTER TABLE terminal_outputs ADD COLUMN seq_end INTEGER');
+  }
+}
+
 export class Database {
   private db: SqliteDb;
 
   constructor(path: string) {
     this.db = new NativeDb(path);
     this.db.exec(SCHEMA_SQL);
+    ensureTerminalOutputSequenceColumns(this.db);
   }
 
   prepare(sql: string) {

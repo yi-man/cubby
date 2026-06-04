@@ -74,4 +74,17 @@ describe('SessionStore', () => {
       'latest run output',
     ]);
   });
+
+  it('persists terminal output sequence metadata when provided', () => {
+    const session = store.create({ workspaceId: '/tmp', provider: 'mock' });
+
+    store.appendTerminalOutput(session.id, { data: 'abc', seqStart: 0, seq: 3 });
+
+    const rows = db
+      .prepare('SELECT data, seq_start, seq_end FROM terminal_outputs WHERE session_id = ?')
+      .all(session.id) as Array<Record<string, unknown>>;
+
+    expect(rows).toEqual([{ data: 'abc', seq_start: 0, seq_end: 3 }]);
+    expect(store.getTerminalOutputHistory(session.id)).toEqual(['abc']);
+  });
 });
