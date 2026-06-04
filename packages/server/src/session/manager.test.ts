@@ -73,13 +73,115 @@ describe('SessionManager', () => {
   it('starts a session', async () => {
     const outputs: string[] = [];
     const session = manager.createSession({ workspaceId: '/tmp', provider: 'mock' });
-    await manager.startSession(session.id, { cwd: '/tmp', cols: 80, rows: 24 }, (d) =>
-      outputs.push(d),
+    await manager.startSession(session.id, { cwd: '/tmp', cols: 80, rows: 24 }, (chunk) =>
+      outputs.push(chunk.data),
     );
     const updated = store.get(session.id);
     expect(updated?.status).toBe('running');
     await new Promise((r) => setTimeout(r, 100));
     expect(outputs.length).toBeGreaterThan(0);
+  });
+
+  it('returns sequenced live replay chunks after a rendered seq', async () => {
+    const session = manager.createSession({ workspaceId: '/tmp', provider: 'mock' });
+    await manager.startSession(session.id, { cwd: '/tmp', cols: 80, rows: 24 });
+    await new Promise((r) => setTimeout(r, 20));
+
+    const fullReplay = manager.getOutputReplay(session.id, 0);
+    expect(fullReplay.status).toBe('ok');
+    if (fullReplay.status !== 'ok') throw new Error('expected ok replay');
+
+    const firstSeq = fullReplay.chunks[0]?.seq ?? 0;
+    const partialReplay = manager.getOutputReplay(session.id, firstSeq);
+
+    expect(partialReplay).toMatchObject({
+      status: 'ok',
+      sessionId: session.id,
+      seq: fullReplay.seq,
+    });
+    if (partialReplay.status !== 'ok') throw new Error('expected ok partial replay');
+    expect(partialReplay.chunks.every((chunk) => chunk.seq > firstSeq)).toBe(true);
+  });
+
+  it('reconciles a caught-up live session as noop', async () => {
+    const session = manager.createSession({ workspaceId: '/tmp', provider: 'mock' });
+    await manager.startSession(session.id, { cwd: '/tmp', cols: 80, rows: 24 });
+    await new Promise((r) => setTimeout(r, 20));
+
+    const replay = manager.getOutputReplay(session.id, 0);
+    if (replay.status !== 'ok') throw new Error('expected ok replay');
+
+    expect(manager.reconcileTerminalRecovery(session.id, replay.seq)).toEqual({
+      action: 'noop',
+      sessionId: session.id,
+      headSeq: replay.seq,
+    });
+  });
+
+  it('reconciles missing live output as replay', async () => {
+    const session = manager.createSession({ workspaceId: '/tmp', provider: 'mock' });
+    await manager.startSession(session.id, { cwd: '/tmp', cols: 80, rows: 24 });
+    await new Promise((r) => setTimeout(r, 20));
+
+    const replay = manager.getOutputReplay(session.id, 0);
+    if (replay.status !== 'ok') throw new Error('expected ok replay');
+
+    expect(manager.reconcileTerminalRecovery(session.id, 0)).toEqual({
+      action: 'replay',
+      sessionId: session.id,
+      fromSeq: 0,
+      headSeq: replay.seq,
+    });
+  });
+
+  it('reconciles an ended caught-up session as closed', async () => {
+    const session = manager.createSession({ workspaceId: '/tmp', provider: 'mock' });
+    await manager.startSession(session.id, { cwd: '/tmp', cols: 80, rows: 24 });
+    await new Promise((r) => setTimeout(r, 100));
+
+    const replay = manager.getOutputReplay(session.id, 0);
+    if (replay.status !== 'ok') throw new Error('expected ok replay');
+
+    expect(manager.reconcileTerminalRecovery(session.id, replay.seq)).toEqual({
+      action: 'closed',
+      sessionId: session.id,
+      headSeq: replay.seq,
+      exitCode: 0,
+    });
+  });
+
+  it('reconciles evicted live output as unrecoverable', async () => {
+    const provider: AgentProvider = {
+      name: 'evicting',
+      async spawn(
+        _sessionId: string,
+        _options: SpawnOptions,
+        onOutput: (data: string) => void = () => {},
+      ) {
+        for (const output of ['one', 'two', 'three']) onOutput(output);
+        return {
+          pid: 40_000,
+          onData: (_callback) => {},
+          onExit: (_callback) => {},
+          write: () => {},
+          resize: () => {},
+          kill: () => {},
+        };
+      },
+      async kill() {},
+    };
+    manager.registerProvider(provider);
+    manager = new SessionManager(store, { outputHistoryLimit: 2 });
+    manager.registerProvider(provider);
+    const session = manager.createSession({ workspaceId: '/tmp', provider: 'evicting' });
+
+    await manager.startSession(session.id, { cwd: '/tmp', cols: 80, rows: 24 });
+
+    expect(manager.reconcileTerminalRecovery(session.id, 0)).toEqual({
+      action: 'unrecoverable',
+      sessionId: session.id,
+      reason: 'too_old_no_snapshot',
+    });
   });
 
   it('keeps output history available after a session exits', async () => {
