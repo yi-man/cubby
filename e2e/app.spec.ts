@@ -727,7 +727,7 @@ test.describe('Cubby MVP', () => {
     expect(resizeCommands).toEqual([]);
   });
 
-  test('mobile live viewers recover with a mobile-sized terminal snapshot', async ({
+  test('mobile live viewers recover with canonical terminal geometry', async ({
     page,
     browser,
   }) => {
@@ -801,14 +801,34 @@ test.describe('Cubby MVP', () => {
                   item.data?.status === 'ok' &&
                   item.data.sessionId === sessionId,
               );
+              const terminalWidth = Math.round(
+                document.querySelector('.xterm')?.getBoundingClientRect().width ?? 0,
+              );
+              const screenWidth = Math.round(
+                document.querySelector('.xterm-screen')?.getBoundingClientRect().width ?? 0,
+              );
+              const responseCols = response?.data?.cols ?? 0;
+
               return {
-                requestCols: command?.args?.cols ?? 0,
-                responseCols: response?.data?.cols ?? 0,
+                snapshotRequested: Boolean(command),
+                snapshotOk: Boolean(response),
+                sentLocalSnapshotSize:
+                  command?.args?.cols !== undefined || command?.args?.rows !== undefined,
+                responseUsesCanonicalCols: responseCols > 90,
+                terminalFitsMobileViewport: terminalWidth > 0 && terminalWidth <= 390,
+                canonicalCanvasOverflows: screenWidth > terminalWidth + 200,
               };
             }, running.id),
           { timeout: 10000 },
         )
-        .toEqual({ requestCols: 44, responseCols: 44 });
+        .toEqual({
+          snapshotRequested: true,
+          snapshotOk: true,
+          sentLocalSnapshotSize: false,
+          responseUsesCanonicalCols: true,
+          terminalFitsMobileViewport: true,
+          canonicalCanvasOverflows: true,
+        });
     } finally {
       await mobile.close();
     }

@@ -99,6 +99,7 @@ export function SessionView({
   const [recoveryRequest, setRecoveryRequest] = useState(0);
   const live = isLiveStatus(session.status);
   const canReplayHistory = terminalReady && (live || session.status === 'ended');
+  const fitTerminalToContainer = !live || resizeAuthorityRef.current;
 
   const writeChunkForGeneration = useCallback(
     async (chunk: TerminalOutputChunk, generation: number) => {
@@ -291,11 +292,10 @@ export function SessionView({
           let restoredSnapshotHistory = false;
 
           if (res.data.action === 'snapshot') {
-            const { cols, rows } = terminalSizeRef.current;
             const snapshotRes = await request({
               id: `snapshot-${session.id}-${session.status}-${Date.now()}`,
               cmd: 'terminal.snapshot',
-              args: { sessionId: session.id, cols, rows },
+              args: { sessionId: session.id },
             });
             if (cancelled || replayGenerationRef.current !== replayGeneration) return;
             if (!snapshotRes.ok || !isTerminalSnapshotData(snapshotRes.data, session.id)) {
@@ -310,6 +310,9 @@ export function SessionView({
             const resetDone = await enqueueResetForGeneration(replayGeneration);
             if (cancelled || replayGenerationRef.current !== replayGeneration) return;
             if (!resetDone) return;
+            if (!resizeAuthorityRef.current) {
+              termRef.current?.resize(snapshotRes.data.cols, snapshotRes.data.rows);
+            }
             const snapshotWritten = await enqueueWriteStringForGeneration(
               snapshotRes.data.data,
               replayGeneration,
@@ -458,9 +461,9 @@ export function SessionView({
 
   useEffect(() => {
     if (!active || !terminalReady) return;
-    termRef.current?.fit();
+    if (fitTerminalToContainer) termRef.current?.fit();
     if (live) termRef.current?.focus();
-  }, [active, live, terminalReady]);
+  }, [active, live, terminalReady, fitTerminalToContainer]);
 
   const startSession = useCallback(async () => {
     if (!active) return;
@@ -684,6 +687,7 @@ export function SessionView({
       >
         <TerminalView
           ref={termRef}
+          fitToContainer={fitTerminalToContainer}
           interactive={live && active}
           onData={handleData}
           onResize={handleResize}

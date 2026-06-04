@@ -231,7 +231,7 @@ describe('SessionManager', () => {
     });
   });
 
-  it('rebuilds a live terminal snapshot for the requested viewport size', async () => {
+  it('returns canonical live terminal snapshot geometry when dimensions are requested', async () => {
     const output = 'desktop sized output before mobile rejoin\r\n';
     const provider: AgentProvider = {
       name: 'sized-snapshot',
@@ -262,8 +262,8 @@ describe('SessionManager', () => {
       status: 'ok',
       sessionId: session.id,
       seq: Buffer.byteLength(output, 'utf8'),
-      cols: 44,
-      rows: 18,
+      cols: 120,
+      rows: 40,
     });
     expect(snapshot.status === 'ok' ? snapshot.data : '').toContain('mobile rejoin');
   });

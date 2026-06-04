@@ -439,7 +439,7 @@ describe('WSCommandHandler', () => {
     expect((response.data as { data?: string }).data).toContain('snapshot payload');
   });
 
-  it('returns a live terminal snapshot for requested websocket dimensions', async () => {
+  it('returns canonical live terminal snapshot geometry when websocket dimensions are requested', async () => {
     const provider: AgentProvider = {
       name: 'sized-snapshot',
       async spawn(
@@ -477,8 +477,8 @@ describe('WSCommandHandler', () => {
         status: 'ok',
         sessionId: session.id,
         seq: Buffer.byteLength('mobile snapshot payload', 'utf8'),
-        cols: 44,
-        rows: 18,
+        cols: 120,
+        rows: 40,
       },
     });
   });

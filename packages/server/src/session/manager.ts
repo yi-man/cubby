@@ -16,12 +16,6 @@ import type { SessionStore } from './store.js';
 
 const OUTPUT_HISTORY_LIMIT = 5000;
 const SNAPSHOT_PERSIST_DEBOUNCE_MS = 250;
-const VIEWPORT_SNAPSHOT_BUFFER_LIMIT = 8;
-
-interface TerminalSnapshotSize {
-  cols: number;
-  rows: number;
-}
 
 interface SessionManagerOptions {
   outputHistoryLimit?: number;
@@ -32,7 +26,6 @@ export class SessionManager {
   private processes = new Map<string, AgentProcess>();
   private outputBuffers = new Map<string, RingBuffer>();
   private snapshotBuffers = new Map<string, HeadlessSnapshotBuffer>();
-  private viewportSnapshotBuffers = new Map<string, Map<string, HeadlessSnapshotBuffer>>();
   private snapshotPersistTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private firstInputBuffers = new Map<string, string>();
   private sessionsNeedingResumeInputReset = new Set<string>();
@@ -159,7 +152,6 @@ export class SessionManager {
             this.notifyStatusChange(sessionId, 'ended');
             this.processes.delete(sessionId);
             this.disposeSnapshotBuffer(sessionId);
-            this.disposeViewportSnapshotBuffers(sessionId);
           } else {
             earlyExitCode = code;
           }
@@ -171,7 +163,6 @@ export class SessionManager {
         this.notifyStatusChange(sessionId, 'ended');
         this.sessionsNeedingResumeInputReset.delete(sessionId);
         this.disposeSnapshotBuffer(sessionId);
-        this.disposeViewportSnapshotBuffers(sessionId);
         return;
       }
 
@@ -187,7 +178,6 @@ export class SessionManager {
       this.store.updateStatus(sessionId, 'ended', { exitCode: 1 });
       this.notifyStatusChange(sessionId, 'ended');
       this.disposeSnapshotBuffer(sessionId);
-      this.disposeViewportSnapshotBuffers(sessionId);
       throw err;
     }
   }
@@ -205,7 +195,6 @@ export class SessionManager {
       }
     }
     this.disposeSnapshotBuffer(sessionId);
-    this.disposeViewportSnapshotBuffers(sessionId);
     this.store.updateStatus(sessionId, 'ended');
     this.notifyStatusChange(sessionId, 'ended');
     this.sessionsNeedingResumeInputReset.delete(sessionId);
@@ -337,26 +326,14 @@ export class SessionManager {
     return '\x15';
   }
 
-  async getTerminalSnapshot(
-    sessionId: string,
-    size?: Partial<TerminalSnapshotSize>,
-  ): Promise<TerminalSnapshotResult> {
+  async getTerminalSnapshot(sessionId: string, _size?: unknown): Promise<TerminalSnapshotResult> {
     const session = this.store.get(sessionId);
     if (!session) return { status: 'unknown', sessionId };
-    const requestedSize = terminalSnapshotSizeFromOptions(size);
-
-    if (requestedSize) {
-      const viewportSnapshot = await this.getViewportTerminalSnapshot(sessionId, requestedSize);
-      if (viewportSnapshot) return { status: 'ok', sessionId, ...viewportSnapshot };
-    }
 
     const snapshotBuffer = this.snapshotBuffers.get(sessionId);
     if (snapshotBuffer && !snapshotBuffer.disabled) {
       try {
         const snapshot = await snapshotBuffer.snapshot();
-        if (requestedSize && !sameTerminalSize(snapshot, requestedSize)) {
-          return { status: 'unavailable', sessionId };
-        }
         this.store.upsertTerminalSnapshot(sessionId, snapshot);
         return { status: 'ok', sessionId, ...snapshot };
       } catch {
@@ -366,9 +343,6 @@ export class SessionManager {
 
     const storedSnapshot = this.store.getTerminalSnapshot(sessionId);
     if (storedSnapshot) {
-      if (requestedSize && !sameTerminalSize(storedSnapshot, requestedSize)) {
-        return { status: 'unavailable', sessionId };
-      }
       return { status: 'ok', sessionId, ...storedSnapshot };
     }
     return { status: 'unavailable', sessionId };
@@ -443,7 +417,6 @@ export class SessionManager {
 
   private replaceSnapshotBuffer(sessionId: string, cols: number, rows: number): void {
     this.disposeSnapshotBuffer(sessionId);
-    this.disposeViewportSnapshotBuffers(sessionId);
     this.store.clearTerminalSnapshot(sessionId);
 
     try {
@@ -465,13 +438,6 @@ export class SessionManager {
     this.snapshotBuffers.delete(sessionId);
   }
 
-  private disposeViewportSnapshotBuffers(sessionId: string): void {
-    const buffers = this.viewportSnapshotBuffers.get(sessionId);
-    if (!buffers) return;
-    for (const buffer of buffers.values()) buffer.dispose();
-    this.viewportSnapshotBuffers.delete(sessionId);
-  }
-
   private writeSnapshotChunk(sessionId: string, chunk: TerminalOutputChunk): void {
     const snapshotBuffer = this.snapshotBuffers.get(sessionId);
     if (!snapshotBuffer || snapshotBuffer.disabled) return;
@@ -482,23 +448,6 @@ export class SessionManager {
     } catch {
       this.disposeSnapshotBuffer(sessionId, snapshotBuffer);
     }
-
-    const viewportBuffers = this.viewportSnapshotBuffers.get(sessionId);
-    if (!viewportBuffers) return;
-    for (const [key, viewportBuffer] of viewportBuffers) {
-      if (viewportBuffer.disabled) {
-        viewportBuffer.dispose();
-        viewportBuffers.delete(key);
-        continue;
-      }
-      try {
-        viewportBuffer.write(chunk.data, chunk.seq);
-      } catch {
-        viewportBuffer.dispose();
-        viewportBuffers.delete(key);
-      }
-    }
-    if (viewportBuffers.size === 0) this.viewportSnapshotBuffers.delete(sessionId);
   }
 
   private scheduleSnapshotPersist(sessionId: string, snapshotBuffer: HeadlessSnapshotBuffer): void {
@@ -530,100 +479,6 @@ export class SessionManager {
 
     const storedSnapshot = this.store.getTerminalSnapshot(sessionId);
     return Boolean(storedSnapshot && storedSnapshot.seq > requestedSeq);
-  }
-
-  private async getViewportTerminalSnapshot(
-    sessionId: string,
-    size: TerminalSnapshotSize,
-  ): Promise<Awaited<ReturnType<HeadlessSnapshotBuffer['snapshot']>> | null> {
-    const key = terminalSnapshotSizeKey(size);
-    const buffers = this.viewportSnapshotBuffers.get(sessionId);
-    const existing = buffers?.get(key);
-    if (existing && !existing.disabled) {
-      try {
-        return await existing.snapshot();
-      } catch {
-        existing.dispose();
-        buffers?.delete(key);
-      }
-    }
-
-    const rebuilt = await this.rebuildViewportSnapshotBuffer(sessionId, size);
-    if (!rebuilt) return null;
-
-    let nextBuffers = this.viewportSnapshotBuffers.get(sessionId);
-    if (!nextBuffers) {
-      nextBuffers = new Map();
-      this.viewportSnapshotBuffers.set(sessionId, nextBuffers);
-    }
-    nextBuffers.set(key, rebuilt);
-    trimViewportSnapshotBuffers(nextBuffers);
-
-    try {
-      return await rebuilt.snapshot();
-    } catch {
-      rebuilt.dispose();
-      nextBuffers.delete(key);
-      return null;
-    }
-  }
-
-  private async rebuildViewportSnapshotBuffer(
-    sessionId: string,
-    size: TerminalSnapshotSize,
-  ): Promise<HeadlessSnapshotBuffer | null> {
-    const chunks = this.outputBuffers.get(sessionId)?.getChunks() ?? [];
-    if (chunks.length > 0 && chunks[0].seqStart !== 0) return null;
-
-    let buffer: HeadlessSnapshotBuffer | null = null;
-    try {
-      buffer = new HeadlessSnapshotBuffer(size);
-      for (const chunk of chunks) buffer.write(chunk.data, chunk.seq);
-      await buffer.snapshot();
-      return buffer;
-    } catch {
-      buffer?.dispose();
-      return null;
-    }
-  }
-}
-
-function terminalSnapshotSizeFromOptions(
-  size: Partial<TerminalSnapshotSize> | undefined,
-): TerminalSnapshotSize | null {
-  if (!size) return null;
-  const cols = normalizeTerminalSnapshotDimension(size.cols, 20, 500);
-  const rows = normalizeTerminalSnapshotDimension(size.rows, 5, 200);
-  if (cols === null || rows === null) return null;
-  return { cols, rows };
-}
-
-function normalizeTerminalSnapshotDimension(
-  value: unknown,
-  min: number,
-  max: number,
-): number | null {
-  if (typeof value !== 'number' || !Number.isFinite(value)) return null;
-  return Math.min(max, Math.max(min, Math.floor(value)));
-}
-
-function terminalSnapshotSizeKey(size: TerminalSnapshotSize): string {
-  return `${size.cols}x${size.rows}`;
-}
-
-function sameTerminalSize(
-  snapshot: { cols: number; rows: number },
-  size: TerminalSnapshotSize,
-): boolean {
-  return snapshot.cols === size.cols && snapshot.rows === size.rows;
-}
-
-function trimViewportSnapshotBuffers(buffers: Map<string, HeadlessSnapshotBuffer>): void {
-  while (buffers.size > VIEWPORT_SNAPSHOT_BUFFER_LIMIT) {
-    const oldest = buffers.keys().next().value;
-    if (!oldest) return;
-    buffers.get(oldest)?.dispose();
-    buffers.delete(oldest);
   }
 }
 

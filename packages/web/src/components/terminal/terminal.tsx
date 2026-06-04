@@ -9,6 +9,7 @@ export interface TerminalHandle {
   clear: () => void;
   reset: () => void;
   fit: () => void;
+  resize: (cols: number, rows: number) => void;
   focus: () => void;
   scrollToTop: () => void;
   scrollToBottom: () => void;
@@ -16,6 +17,7 @@ export interface TerminalHandle {
 }
 
 interface TerminalViewProps {
+  fitToContainer?: boolean;
   interactive?: boolean;
   onData?: (data: string) => void;
   onResize?: (cols: number, rows: number) => void;
@@ -23,7 +25,7 @@ interface TerminalViewProps {
 }
 
 export const TerminalView = forwardRef<TerminalHandle, TerminalViewProps>(function TerminalView(
-  { interactive = true, onData, onResize, onReady },
+  { fitToContainer = true, interactive = true, onData, onResize, onReady },
   ref,
 ) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -32,8 +34,10 @@ export const TerminalView = forwardRef<TerminalHandle, TerminalViewProps>(functi
   const onDataRef = useRef(onData);
   const onResizeRef = useRef(onResize);
   const onReadyRef = useRef(onReady);
+  const fitToContainerRef = useRef(fitToContainer);
   const interactiveRef = useRef(interactive);
 
+  fitToContainerRef.current = fitToContainer;
   interactiveRef.current = interactive;
   onDataRef.current = onData;
   onResizeRef.current = onResize;
@@ -69,10 +73,15 @@ export const TerminalView = forwardRef<TerminalHandle, TerminalViewProps>(functi
       term.reset();
       term.clear();
       term.options.disableStdin = !interactiveRef.current;
-      fitAddonRef.current?.fit();
+      if (fitToContainerRef.current) fitAddonRef.current?.fit();
     },
     fit: () => {
+      if (!fitToContainerRef.current) return;
       fitAddonRef.current?.fit();
+    },
+    resize: (cols: number, rows: number) => {
+      if (cols <= 0 || rows <= 0) return;
+      terminalRef.current?.resize(Math.floor(cols), Math.floor(rows));
     },
     focus: () => {
       terminalRef.current?.focus();
@@ -131,7 +140,7 @@ export const TerminalView = forwardRef<TerminalHandle, TerminalViewProps>(functi
     term.loadAddon(fitAddon);
     term.onResize(({ cols, rows }) => notifyResize(cols, rows));
     term.open(containerRef.current);
-    fitAddon.fit();
+    if (fitToContainerRef.current) fitAddon.fit();
     notifyResize(term.cols, term.rows);
 
     terminalRef.current = term;
@@ -143,6 +152,7 @@ export const TerminalView = forwardRef<TerminalHandle, TerminalViewProps>(functi
     });
 
     const observer = new ResizeObserver(() => {
+      if (!fitToContainerRef.current) return;
       fitAddon.fit();
       notifyResize(term.cols, term.rows);
     });
@@ -154,5 +164,21 @@ export const TerminalView = forwardRef<TerminalHandle, TerminalViewProps>(functi
     };
   }, []);
 
-  return <div ref={containerRef} style={{ width: '100%', height: '100%', minHeight: 0 }} />;
+  useEffect(() => {
+    if (!fitToContainer) return;
+    fitAddonRef.current?.fit();
+  }, [fitToContainer]);
+
+  return (
+    <div
+      ref={containerRef}
+      style={{
+        width: '100%',
+        height: '100%',
+        minHeight: 0,
+        overflowX: fitToContainer ? 'hidden' : 'auto',
+        overflowY: 'hidden',
+      }}
+    />
+  );
 });

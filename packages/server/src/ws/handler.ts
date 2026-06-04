@@ -175,17 +175,13 @@ export class WSCommandHandler {
   }
 
   private async terminalSnapshot(req: WSRequest): Promise<WSResponse> {
-    const { sessionId, cols, rows } = req.args as {
+    const { sessionId } = req.args as {
       sessionId: string;
-      cols?: number;
-      rows?: number;
     };
-    const size =
-      cols === undefined && rows === undefined ? undefined : terminalSizeFromArgs(cols, rows);
     return {
       id: req.id,
       ok: true,
-      data: await this.sessionManager.getTerminalSnapshot(sessionId, size),
+      data: await this.sessionManager.getTerminalSnapshot(sessionId),
     };
   }
 
