@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { unlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -11,7 +12,7 @@ describe('SessionStore', () => {
   let dbPath: string;
 
   beforeEach(() => {
-    dbPath = join(tmpdir(), `cubby-test-${Date.now()}.db`);
+    dbPath = join(tmpdir(), `cubby-test-${randomUUID()}.db`);
     db = new Database(dbPath);
     store = new SessionStore(db);
   });
@@ -50,7 +51,27 @@ describe('SessionStore', () => {
     expect(updated?.status).toBe('running');
   });
 
+  it('updates session title', () => {
+    const session = store.create({ workspaceId: '/tmp/test', provider: 'claude-code' });
+    store.updateTitle(session.id, 'Build pinyin drills');
+    const updated = store.get(session.id);
+    expect(updated?.title).toBe('Build pinyin drills');
+  });
+
   it('returns null for non-existent session', () => {
     expect(store.get('nonexistent')).toBeNull();
+  });
+
+  it('returns only the latest terminal run when history contains shell initialization markers', () => {
+    const session = store.create({ workspaceId: '/tmp/test', provider: 'claude-code' });
+
+    store.appendTerminalOutput(session.id, 'old run output');
+    store.appendTerminalOutput(session.id, '\x1b[?25l\x1b[?2004h\x1b[?1004h\x1b[?2031h');
+    store.appendTerminalOutput(session.id, 'latest run output');
+
+    expect(store.getTerminalOutputHistory(session.id)).toEqual([
+      '\x1b[?25l\x1b[?2004h\x1b[?1004h\x1b[?2031h',
+      'latest run output',
+    ]);
   });
 });

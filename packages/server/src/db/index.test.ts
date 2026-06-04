@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { unlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -9,7 +10,7 @@ describe('Database', () => {
   let dbPath: string;
 
   beforeEach(() => {
-    dbPath = join(tmpdir(), `cubby-test-${Date.now()}.db`);
+    dbPath = join(tmpdir(), `cubby-test-${randomUUID()}.db`);
     db = new Database(dbPath);
   });
 

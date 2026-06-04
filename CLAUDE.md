@@ -56,6 +56,7 @@ bun run lint:fix         # Biome 自动修复
 ### E2E 测试（Playwright，Phase 7 集中写）
 - 核心用户流程必须有 E2E 测试
 - 流程：Agent 编码、文件编辑、Git 操作、认证、移动端
+- 本地验证必须优先跑真实 Claude CLI，不要用 mock provider 代替真实复现；只有 CI 或明确没有可用 `claude` 的环境才使用 `CUBBY_MOCK_CLAUDE_PROVIDER=1`
 
 ### 不测什么
 - 第三方库内部逻辑（Monaco、xterm、Fastify 框架）

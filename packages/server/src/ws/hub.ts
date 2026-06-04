@@ -4,6 +4,11 @@ import type { WebSocket } from 'ws';
 export class WebSocketHub {
   private topicClients = new Map<string, Set<WebSocket>>();
   private clientTopics = new Map<WebSocket, Set<string>>();
+  private allClients = new Set<WebSocket>();
+
+  addClient(ws: WebSocket): void {
+    this.allClients.add(ws);
+  }
 
   subscribe(ws: WebSocket, topic: string): void {
     let topicSet = this.topicClients.get(topic);
@@ -37,7 +42,17 @@ export class WebSocketHub {
     }
   }
 
+  broadcastToAll(event: WSEvent): void {
+    const msg = JSON.stringify(event);
+    for (const ws of this.allClients) {
+      if (ws.readyState === 1) {
+        ws.send(msg);
+      }
+    }
+  }
+
   removeClient(ws: WebSocket): void {
+    this.allClients.delete(ws);
     const topics = this.clientTopics.get(ws);
     if (topics) {
       for (const topic of topics) {

@@ -1,6 +1,8 @@
+import { randomUUID } from 'node:crypto';
 import { unlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import type { AgentProvider, SpawnOptions } from '@cubby/core';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { Database } from './db/index.js';
 import { SessionManager } from './session/manager.js';
@@ -13,7 +15,7 @@ describe('Integration: SessionManager + SessionStore + Database', () => {
   let dbPath: string;
 
   beforeEach(() => {
-    dbPath = join(tmpdir(), `cubby-integration-${Date.now()}.db`);
+    dbPath = join(tmpdir(), `cubby-integration-${randomUUID()}.db`);
     db = new Database(dbPath);
     store = new SessionStore(db);
     manager = new SessionManager(store);
@@ -28,27 +30,28 @@ describe('Integration: SessionManager + SessionStore + Database', () => {
 
   it('full lifecycle: create → start → output → kill', async () => {
     // Register mock provider
-    manager.registerProvider({
+    const mockProvider: AgentProvider = {
       name: 'mock',
       async spawn(
         _sid: string,
-        _opts: unknown,
-        onOutput: (d: string) => void,
-        onExit: (c: number) => void,
+        _opts: SpawnOptions,
+        onOutput: (d: string) => void = () => {},
+        onExit: (c: number) => void = () => {},
       ) {
         setTimeout(() => onOutput('hello'), 10);
         setTimeout(() => onExit(0), 100);
         return {
           pid: 999,
-          onData: () => {},
-          onExit: () => {},
+          onData: (_callback) => {},
+          onExit: (_callback) => {},
           write: () => {},
           resize: () => {},
           kill: () => {},
         };
       },
       async kill() {},
-    } as any);
+    };
+    manager.registerProvider(mockProvider);
 
     // Create
     const session = manager.createSession({ workspaceId: '/tmp', provider: 'mock' });
