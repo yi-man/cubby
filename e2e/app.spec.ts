@@ -402,12 +402,13 @@ test.describe('Cubby MVP', () => {
       workspaceId,
       title: `Live Refresh ${stamp}`,
     });
-    await startSession(page, session);
     const liveLine = `refresh-live-output-${stamp}`;
+    const postRecoveryLine = `refresh-post-recovery-output-${stamp}`;
 
     await page.goto('/');
     const group = page.getByTestId('workspace-group').filter({ hasText: workspaceId });
     await selectSessionTab(group, session.title);
+    await page.getByRole('button', { name: 'Start', exact: true }).click();
     await assertActiveDetail(page, { title: session.title, status: 'running', action: 'Stop' });
     await expect
       .poll(() => terminalText(page), { timeout: 10000 })
@@ -423,6 +424,12 @@ test.describe('Cubby MVP', () => {
       .poll(async () => countOccurrences(await terminalText(page), liveLine), { timeout: 10000 })
       .toBe(1);
     await expect(page.getByTestId('terminal-recovery-error')).toHaveCount(0);
+    await sendTerminalInput(page, session.id, `${postRecoveryLine}\r\n`);
+    await expect
+      .poll(async () => countOccurrences(await terminalText(page), postRecoveryLine), {
+        timeout: 10000,
+      })
+      .toBe(1);
 
     const commands = await page.evaluate(
       () =>
@@ -452,12 +459,13 @@ test.describe('Cubby MVP', () => {
       workspaceId,
       title: `Live Switch Draft ${stamp}`,
     });
-    await startSession(page, running);
     const missedLine = `switch-missed-output-${stamp}`;
+    const postRecoveryLine = `switch-post-recovery-output-${stamp}`;
 
     await page.goto('/');
     const group = page.getByTestId('workspace-group').filter({ hasText: workspaceId });
     await selectSessionTab(group, running.title);
+    await page.getByRole('button', { name: 'Start', exact: true }).click();
     await assertActiveDetail(page, { title: running.title, status: 'running', action: 'Stop' });
     await expect
       .poll(() => terminalText(page), { timeout: 10000 })
@@ -474,6 +482,12 @@ test.describe('Cubby MVP', () => {
       .poll(async () => countOccurrences(await terminalText(page), missedLine), { timeout: 10000 })
       .toBe(1);
     await expect(page.getByTestId('terminal-recovery-error')).toHaveCount(0);
+    await sendTerminalInput(page, running.id, `${postRecoveryLine}\r\n`);
+    await expect
+      .poll(async () => countOccurrences(await terminalText(page), postRecoveryLine), {
+        timeout: 10000,
+      })
+      .toBe(1);
 
     const commands = await page.evaluate(
       () =>
