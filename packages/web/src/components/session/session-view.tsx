@@ -1,6 +1,12 @@
-import type { Session, WSEvent, WSResponse } from '@cubby/core';
+import type { Session, TerminalOutputChunk, WSEvent, WSResponse } from '@cubby/core';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { type TerminalHandle, TerminalView } from '../terminal/terminal.js';
+import {
+  filterRenderableLiveChunks,
+  isRecoveryReconcileData,
+  isTerminalOutputData,
+  isTerminalReplayData,
+} from './terminal-recovery.js';
 import { sanitizeEndedReplayChunks } from './terminal-replay.js';
 
 interface SessionViewProps {
@@ -15,35 +21,6 @@ interface SessionViewProps {
     args?: Record<string, unknown>;
   }) => Promise<{ ok: boolean; data?: unknown }>;
   onMessage: (handler: (msg: WSResponse | WSEvent) => void) => () => void;
-}
-
-function isTerminalOutputData(
-  value: unknown,
-  sessionId: string,
-): value is { sessionId: string; data: string } {
-  return (
-    typeof value === 'object' &&
-    value !== null &&
-    'sessionId' in value &&
-    'data' in value &&
-    value.sessionId === sessionId &&
-    typeof value.data === 'string'
-  );
-}
-
-function isTerminalReplayData(
-  value: unknown,
-  sessionId: string,
-): value is { sessionId: string; chunks: string[] } {
-  return (
-    typeof value === 'object' &&
-    value !== null &&
-    'sessionId' in value &&
-    'chunks' in value &&
-    value.sessionId === sessionId &&
-    Array.isArray(value.chunks) &&
-    value.chunks.every((chunk) => typeof chunk === 'string')
-  );
 }
 
 function isLiveStatus(status: Session['status']): boolean {
@@ -104,12 +81,40 @@ export function SessionView({
   const termRef = useRef<TerminalHandle>(null);
   const terminalSizeRef = useRef({ cols: 80, rows: 24 });
   const replayGenerationRef = useRef(0);
-  const liveReplayDoneRef = useRef(false);
+  const renderedSeqRef = useRef(0);
+  const pendingLiveChunksRef = useRef<TerminalOutputChunk[]>([]);
+  const recoveringRef = useRef(false);
+  const initialRecoveryDoneRef = useRef(false);
   const lastFocusRequestRef = useRef(focusRequest);
   const [terminalReady, setTerminalReady] = useState(false);
   const [replayState, setReplayState] = useState<ReplayState>(() => emptyReplayState());
+  const [recoveryError, setRecoveryError] = useState<string | null>(null);
+  const [recoveryRequest, setRecoveryRequest] = useState(0);
   const live = isLiveStatus(session.status);
   const canReplayHistory = terminalReady && (live || session.status === 'ended');
+
+  const writeChunk = useCallback(async (chunk: TerminalOutputChunk) => {
+    await termRef.current?.writeAsync(chunk.data);
+    renderedSeqRef.current = Math.max(renderedSeqRef.current, chunk.seq);
+  }, []);
+
+  const flushPendingLiveChunks = useCallback(async () => {
+    const chunks = filterRenderableLiveChunks(
+      pendingLiveChunksRef.current,
+      renderedSeqRef.current,
+    ).sort((left, right) => left.seqStart - right.seqStart);
+    pendingLiveChunksRef.current = [];
+
+    for (const chunk of chunks) {
+      if (chunk.seqStart > renderedSeqRef.current) {
+        pendingLiveChunksRef.current.push(chunk);
+        return false;
+      }
+      await writeChunk(chunk);
+    }
+
+    return true;
+  }, [writeChunk]);
 
   // Subscribe to terminal output events
   useEffect(() => {
@@ -120,28 +125,121 @@ export function SessionView({
         msg.evt === 'terminal.output' &&
         isTerminalOutputData(msg.data, session.id)
       ) {
-        termRef.current?.write(msg.data.data);
+        const chunk = msg.data;
         setReplayState((prev) => (prev.hasHistory ? prev : { loaded: true, hasHistory: true }));
+
+        if (!initialRecoveryDoneRef.current || recoveringRef.current) {
+          pendingLiveChunksRef.current.push(chunk);
+          return;
+        }
+
+        if (chunk.seqStart > renderedSeqRef.current) {
+          pendingLiveChunksRef.current.push(chunk);
+          setRecoveryRequest((request) => request + 1);
+          return;
+        }
+
+        if (chunk.seq > renderedSeqRef.current) {
+          void writeChunk(chunk);
+        }
       }
     });
     return unsub;
-  }, [session.id, live, onMessage]);
+  }, [session.id, live, onMessage, writeChunk]);
 
   useEffect(() => {
     if (!canReplayHistory) return;
     let cancelled = false;
     replayGenerationRef.current += 1;
     const replayGeneration = replayGenerationRef.current;
-    const replayingLiveSession = live;
-    if (replayingLiveSession) {
-      if (liveReplayDoneRef.current) {
-        setReplayState((prev) =>
-          prev.loaded ? prev : { loaded: true, hasHistory: prev.hasHistory },
-        );
-        return;
-      }
-      liveReplayDoneRef.current = true;
+
+    if (live) {
+      recoveringRef.current = true;
+      initialRecoveryDoneRef.current = false;
+      setRecoveryError(null);
+
+      request({
+        id: `reconcile-${session.id}-${recoveryRequest}-${Date.now()}`,
+        cmd: 'recovery.reconcile',
+        args: { sessionId: session.id, renderedSeq: renderedSeqRef.current },
+      })
+        .then(async (res) => {
+          if (cancelled || replayGenerationRef.current !== replayGeneration) return;
+          if (!res.ok || !isRecoveryReconcileData(res.data, session.id)) {
+            setRecoveryError('Terminal recovery check failed');
+            return;
+          }
+
+          if (res.data.action === 'unrecoverable') {
+            termRef.current?.reset();
+            pendingLiveChunksRef.current = [];
+            setRecoveryError('Terminal history is no longer available');
+            setReplayState({ loaded: true, hasHistory: false });
+            return;
+          }
+
+          if (res.data.action === 'noop' || res.data.action === 'closed') {
+            const flushed = await flushPendingLiveChunks();
+            if (cancelled || replayGenerationRef.current !== replayGeneration) return;
+            if (!flushed) setRecoveryRequest((request) => request + 1);
+            setReplayState((prev) => ({
+              loaded: true,
+              hasHistory: prev.hasHistory,
+            }));
+            return;
+          }
+
+          const replayRes = await request({
+            id: `replay-${session.id}-${session.status}-${Date.now()}`,
+            cmd: 'terminal.replay',
+            args: { sessionId: session.id, lastSeq: res.data.fromSeq },
+          });
+          if (cancelled || replayGenerationRef.current !== replayGeneration) return;
+          if (!replayRes.ok || !isTerminalReplayData(replayRes.data, session.id)) {
+            setRecoveryError('Terminal replay failed');
+            return;
+          }
+
+          if (replayRes.data.status === 'too_old' || replayRes.data.status === 'unknown') {
+            termRef.current?.reset();
+            pendingLiveChunksRef.current = [];
+            setRecoveryError('Terminal history is no longer available');
+            setReplayState({ loaded: true, hasHistory: false });
+            return;
+          }
+
+          const replayChunks = replayRes.data.chunks.filter(
+            (chunk) => chunk.seq > renderedSeqRef.current,
+          );
+          for (const chunk of replayChunks) {
+            if (cancelled || replayGenerationRef.current !== replayGeneration) return;
+            await writeChunk(chunk);
+          }
+          const flushed = await flushPendingLiveChunks();
+          if (cancelled || replayGenerationRef.current !== replayGeneration) return;
+          if (!flushed) setRecoveryRequest((request) => request + 1);
+          setReplayState((prev) => ({
+            loaded: true,
+            hasHistory: prev.hasHistory || replayChunks.some((chunk) => chunk.data.length > 0),
+          }));
+        })
+        .catch(() => {
+          if (!cancelled && replayGenerationRef.current === replayGeneration) {
+            setRecoveryError('Terminal recovery check failed');
+          }
+        })
+        .finally(() => {
+          if (cancelled || replayGenerationRef.current !== replayGeneration) return;
+          recoveringRef.current = false;
+          initialRecoveryDoneRef.current = true;
+        });
+
+      return () => {
+        cancelled = true;
+      };
     }
+
+    setRecoveryError(null);
     termRef.current?.reset();
     setReplayState(emptyReplayState());
 
@@ -152,20 +250,17 @@ export function SessionView({
     })
       .then(async (res) => {
         if (cancelled || replayGenerationRef.current !== replayGeneration) return;
-        if (!res.ok || !isTerminalReplayData(res.data, session.id)) {
+        if (!res.ok || !isTerminalReplayData(res.data, session.id) || res.data.status !== 'ok') {
           setReplayState({ loaded: true, hasHistory: false });
           return;
         }
-        const replayChunks =
-          session.status === 'ended' ? sanitizeEndedReplayChunks(res.data.chunks) : res.data.chunks;
+        const replayChunks = sanitizeEndedReplayChunks(res.data.chunks.map((chunk) => chunk.data));
         for (const chunk of replayChunks) {
           if (cancelled || replayGenerationRef.current !== replayGeneration) return;
           await termRef.current?.writeAsync(chunk);
         }
         if (cancelled || replayGenerationRef.current !== replayGeneration) return;
-        if (session.status === 'ended') {
-          termRef.current?.scrollToBottom();
-        }
+        termRef.current?.scrollToBottom();
         setReplayState({
           loaded: true,
           hasHistory: replayChunks.some((chunk) => chunk.length > 0),
@@ -178,7 +273,16 @@ export function SessionView({
     return () => {
       cancelled = true;
     };
-  }, [request, session.id, session.status, canReplayHistory, live]);
+  }, [
+    request,
+    session.id,
+    session.status,
+    canReplayHistory,
+    live,
+    recoveryRequest,
+    flushPendingLiveChunks,
+    writeChunk,
+  ]);
 
   useEffect(() => {
     if (!live) return;
@@ -207,17 +311,18 @@ export function SessionView({
   }, [focusRequest, live, terminalReady]);
 
   const startSession = useCallback(async () => {
+    renderedSeqRef.current = 0;
+    pendingLiveChunksRef.current = [];
+    recoveringRef.current = false;
+    initialRecoveryDoneRef.current = false;
+    setRecoveryError(null);
     const { cols, rows } = terminalSizeRef.current;
-    liveReplayDoneRef.current = true;
     const res = await request({
       id: `start-${Date.now()}`,
       cmd: 'session.start',
       args: { sessionId: session.id, cwd: session.workspaceId, cols, rows },
     });
-    if (!res.ok) {
-      liveReplayDoneRef.current = false;
-      return;
-    }
+    if (!res.ok) return;
     termRef.current?.focus();
   }, [session.id, session.workspaceId, request]);
 
@@ -232,9 +337,13 @@ export function SessionView({
   }, [session.id, send]);
 
   const handleResume = useCallback(async () => {
+    renderedSeqRef.current = 0;
+    pendingLiveChunksRef.current = [];
+    recoveringRef.current = false;
+    initialRecoveryDoneRef.current = false;
+    setRecoveryError(null);
     const { cols, rows } = terminalSizeRef.current;
     replayGenerationRef.current += 1;
-    liveReplayDoneRef.current = true;
     termRef.current?.reset();
     setReplayState({ loaded: true, hasHistory: true });
     const res = await request({
@@ -242,10 +351,7 @@ export function SessionView({
       cmd: 'session.resume',
       args: { sessionId: session.id, cwd: session.workspaceId, cols, rows },
     });
-    if (!res.ok) {
-      liveReplayDoneRef.current = false;
-      return;
-    }
+    if (!res.ok) return;
     termRef.current?.focus();
   }, [session.id, session.workspaceId, request]);
 
@@ -276,6 +382,7 @@ export function SessionView({
 
   const showEmptyEndedHistory =
     session.status === 'ended' && replayState.loaded && !replayState.hasHistory;
+  const showRecoveryError = live && recoveryError !== null;
 
   return (
     <div
@@ -408,6 +515,30 @@ export function SessionView({
           onReady={() => setTerminalReady(true)}
         />
         {showEmptyEndedHistory && <EmptyEndedHistory />}
+        {showRecoveryError && (
+          <div
+            data-testid="terminal-recovery-error"
+            style={{
+              position: 'absolute',
+              inset: 0,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              padding: '24px',
+              background: 'rgba(5, 6, 6, 0.92)',
+              color: '#dedbd2',
+              textAlign: 'center',
+              pointerEvents: 'none',
+            }}
+          >
+            <div>
+              <div style={{ fontSize: '14px', fontWeight: 700 }}>{recoveryError}</div>
+              <div style={{ marginTop: '6px', fontSize: '12px', color: '#8d8d87' }}>
+                Terminal output cannot be safely replayed.
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
