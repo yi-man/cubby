@@ -89,6 +89,8 @@ export function SessionView({
   const recoveringRef = useRef(false);
   const initialRecoveryDoneRef = useRef(false);
   const recoveryBlockedRef = useRef(false);
+  // Recovered viewers fit locally, but must not mutate shared PTY geometry.
+  const resizeAuthorityRef = useRef(false);
   const writeChainRef = useRef<Promise<void>>(Promise.resolve());
   const lastFocusRequestRef = useRef(focusRequest);
   const [terminalReady, setTerminalReady] = useState(false);
@@ -442,6 +444,10 @@ export function SessionView({
   }, [send, session.id, live]);
 
   useEffect(() => {
+    if (!live) resizeAuthorityRef.current = false;
+  }, [live]);
+
+  useEffect(() => {
     const focusRequested = focusRequest !== lastFocusRequestRef.current;
     lastFocusRequestRef.current = focusRequest;
     if (!focusRequested) return;
@@ -465,12 +471,16 @@ export function SessionView({
     recoveryBlockedRef.current = false;
     setRecoveryError(null);
     const { cols, rows } = terminalSizeRef.current;
+    resizeAuthorityRef.current = true;
     const res = await request({
       id: `start-${Date.now()}`,
       cmd: 'session.start',
       args: { sessionId: session.id, cwd: session.workspaceId, cols, rows },
     });
-    if (!res.ok) return;
+    if (!res.ok) {
+      resizeAuthorityRef.current = false;
+      return;
+    }
     termRef.current?.focus();
   }, [session.id, session.workspaceId, active, request]);
 
@@ -498,12 +508,16 @@ export function SessionView({
     setReplayState({ loaded: true, hasHistory: false });
     const resetOk = await resetDone;
     if (!resetOk) return;
+    resizeAuthorityRef.current = true;
     const res = await request({
       id: `resume-${Date.now()}`,
       cmd: 'session.resume',
       args: { sessionId: session.id, cwd: session.workspaceId, cols, rows },
     });
-    if (!res.ok) return;
+    if (!res.ok) {
+      resizeAuthorityRef.current = false;
+      return;
+    }
     termRef.current?.focus();
   }, [session.id, session.workspaceId, active, request, enqueueResetForGeneration]);
 
@@ -522,7 +536,7 @@ export function SessionView({
   const handleResize = useCallback(
     (cols: number, rows: number) => {
       terminalSizeRef.current = { cols, rows };
-      if (!active || !live) return;
+      if (!active || !live || !resizeAuthorityRef.current) return;
       send({
         id: `resize-${Date.now()}`,
         cmd: 'terminal.resize',

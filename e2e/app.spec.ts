@@ -333,6 +333,30 @@ test.describe('Cubby MVP', () => {
     await expect(page.getByRole('button', { name: 'New Session' })).toBeVisible();
   });
 
+  test('mobile sidebar overlays the detail pane instead of shrinking it', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto('/');
+
+    const sidebar = page.getByTestId('sidebar-shell');
+    const detail = page.getByTestId('session-detail-pane');
+    await expect(sidebar).toHaveCSS('width', '0px');
+    await expect
+      .poll(() => detail.evaluate((element) => Math.round(element.getBoundingClientRect().width)))
+      .toBe(390);
+
+    await page.getByRole('button', { name: 'Expand sidebar' }).click();
+    await expect(sidebar).toHaveCSS('width', '240px');
+    await expect
+      .poll(() => detail.evaluate((element) => Math.round(element.getBoundingClientRect().width)))
+      .toBe(390);
+
+    await page.getByRole('button', { name: 'Collapse sidebar' }).click();
+    await expect(sidebar).toHaveCSS('width', '0px');
+    await expect
+      .poll(() => detail.evaluate((element) => Math.round(element.getBoundingClientRect().width)))
+      .toBe(390);
+  });
+
   test('switching sessions resets the right terminal pane', async ({ page }) => {
     const firstTitle = `Switch First ${Date.now()}`;
     const secondTitle = `Switch Second ${Date.now()}`;
@@ -600,6 +624,103 @@ test.describe('Cubby MVP', () => {
       );
     });
     expect(redrawCommands).toEqual([]);
+  });
+
+  test('rejoining a running session does not resize the shared terminal', async ({ page }) => {
+    test.skip(
+      !MOCK_CLAUDE_PROVIDER_ENABLED,
+      'Requires CUBBY_MOCK_CLAUDE_PROVIDER=1 to start a deterministic running session',
+    );
+
+    await page.setViewportSize({ width: 1280, height: 720 });
+    await installWebSocketRecorder(page);
+
+    const stamp = Date.now();
+    const workspaceId = `/tmp/cubby-running-rejoin-no-resize-${stamp}`;
+    const running = await createSession(page, {
+      workspaceId,
+      title: `Running Rejoin No Resize ${stamp}`,
+    });
+    await startSession(page, running);
+
+    await page.goto('/');
+    await assertActiveDetail(page, { title: running.title, status: 'running', action: 'Stop' });
+    await expect
+      .poll(() => terminalText(page), { timeout: 10000 })
+      .toContain('Mock Claude Code ready');
+    await expect.poll(() => wsCommandCount(page, 'terminal.subscribe'), { timeout: 10000 }).toBe(1);
+
+    const resizeCommands = await page.evaluate((sessionId) => {
+      const commands =
+        (
+          window as typeof window & {
+            __wsCommands?: Array<{ cmd?: string; args?: { sessionId?: string } }>;
+          }
+        ).__wsCommands ?? [];
+      return commands.filter(
+        (command) => command.cmd === 'terminal.resize' && command.args?.sessionId === sessionId,
+      );
+    }, running.id);
+    expect(resizeCommands).toEqual([]);
+  });
+
+  test('mobile live viewers do not resize the shared terminal when the sidebar changes', async ({
+    page,
+  }) => {
+    test.skip(
+      !MOCK_CLAUDE_PROVIDER_ENABLED,
+      'Requires CUBBY_MOCK_CLAUDE_PROVIDER=1 to start a deterministic running session',
+    );
+
+    await page.setViewportSize({ width: 390, height: 844 });
+    await installWebSocketRecorder(page);
+
+    const stamp = Date.now();
+    const workspaceId = `/tmp/cubby-mobile-live-no-resize-${stamp}`;
+    const running = await createSession(page, {
+      workspaceId,
+      title: `Mobile Live No Resize ${stamp}`,
+    });
+    await startSession(page, running);
+    await page.addInitScript((sessionId) => {
+      (
+        window as typeof window & {
+          __runningSessionId?: string;
+        }
+      ).__runningSessionId = sessionId;
+    }, running.id);
+
+    await page.goto('/');
+    await assertActiveDetail(page, { title: running.title, status: 'running', action: 'Stop' });
+    await expect
+      .poll(() => terminalText(page), { timeout: 10000 })
+      .toContain('Mock Claude Code ready');
+    await expect.poll(() => wsCommandCount(page, 'terminal.subscribe'), { timeout: 10000 }).toBe(1);
+
+    await page.getByRole('button', { name: 'Expand sidebar' }).click();
+    await expect(page.getByTestId('sidebar-shell')).toHaveCSS('width', '240px');
+    await page.getByRole('button', { name: 'Collapse sidebar' }).click();
+    await expect(page.getByTestId('sidebar-shell')).toHaveCSS('width', '0px');
+    await page.waitForTimeout(250);
+
+    const resizeCommands = await page.evaluate(() => {
+      const commands =
+        (
+          window as typeof window & {
+            __wsCommands?: Array<{ cmd?: string; args?: { sessionId?: string } }>;
+            __runningSessionId?: string;
+          }
+        ).__wsCommands ?? [];
+      const sessionId = (
+        window as typeof window & {
+          __runningSessionId?: string;
+        }
+      ).__runningSessionId;
+      return commands.filter(
+        (command) => command.cmd === 'terminal.resize' && command.args?.sessionId === sessionId,
+      );
+    });
+    expect(resizeCommands).toEqual([]);
   });
 
   test('selecting a running session subscribes before reconciling terminal recovery', async ({

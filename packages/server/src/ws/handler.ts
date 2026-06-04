@@ -140,7 +140,8 @@ export class WSCommandHandler {
 
   private terminalResize(req: WSRequest): WSResponse {
     const { sessionId, cols, rows } = req.args as { sessionId: string; cols: number; rows: number };
-    if (!this.sessionManager.resizeTerminal(sessionId, cols, rows)) {
+    const size = terminalSizeFromArgs(cols, rows);
+    if (!this.sessionManager.resizeTerminal(sessionId, size.cols, size.rows)) {
       return {
         id: req.id,
         ok: false,

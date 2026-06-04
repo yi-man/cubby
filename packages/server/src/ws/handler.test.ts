@@ -283,6 +283,36 @@ describe('WSCommandHandler', () => {
     expect(spawnOptions.at(0)).toMatchObject({ cwd: '/tmp', cols: 142, rows: 53 });
   });
 
+  it('normalizes terminal resize dimensions before resizing the process', async () => {
+    const resizes: Array<{ cols: number; rows: number }> = [];
+    const provider: AgentProvider = {
+      name: 'mock',
+      async spawn() {
+        return {
+          pid: 656,
+          onData: (_callback) => {},
+          onExit: (_callback) => {},
+          write: () => {},
+          resize: (cols, rows) => resizes.push({ cols, rows }),
+          kill: () => {},
+        };
+      },
+      async kill() {},
+    };
+    manager.registerProvider(provider);
+    const session = manager.createSession({ workspaceId: '/tmp', provider: 'mock' });
+    await manager.startSession(session.id, { cwd: '/tmp', cols: 80, rows: 24 });
+
+    const response = await handler.handle({} as WebSocket, {
+      id: 'resize-normalized',
+      cmd: 'terminal.resize',
+      args: { sessionId: session.id, cols: 8.9, rows: 1.2 },
+    });
+
+    expect(response).toEqual({ id: 'resize-normalized', ok: true });
+    expect(resizes).toEqual([{ cols: 20, rows: 5 }]);
+  });
+
   it('subscribes the starting websocket before the first terminal output', async () => {
     const sent: unknown[] = [];
     const ws = {

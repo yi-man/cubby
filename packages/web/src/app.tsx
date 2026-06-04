@@ -54,6 +54,23 @@ function initialSidebarCollapsed(): boolean {
   return window.matchMedia(MOBILE_MEDIA_QUERY).matches;
 }
 
+function useMediaQuery(query: string): boolean {
+  const [matches, setMatches] = useState(() => {
+    if (typeof window === 'undefined') return false;
+    return window.matchMedia(query).matches;
+  });
+
+  useEffect(() => {
+    const mediaQueryList = window.matchMedia(query);
+    const handleChange = () => setMatches(mediaQueryList.matches);
+    handleChange();
+    mediaQueryList.addEventListener('change', handleChange);
+    return () => mediaQueryList.removeEventListener('change', handleChange);
+  }, [query]);
+
+  return matches;
+}
+
 function storedCurrentSessionId(): string | null {
   if (typeof window === 'undefined') return null;
   return window.localStorage.getItem(CURRENT_SESSION_ID_STORAGE_KEY);
@@ -143,6 +160,7 @@ export function App() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(initialSidebarCollapsed);
   const [sessionSearchQuery, setSessionSearchQuery] = useState('');
   const [mountedSessionIds, setMountedSessionIds] = useState<Set<string>>(() => new Set());
+  const mobileLayout = useMediaQuery(MOBILE_MEDIA_QUERY);
 
   const sessionById = useMemo(() => {
     const byId = new Map<string, Session>();
@@ -437,6 +455,7 @@ export function App() {
           display: 'flex',
           flex: 1,
           minHeight: 0,
+          position: 'relative',
         }}
       >
         <div
@@ -449,6 +468,13 @@ export function App() {
             borderRight: sidebarCollapsed ? 'none' : `1px solid ${APP_BORDER}`,
             background: APP_PANEL,
             transition: 'width 140ms ease',
+            position: mobileLayout ? 'absolute' : 'relative',
+            top: mobileLayout ? 0 : undefined,
+            bottom: mobileLayout ? 0 : undefined,
+            left: mobileLayout ? 0 : undefined,
+            zIndex: mobileLayout ? 4 : undefined,
+            boxShadow:
+              mobileLayout && !sidebarCollapsed ? '18px 0 32px rgba(0, 0, 0, 0.38)' : undefined,
           }}
         >
           {!sidebarCollapsed && (
