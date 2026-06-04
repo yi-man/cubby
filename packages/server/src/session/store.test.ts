@@ -87,4 +87,17 @@ describe('SessionStore', () => {
     expect(rows).toEqual([{ data: 'abc', seq_start: 0, seq_end: 3 }]);
     expect(store.getTerminalOutputHistory(session.id)).toEqual(['abc']);
   });
+
+  it('returns retained terminal output chunks with their persisted sequence metadata', () => {
+    const session = store.create({ workspaceId: '/tmp', provider: 'mock' });
+
+    store.appendTerminalOutput(session.id, { data: 'one', seqStart: 0, seq: 3 }, 2);
+    store.appendTerminalOutput(session.id, { data: 'two', seqStart: 3, seq: 6 }, 2);
+    store.appendTerminalOutput(session.id, { data: 'three', seqStart: 6, seq: 11 }, 2);
+
+    expect(store.getTerminalOutputChunks(session.id, 2)).toEqual([
+      { data: 'two', seqStart: 3, seq: 6 },
+      { data: 'three', seqStart: 6, seq: 11 },
+    ]);
+  });
 });

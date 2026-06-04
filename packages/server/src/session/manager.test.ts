@@ -184,6 +184,39 @@ describe('SessionManager', () => {
     });
   });
 
+  it('uses persisted sequence metadata when replaying retained ended output', () => {
+    manager = new SessionManager(store, { outputHistoryLimit: 2 });
+    const session = manager.createSession({ workspaceId: '/tmp', provider: 'mock' });
+    store.appendTerminalOutput(session.id, { data: 'one', seqStart: 0, seq: 3 }, 2);
+    store.appendTerminalOutput(session.id, { data: 'two', seqStart: 3, seq: 6 }, 2);
+    store.appendTerminalOutput(session.id, { data: 'three', seqStart: 6, seq: 11 }, 2);
+    store.updateStatus(session.id, 'ended', { exitCode: 0 });
+
+    expect(manager.getOutputReplay(session.id, 6)).toEqual({
+      status: 'ok',
+      sessionId: session.id,
+      chunks: [{ data: 'three', seqStart: 6, seq: 11 }],
+      seq: 11,
+    });
+    expect(manager.getOutputReplay(session.id, 1)).toEqual({
+      status: 'too_old',
+      sessionId: session.id,
+      oldestSeq: 3,
+      seq: 11,
+    });
+    expect(manager.reconcileTerminalRecovery(session.id, 6)).toEqual({
+      action: 'replay',
+      sessionId: session.id,
+      fromSeq: 6,
+      headSeq: 11,
+    });
+    expect(manager.reconcileTerminalRecovery(session.id, 1)).toEqual({
+      action: 'unrecoverable',
+      sessionId: session.id,
+      reason: 'too_old_no_snapshot',
+    });
+  });
+
   it('keeps output history available after a session exits', async () => {
     const session = manager.createSession({ workspaceId: '/tmp', provider: 'mock' });
     await manager.startSession(session.id, { cwd: '/tmp', cols: 80, rows: 24 });

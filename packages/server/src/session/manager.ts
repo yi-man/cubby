@@ -209,11 +209,12 @@ export class SessionManager {
   }
 
   getOutputReplay(sessionId: string, lastSeq = 0): TerminalReplayResult {
+    const requestedSeq = normalizeSequence(lastSeq);
     const session = this.store.get(sessionId);
     if (!session) return { status: 'unknown', sessionId };
 
     if (this.processes.has(sessionId)) {
-      const replay = this.outputBuffers.get(sessionId)?.replayFrom(lastSeq) ?? {
+      const replay = this.outputBuffers.get(sessionId)?.replayFrom(requestedSeq) ?? {
         status: 'ok' as const,
         chunks: [],
         seq: 0,
@@ -229,16 +230,11 @@ export class SessionManager {
       };
     }
 
-    const { chunks, seq } = synthesizeOutputChunks(this.getOutputHistory(sessionId));
-    return {
-      status: 'ok',
-      sessionId,
-      chunks: lastSeq <= 0 ? chunks : chunks.filter((chunk) => chunk.seq > lastSeq),
-      seq,
-    };
+    return replayOutputChunks(sessionId, this.getOutputHistoryChunks(session), requestedSeq);
   }
 
   reconcileTerminalRecovery(sessionId: string, renderedSeq: number): RecoveryReconcileResult {
+    const requestedSeq = normalizeSequence(renderedSeq);
     const session = this.store.get(sessionId);
     if (!session) {
       return { action: 'unrecoverable', sessionId, reason: 'unknown_session' };
@@ -246,40 +242,37 @@ export class SessionManager {
 
     const buffer = this.outputBuffers.get(sessionId);
     const live = this.processes.has(sessionId);
-    let history: string[] | null = null;
-    let headSeq = buffer?.currentSeq ?? 0;
-
-    if (!buffer || (!live && headSeq === 0)) {
-      history = this.getOutputHistory(sessionId);
-      headSeq = synthesizeOutputChunks(history).seq;
-    }
+    const historyChunks = live ? [] : this.getOutputHistoryChunks(session);
+    const historySeq = historyChunks.at(-1)?.seq ?? 0;
+    const headSeq = buffer?.currentSeq ?? historySeq;
 
     if (live) {
-      if (renderedSeq >= headSeq) return { action: 'noop', sessionId, headSeq };
-      if (buffer?.canReplayFrom(renderedSeq)) {
-        return { action: 'replay', sessionId, fromSeq: renderedSeq, headSeq };
+      if (requestedSeq >= headSeq) return { action: 'noop', sessionId, headSeq };
+      if (buffer?.canReplayFrom(requestedSeq)) {
+        return { action: 'replay', sessionId, fromSeq: requestedSeq, headSeq };
       }
       return { action: 'unrecoverable', sessionId, reason: 'too_old_no_snapshot' };
     }
 
     if (session.status === 'ended') {
-      if (renderedSeq >= headSeq) {
+      if (requestedSeq >= headSeq) {
         return { action: 'closed', sessionId, headSeq, exitCode: session.exitCode };
       }
-      if (buffer?.canReplayFrom(renderedSeq)) {
-        return { action: 'replay', sessionId, fromSeq: renderedSeq, headSeq };
+      if (buffer?.canReplayFrom(requestedSeq)) {
+        return { action: 'replay', sessionId, fromSeq: requestedSeq, headSeq };
       }
-
-      history ??= this.getOutputHistory(sessionId);
-      if (history.length > 0) {
-        return { action: 'replay', sessionId, fromSeq: renderedSeq, headSeq };
+      if (canReplayOutputChunks(historyChunks, requestedSeq)) {
+        return { action: 'replay', sessionId, fromSeq: requestedSeq, headSeq };
+      }
+      if (historyChunks.length > 0) {
+        return { action: 'unrecoverable', sessionId, reason: 'too_old_no_snapshot' };
       }
 
       return { action: 'closed', sessionId, headSeq, exitCode: session.exitCode };
     }
 
-    if (renderedSeq < headSeq) {
-      return { action: 'replay', sessionId, fromSeq: renderedSeq, headSeq };
+    if (requestedSeq < headSeq && canReplayOutputChunks(historyChunks, requestedSeq)) {
+      return { action: 'replay', sessionId, fromSeq: requestedSeq, headSeq };
     }
 
     return { action: 'unrecoverable', sessionId, reason: 'unknown_session' };
@@ -311,6 +304,17 @@ export class SessionManager {
       : [];
     if (transcriptHistory.length > 0) return transcriptHistory;
     return [];
+  }
+
+  private getOutputHistoryChunks(session: Session): TerminalOutputChunk[] {
+    const persistedHistory = this.store.getTerminalOutputChunks(session.id, this.outputHistoryLimit);
+    if (persistedHistory.length > 0) return persistedHistory;
+    const bufferedHistory = this.outputBuffers.get(session.id)?.getChunks() ?? [];
+    if (bufferedHistory.length > 0) return bufferedHistory;
+    const provider = this.providers.get(session.provider);
+    return synthesizeOutputChunks(
+      provider?.getTranscriptHistory?.(session.id, session.workspaceId) ?? [],
+    ).chunks;
   }
 
   recordTerminalInput(sessionId: string, data: string): Session | null {
@@ -354,6 +358,36 @@ function synthesizeOutputChunks(history: string[]): { chunks: TerminalOutputChun
     return { data, seqStart, seq };
   });
   return { chunks, seq };
+}
+
+function replayOutputChunks(
+  sessionId: string,
+  chunks: TerminalOutputChunk[],
+  lastSeq: number,
+): TerminalReplayResult {
+  const seq = chunks.at(-1)?.seq ?? 0;
+  if (chunks.length > 0 && lastSeq > 0 && lastSeq < chunks[0].seqStart) {
+    return { status: 'too_old', sessionId, oldestSeq: chunks[0].seqStart, seq };
+  }
+
+  return {
+    status: 'ok',
+    sessionId,
+    chunks:
+      lastSeq <= 0
+        ? chunks.map((chunk) => ({ ...chunk }))
+        : chunks.filter((chunk) => chunk.seq > lastSeq).map((chunk) => ({ ...chunk })),
+    seq,
+  };
+}
+
+function canReplayOutputChunks(chunks: TerminalOutputChunk[], lastSeq: number): boolean {
+  return chunks.length > 0 && (lastSeq <= 0 || lastSeq >= chunks[0].seqStart);
+}
+
+function normalizeSequence(value: number): number {
+  if (!Number.isFinite(value) || value <= 0) return 0;
+  return Math.floor(value);
 }
 
 function summarizeFirstInput(input: string): string {
