@@ -106,6 +106,12 @@ export function SessionView({
     [],
   );
 
+  const writeStringForGeneration = useCallback(async (data: string, generation: number) => {
+    if (replayGenerationRef.current !== generation) return false;
+    await termRef.current?.writeAsync(data);
+    return replayGenerationRef.current === generation;
+  }, []);
+
   const flushPendingLiveChunks = useCallback(
     async (generation: number) => {
       const chunks = filterRenderableLiveChunks(
@@ -199,11 +205,11 @@ export function SessionView({
   useEffect(() => {
     if (!canReplayHistory) return;
     let cancelled = false;
+    if (live && recoveryBlockedRef.current) return;
     replayGenerationRef.current += 1;
     const replayGeneration = replayGenerationRef.current;
 
     if (live) {
-      if (recoveryBlockedRef.current) return;
       recoveringRef.current = true;
       initialRecoveryDoneRef.current = false;
       setRecoveryError(null);
@@ -302,7 +308,8 @@ export function SessionView({
         const replayChunks = sanitizeEndedReplayChunks(res.data.chunks.map((chunk) => chunk.data));
         for (const chunk of replayChunks) {
           if (cancelled || replayGenerationRef.current !== replayGeneration) return;
-          await termRef.current?.writeAsync(chunk);
+          const written = await writeStringForGeneration(chunk, replayGeneration);
+          if (!written) return;
         }
         if (cancelled || replayGenerationRef.current !== replayGeneration) return;
         termRef.current?.scrollToBottom();
@@ -327,6 +334,7 @@ export function SessionView({
     recoveryRequest,
     flushPendingLiveChunks,
     writeChunkForGeneration,
+    writeStringForGeneration,
     blockRecovery,
   ]);
 
