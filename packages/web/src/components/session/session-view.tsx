@@ -95,40 +95,59 @@ export function SessionView({
   const live = isLiveStatus(session.status);
   const canReplayHistory = terminalReady && (live || session.status === 'ended');
 
-  const writeChunk = useCallback(async (chunk: TerminalOutputChunk) => {
-    await termRef.current?.writeAsync(chunk.data);
-    renderedSeqRef.current = Math.max(renderedSeqRef.current, chunk.seq);
-  }, []);
+  const writeChunkForGeneration = useCallback(
+    async (chunk: TerminalOutputChunk, generation: number) => {
+      if (replayGenerationRef.current !== generation || recoveryBlockedRef.current) return false;
+      await termRef.current?.writeAsync(chunk.data);
+      if (replayGenerationRef.current !== generation || recoveryBlockedRef.current) return false;
+      renderedSeqRef.current = Math.max(renderedSeqRef.current, chunk.seq);
+      return true;
+    },
+    [],
+  );
 
-  const flushPendingLiveChunks = useCallback(async () => {
-    const chunks = filterRenderableLiveChunks(
-      pendingLiveChunksRef.current,
-      renderedSeqRef.current,
-    ).sort((left, right) => left.seqStart - right.seqStart);
-    pendingLiveChunksRef.current = [];
+  const flushPendingLiveChunks = useCallback(
+    async (generation: number) => {
+      const chunks = filterRenderableLiveChunks(
+        pendingLiveChunksRef.current,
+        renderedSeqRef.current,
+      ).sort((left, right) => left.seqStart - right.seqStart);
+      pendingLiveChunksRef.current = [];
 
-    for (let index = 0; index < chunks.length; index++) {
-      const chunk = chunks[index];
-      if (chunk.seqStart > renderedSeqRef.current) {
-        pendingLiveChunksRef.current = chunks.slice(index);
-        return false;
+      for (let index = 0; index < chunks.length; index++) {
+        const chunk = chunks[index];
+        if (chunk.seqStart > renderedSeqRef.current) {
+          pendingLiveChunksRef.current = chunks.slice(index);
+          return false;
+        }
+        const written = await writeChunkForGeneration(chunk, generation);
+        if (!written) {
+          pendingLiveChunksRef.current = chunks.slice(index);
+          return false;
+        }
       }
-      await writeChunk(chunk);
-    }
 
-    return true;
-  }, [writeChunk]);
+      return true;
+    },
+    [writeChunkForGeneration],
+  );
 
   const blockRecovery = useCallback((message: string) => {
-    replayGenerationRef.current += 1;
+    const blockGeneration = replayGenerationRef.current + 1;
+    replayGenerationRef.current = blockGeneration;
     recoveryBlockedRef.current = true;
     recoveringRef.current = false;
     initialRecoveryDoneRef.current = false;
-    writeChainRef.current = Promise.resolve();
-    termRef.current?.reset();
     pendingLiveChunksRef.current = [];
     setRecoveryError(message);
     setReplayState({ loaded: true, hasHistory: false });
+    const resetAfterWrites = writeChainRef.current
+      .catch(() => {})
+      .then(() => {
+        if (!recoveryBlockedRef.current || replayGenerationRef.current !== blockGeneration) return;
+        termRef.current?.reset();
+      });
+    writeChainRef.current = resetAfterWrites;
   }, []);
 
   const queueLiveChunk = useCallback(
@@ -147,13 +166,13 @@ export function SessionView({
           return;
         }
         if (chunk.seq > renderedSeqRef.current) {
-          await writeChunk(chunk);
-          if (replayGenerationRef.current !== generation || recoveryBlockedRef.current) return;
+          const written = await writeChunkForGeneration(chunk, generation);
+          if (!written) return;
           setReplayState((prev) => (prev.hasHistory ? prev : { loaded: true, hasHistory: true }));
         }
       });
     },
-    [writeChunk],
+    [writeChunkForGeneration],
   );
 
   // Subscribe to terminal output events
@@ -184,9 +203,9 @@ export function SessionView({
     const replayGeneration = replayGenerationRef.current;
 
     if (live) {
+      if (recoveryBlockedRef.current) return;
       recoveringRef.current = true;
       initialRecoveryDoneRef.current = false;
-      recoveryBlockedRef.current = false;
       setRecoveryError(null);
 
       request({
@@ -207,7 +226,7 @@ export function SessionView({
           }
 
           if (res.data.action === 'noop' || res.data.action === 'closed') {
-            const flushed = await flushPendingLiveChunks();
+            const flushed = await flushPendingLiveChunks(replayGeneration);
             if (cancelled || replayGenerationRef.current !== replayGeneration) return;
             if (!flushed) setRecoveryRequest((request) => request + 1);
             setReplayState((prev) => ({
@@ -238,9 +257,10 @@ export function SessionView({
           );
           for (const chunk of replayChunks) {
             if (cancelled || replayGenerationRef.current !== replayGeneration) return;
-            await writeChunk(chunk);
+            const written = await writeChunkForGeneration(chunk, replayGeneration);
+            if (!written) return;
           }
-          const flushed = await flushPendingLiveChunks();
+          const flushed = await flushPendingLiveChunks(replayGeneration);
           if (cancelled || replayGenerationRef.current !== replayGeneration) return;
           if (!flushed) setRecoveryRequest((request) => request + 1);
           setReplayState((prev) => ({
@@ -306,7 +326,7 @@ export function SessionView({
     live,
     recoveryRequest,
     flushPendingLiveChunks,
-    writeChunk,
+    writeChunkForGeneration,
     blockRecovery,
   ]);
 
@@ -337,6 +357,7 @@ export function SessionView({
   }, [focusRequest, live, terminalReady]);
 
   const startSession = useCallback(async () => {
+    replayGenerationRef.current += 1;
     renderedSeqRef.current = 0;
     pendingLiveChunksRef.current = [];
     recoveringRef.current = false;
@@ -365,6 +386,7 @@ export function SessionView({
   }, [session.id, send]);
 
   const handleResume = useCallback(async () => {
+    replayGenerationRef.current += 1;
     renderedSeqRef.current = 0;
     pendingLiveChunksRef.current = [];
     recoveringRef.current = false;
@@ -373,7 +395,6 @@ export function SessionView({
     writeChainRef.current = Promise.resolve();
     setRecoveryError(null);
     const { cols, rows } = terminalSizeRef.current;
-    replayGenerationRef.current += 1;
     termRef.current?.reset();
     setReplayState({ loaded: true, hasHistory: true });
     const res = await request({
