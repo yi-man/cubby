@@ -59,8 +59,8 @@ describe('Integration: SessionManager + SessionStore + Database', () => {
 
     // Start
     const outputs: string[] = [];
-    await manager.startSession(session.id, { cwd: '/tmp', cols: 80, rows: 24 }, (d) =>
-      outputs.push(d),
+    await manager.startSession(session.id, { cwd: '/tmp', cols: 80, rows: 24 }, (chunk) =>
+      outputs.push(chunk.data),
     );
 
     const running = manager.getSession(session.id);
