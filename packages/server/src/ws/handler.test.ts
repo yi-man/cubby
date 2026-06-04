@@ -122,6 +122,20 @@ describe('WSCommandHandler', () => {
     });
   });
 
+  it('returns an unknown replay result for an unknown session', async () => {
+    const response = await handler.handle({} as WebSocket, {
+      id: 'replay-unknown',
+      cmd: 'terminal.replay',
+      args: { sessionId: 'missing-session' },
+    });
+
+    expect(response).toEqual({
+      id: 'replay-unknown',
+      ok: true,
+      data: { status: 'unknown', sessionId: 'missing-session' },
+    });
+  });
+
   it('resumes an ended session through websocket command', async () => {
     const spawnOptions: SpawnOptions[] = [];
     const provider: AgentProvider = {

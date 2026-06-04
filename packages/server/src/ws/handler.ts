@@ -166,10 +166,6 @@ export class WSCommandHandler {
 
   private terminalReplay(req: WSRequest): WSResponse {
     const { sessionId, lastSeq } = req.args as { sessionId: string; lastSeq?: number };
-    const session = this.sessionManager.getSession(sessionId);
-    if (!session) {
-      return { id: req.id, ok: false, error: { code: 'NOT_FOUND', message: 'Session not found' } };
-    }
     return {
       id: req.id,
       ok: true,
