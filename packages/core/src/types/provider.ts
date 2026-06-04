@@ -9,6 +9,7 @@ export interface SpawnOptions {
 
 export interface AgentProvider {
   name: string;
+  hasConversation?(sessionId: string, cwd: string): boolean;
   getTranscriptHistory?(sessionId: string, cwd: string): string[];
   spawn(
     sessionId: string,

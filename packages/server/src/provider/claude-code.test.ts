@@ -82,6 +82,23 @@ describe('ClaudeCodeProvider', () => {
     }
   });
 
+  it('detects whether a Claude transcript exists for a session', () => {
+    const claudeDir = join(tmpdir(), `cubby-claude-exists-${randomUUID()}`);
+    const sessionId = '00000000-0000-4000-8000-000000000002';
+    const projectDir = join(claudeDir, 'projects', '-tmp-cubby-project');
+    mkdirSync(projectDir, { recursive: true });
+    writeFileSync(join(projectDir, `${sessionId}.jsonl`), '');
+
+    try {
+      const provider = new ClaudeCodeProvider(undefined, claudeDir);
+
+      expect(provider.hasConversation(sessionId, '/tmp/cubby/project')).toBe(true);
+      expect(provider.hasConversation('missing-session', '/tmp/cubby/project')).toBe(false);
+    } finally {
+      rmSync(claudeDir, { recursive: true, force: true });
+    }
+  });
+
   it('spawns claude in a pty and forwards terminal io', async () => {
     const dataListeners: ((data: string) => void)[] = [];
     const exitListeners: ((event: { exitCode: number; signal?: string }) => void)[] = [];

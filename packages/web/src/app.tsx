@@ -125,7 +125,10 @@ export function App() {
   const { send, request, onMessage, connected } = useWebSocket(getWsUrl());
   const [sessions, setSessions] = useAtom(sessionsAtom);
   const [currentId, setCurrentId] = useAtom(currentSessionIdAtom);
-  const currentSession = sessions.find((s) => s.id === currentId) ?? null;
+  const [pendingSession, setPendingSession] = useState<Session | null>(null);
+  const listedCurrentSession = sessions.find((s) => s.id === currentId) ?? null;
+  const currentSession =
+    listedCurrentSession ?? (pendingSession?.id === currentId ? pendingSession : null);
   const [showPicker, setShowPicker] = useState(false);
   const [autoStartSessionId, setAutoStartSessionId] = useState<string | null>(null);
   const [terminalFocusRequest, setTerminalFocusRequest] = useState(0);
@@ -170,6 +173,8 @@ export function App() {
   }, [connected, send]);
 
   useEffect(() => {
+    if (currentId && pendingSession?.id === currentId) return;
+
     if (sessions.length === 0) {
       if (currentId !== null) setCurrentId(null);
       return;
@@ -183,7 +188,7 @@ export function App() {
     const nextId = restoredId ?? preferredSessionId(sessions);
     setCurrentId(nextId);
     persistCurrentSessionId(nextId);
-  }, [sessions, currentId, setCurrentId]);
+  }, [sessions, currentId, pendingSession, setCurrentId]);
 
   // Handle responses
   useEffect(() => {
@@ -196,7 +201,23 @@ export function App() {
         Array.isArray(msg.data) &&
         msg.data.every(isSession)
       ) {
-        setSessions(msg.data);
+        const nextSessions = msg.data;
+        setSessions(nextSessions);
+        setPendingSession((pending) => {
+          if (!pending) return pending;
+          if (nextSessions.some((session) => session.id === pending.id)) return null;
+          if (pending.status === 'ended') return null;
+          return pending;
+        });
+        if (
+          pendingSession &&
+          pendingSession.status === 'ended' &&
+          !nextSessions.some((session) => session.id === pendingSession.id) &&
+          currentId === pendingSession.id
+        ) {
+          setCurrentId(null);
+          persistCurrentSessionId(null);
+        }
       }
       if (
         'ok' in msg &&
@@ -205,7 +226,7 @@ export function App() {
         msg.id.startsWith('create-') &&
         isSession(msg.data)
       ) {
-        setSessions((prev) => [msg.data, ...prev]);
+        setPendingSession(msg.data);
         setCurrentId(msg.data.id);
         persistCurrentSessionId(msg.data.id);
       }
@@ -213,12 +234,35 @@ export function App() {
         setSessions((prev) =>
           prev.map((s) => (s.id === msg.data.sessionId ? { ...s, status: msg.data.status } : s)),
         );
+        setPendingSession((pending) =>
+          pending?.id === msg.data.sessionId ? { ...pending, status: msg.data.status } : pending,
+        );
+        if (msg.data.status === 'ended') {
+          send({ id: 'init', cmd: 'session.list' });
+        }
       }
       if ('evt' in msg && msg.evt === 'session.updated' && isSession(msg.data)) {
         setSessions((prev) => prev.map((s) => (s.id === msg.data.id ? msg.data : s)));
+        setPendingSession((pending) => (pending?.id === msg.data.id ? msg.data : pending));
+        send({ id: 'init', cmd: 'session.list' });
       }
     });
-  }, [onMessage, setSessions, setCurrentId]);
+  }, [onMessage, setSessions, setCurrentId, send, pendingSession, currentId]);
+
+  useEffect(() => {
+    if (!connected || !pendingSession) return;
+    if (sessions.some((session) => session.id === pendingSession.id)) {
+      setPendingSession(null);
+      return;
+    }
+    if (!isLiveSession(pendingSession)) return;
+
+    send({ id: 'init', cmd: 'session.list' });
+    const intervalId = window.setInterval(() => {
+      send({ id: 'init', cmd: 'session.list' });
+    }, 2000);
+    return () => window.clearInterval(intervalId);
+  }, [connected, pendingSession, sessions, send]);
 
   useEffect(() => {
     window.localStorage.setItem(SIDEBAR_STATE_STORAGE_KEY, String(sidebarCollapsed));
@@ -237,12 +281,12 @@ export function App() {
       if (!isSession(createRes.data)) return;
 
       const session = createRes.data;
-      setSessions((prev) => [session, ...prev]);
+      setPendingSession(session);
       setCurrentId(session.id);
       persistCurrentSessionId(session.id);
       setAutoStartSessionId(session.id);
     },
-    [request, setSessions, setCurrentId],
+    [request, setCurrentId],
   );
 
   const handleSelectSession = useCallback(

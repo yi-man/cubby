@@ -43,7 +43,7 @@ export class SessionManager {
   }
 
   listSessions(): Session[] {
-    return this.store.list();
+    return this.store.list().filter((session) => this.hasConversation(session));
   }
 
   reconcileDetachedLiveSessions(): Session[] {
@@ -75,7 +75,17 @@ export class SessionManager {
     options: SpawnOptions,
     onOutput?: (data: string) => void,
   ): Promise<void> {
+    const session = this.store.get(sessionId);
+    if (!session) throw new Error('Session not found');
+    if (!this.hasConversation(session)) {
+      throw new Error('Session is not resumable: provider conversation not found');
+    }
     await this.spawnSession(sessionId, options, 'ended', true, onOutput);
+  }
+
+  private hasConversation(session: Session): boolean {
+    const provider = this.providers.get(session.provider);
+    return provider?.hasConversation?.(session.id, session.workspaceId) ?? true;
   }
 
   private async spawnSession(

@@ -100,13 +100,14 @@ describe('createServer', () => {
     db.close();
 
     const { app } = await createServer(0);
-    const response = await app.inject({ method: 'GET', url: '/api/sessions' });
+    const getResponse = await app.inject({ method: 'GET', url: `/api/sessions/${session.id}` });
+    const listResponse = await app.inject({ method: 'GET', url: '/api/sessions' });
     await app.close();
 
-    expect(response.statusCode).toBe(200);
-    expect(response.json()).toContainEqual(
-      expect.objectContaining({ id: session.id, status: 'ended' }),
-    );
+    expect(getResponse.statusCode).toBe(200);
+    expect(getResponse.json()).toMatchObject({ id: session.id, status: 'ended' });
+    expect(listResponse.statusCode).toBe(200);
+    expect(listResponse.json()).toEqual([]);
   });
 
   it('can start sessions with the mock Claude provider for CI E2E', async () => {

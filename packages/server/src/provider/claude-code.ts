@@ -131,6 +131,10 @@ export class ClaudeCodeProvider implements AgentProvider {
     return chunks;
   }
 
+  hasConversation(sessionId: string, cwd: string): boolean {
+    return this.findTranscriptPath(sessionId, cwd) !== null;
+  }
+
   private findTranscriptPath(sessionId: string, cwd: string): string | null {
     const encodedCwd = cwd.replace(/[\\/]/g, '-');
     const directPath = join(this.claudeDir, 'projects', encodedCwd, `${sessionId}.jsonl`);

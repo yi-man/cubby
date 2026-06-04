@@ -162,6 +162,82 @@ describe('SessionManager', () => {
     expect(manager.getOutputHistory(session.id)).toEqual(['> clean transcript\r\n']);
   });
 
+  it('filters sessions when the provider conversation does not exist', () => {
+    const provider = {
+      name: 'conversation-aware',
+      hasConversation: () => false,
+      async spawn() {
+        return {
+          pid: 30_010,
+          onData: (_callback: (data: string) => void) => {},
+          onExit: (_callback: (code: number) => void) => {},
+          write: () => {},
+          resize: () => {},
+          kill: () => {},
+        };
+      },
+      async kill() {},
+    };
+    manager.registerProvider(provider);
+    const ended = manager.createSession({ workspaceId: '/tmp', provider: provider.name });
+    const draft = manager.createSession({ workspaceId: '/tmp', provider: provider.name });
+    store.updateStatus(ended.id, 'ended');
+
+    expect(manager.listSessions().map((session) => session.id)).not.toContain(draft.id);
+    expect(manager.listSessions().map((session) => session.id)).not.toContain(ended.id);
+  });
+
+  it('lists sessions when the provider conversation exists', () => {
+    const provider = {
+      name: 'existing-conversation',
+      hasConversation: () => true,
+      async spawn() {
+        return {
+          pid: 30_012,
+          onData: (_callback: (data: string) => void) => {},
+          onExit: (_callback: (code: number) => void) => {},
+          write: () => {},
+          resize: () => {},
+          kill: () => {},
+        };
+      },
+      async kill() {},
+    };
+    manager.registerProvider(provider);
+    const session = manager.createSession({ workspaceId: '/tmp', provider: provider.name });
+
+    expect(manager.listSessions().map((item) => item.id)).toContain(session.id);
+  });
+
+  it('rejects resuming ended sessions when the provider conversation does not exist', async () => {
+    let spawnCount = 0;
+    const provider = {
+      name: 'missing-conversation',
+      hasConversation: () => false,
+      async spawn() {
+        spawnCount += 1;
+        return {
+          pid: 30_011,
+          onData: (_callback: (data: string) => void) => {},
+          onExit: (_callback: (code: number) => void) => {},
+          write: () => {},
+          resize: () => {},
+          kill: () => {},
+        };
+      },
+      async kill() {},
+    };
+    manager.registerProvider(provider);
+    const session = manager.createSession({ workspaceId: '/tmp', provider: provider.name });
+    store.updateStatus(session.id, 'ended');
+
+    await expect(() =>
+      manager.resumeSession(session.id, { cwd: '/tmp', cols: 80, rows: 24 }),
+    ).rejects.toThrow('Session is not resumable');
+    expect(spawnCount).toBe(0);
+    expect(store.get(session.id)?.status).toBe('ended');
+  });
+
   it('rejects starting a non-draft session', async () => {
     const session = manager.createSession({ workspaceId: '/tmp', provider: 'mock' });
     await manager.startSession(session.id, { cwd: '/tmp', cols: 80, rows: 24 });
