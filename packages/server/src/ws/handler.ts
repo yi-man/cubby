@@ -26,6 +26,8 @@ export class WSCommandHandler {
           return this.sessionList(request);
         case WS_COMMANDS.SESSION_GET:
           return this.sessionGet(request);
+        case WS_COMMANDS.RECOVERY_RECONCILE:
+          return this.recoveryReconcile(request);
         case WS_COMMANDS.TERMINAL_SUBSCRIBE:
           return this.terminalSubscribe(ws, request);
         case WS_COMMANDS.TERMINAL_UNSUBSCRIBE:
@@ -71,8 +73,8 @@ export class WSCommandHandler {
     const size = terminalSizeFromArgs(cols, rows);
     this.hub.subscribe(ws, topic);
 
-    await this.sessionManager.startSession(sessionId, { cwd, ...size }, (data) => {
-      this.hub.broadcast(topic, { evt: 'terminal.output', data: { sessionId, data } });
+    await this.sessionManager.startSession(sessionId, { cwd, ...size }, (chunk) => {
+      this.hub.broadcast(topic, { evt: 'terminal.output', data: { sessionId, ...chunk } });
     });
 
     return { id: req.id, ok: true, data: { sessionId } };
@@ -95,8 +97,8 @@ export class WSCommandHandler {
     const size = terminalSizeFromArgs(cols, rows);
     this.hub.subscribe(ws, topic);
 
-    await this.sessionManager.resumeSession(sessionId, { cwd, ...size }, (data) => {
-      this.hub.broadcast(topic, { evt: 'terminal.output', data: { sessionId, data } });
+    await this.sessionManager.resumeSession(sessionId, { cwd, ...size }, (chunk) => {
+      this.hub.broadcast(topic, { evt: 'terminal.output', data: { sessionId, ...chunk } });
     });
 
     return { id: req.id, ok: true, data: { sessionId } };
@@ -163,7 +165,7 @@ export class WSCommandHandler {
   }
 
   private terminalReplay(req: WSRequest): WSResponse {
-    const { sessionId } = req.args as { sessionId: string };
+    const { sessionId, lastSeq } = req.args as { sessionId: string; lastSeq?: number };
     const session = this.sessionManager.getSession(sessionId);
     if (!session) {
       return { id: req.id, ok: false, error: { code: 'NOT_FOUND', message: 'Session not found' } };
@@ -171,7 +173,16 @@ export class WSCommandHandler {
     return {
       id: req.id,
       ok: true,
-      data: { sessionId, chunks: this.sessionManager.getOutputHistory(sessionId) },
+      data: this.sessionManager.getOutputReplay(sessionId, lastSeq ?? 0),
+    };
+  }
+
+  private recoveryReconcile(req: WSRequest): WSResponse {
+    const { sessionId, renderedSeq } = req.args as { sessionId: string; renderedSeq?: number };
+    return {
+      id: req.id,
+      ok: true,
+      data: this.sessionManager.reconcileTerminalRecovery(sessionId, renderedSeq ?? 0),
     };
   }
 }

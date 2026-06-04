@@ -1,3 +1,4 @@
+import { Buffer } from 'node:buffer';
 import { randomUUID } from 'node:crypto';
 import { unlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -67,7 +68,12 @@ describe('WSCommandHandler', () => {
     expect(response).toEqual({
       id: 'replay-1',
       ok: true,
-      data: { sessionId: session.id, chunks: ['history chunk'] },
+      data: {
+        status: 'ok',
+        sessionId: session.id,
+        chunks: [{ data: 'history chunk', seqStart: 0, seq: 13 }],
+        seq: 13,
+      },
     });
   });
 
@@ -96,12 +102,22 @@ describe('WSCommandHandler', () => {
       args: { sessionId: session.id },
     });
 
+    const first = `transcript for ${session.id} in /tmp/transcript`;
     expect(response).toEqual({
       id: 'replay-transcript',
       ok: true,
       data: {
+        status: 'ok',
         sessionId: session.id,
-        chunks: [`transcript for ${session.id} in /tmp/transcript`, '\r\n'],
+        chunks: [
+          { data: first, seqStart: 0, seq: Buffer.byteLength(first, 'utf8') },
+          {
+            data: '\r\n',
+            seqStart: Buffer.byteLength(first, 'utf8'),
+            seq: Buffer.byteLength(first, 'utf8') + 2,
+          },
+        ],
+        seq: Buffer.byteLength(first, 'utf8') + 2,
       },
     });
   });
@@ -289,9 +305,48 @@ describe('WSCommandHandler', () => {
     });
 
     expect(response).toEqual({ id: 'start-streaming', ok: true, data: { sessionId: session.id } });
+    const data = `first output for ${session.id}`;
     expect(sent).toContainEqual({
       evt: 'terminal.output',
-      data: { sessionId: session.id, data: `first output for ${session.id}` },
+      data: { sessionId: session.id, data, seqStart: 0, seq: Buffer.byteLength(data, 'utf8') },
+    });
+  });
+
+  it('reconciles live terminal recovery over websocket', async () => {
+    const provider: AgentProvider = {
+      name: 'reconcile',
+      async spawn(
+        _sessionId: string,
+        _options: SpawnOptions,
+        onOutput: (data: string) => void = () => {},
+      ) {
+        queueMicrotask(() => onOutput('abc'));
+        return {
+          pid: 991,
+          onData: (_callback) => {},
+          onExit: (_callback) => {},
+          write: () => {},
+          resize: () => {},
+          kill: () => {},
+        };
+      },
+      async kill() {},
+    };
+    manager.registerProvider(provider);
+    const session = manager.createSession({ workspaceId: '/tmp', provider: 'reconcile' });
+    await manager.startSession(session.id, { cwd: '/tmp', cols: 80, rows: 24 });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const response = await handler.handle({} as WebSocket, {
+      id: 'recover-1',
+      cmd: 'recovery.reconcile',
+      args: { sessionId: session.id, renderedSeq: 0 },
+    });
+
+    expect(response).toEqual({
+      id: 'recover-1',
+      ok: true,
+      data: { action: 'replay', sessionId: session.id, fromSeq: 0, headSeq: 3 },
     });
   });
 
