@@ -7,7 +7,7 @@ import {
 } from '@cubby/core';
 import { useAtom } from 'jotai';
 import { Maximize2, PanelLeftClose, PanelLeftOpen, SlidersHorizontal } from 'lucide-react';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { currentSessionIdAtom, sessionsAtom } from './atoms/session.js';
 import { SessionList } from './components/session/session-list.js';
 import { SessionView } from './components/session/session-view.js';
@@ -19,6 +19,7 @@ const CURRENT_SESSION_ID_STORAGE_KEY = 'cubby.currentSessionId';
 const MOBILE_MEDIA_QUERY = '(max-width: 767px)';
 const APP_HEADER_HEIGHT = 52;
 const SIDEBAR_EXPANDED_WIDTH = 240;
+const MOBILE_SIDEBAR_WIDTH = 340;
 const ICON_BUTTON_STYLE = {
   width: '32px',
   height: '32px',
@@ -52,6 +53,23 @@ function initialSidebarCollapsed(): boolean {
   if (stored === 'true') return true;
   if (stored === 'false') return false;
   return window.matchMedia(MOBILE_MEDIA_QUERY).matches;
+}
+
+function useMediaQuery(query: string): boolean {
+  const [matches, setMatches] = useState(() => {
+    if (typeof window === 'undefined') return false;
+    return window.matchMedia(query).matches;
+  });
+
+  useEffect(() => {
+    const mediaQueryList = window.matchMedia(query);
+    const handleChange = () => setMatches(mediaQueryList.matches);
+    handleChange();
+    mediaQueryList.addEventListener('change', handleChange);
+    return () => mediaQueryList.removeEventListener('change', handleChange);
+  }, [query]);
+
+  return matches;
 }
 
 function storedCurrentSessionId(): string | null {
@@ -110,6 +128,14 @@ function isLiveSession(session: Session | null): session is Session {
   return session?.status === 'running' || session?.status === 'starting';
 }
 
+function sameSet(left: Set<string>, right: Set<string>): boolean {
+  if (left.size !== right.size) return false;
+  for (const value of left) {
+    if (!right.has(value)) return false;
+  }
+  return true;
+}
+
 function isTerminalInputElement(element: Element | null): boolean {
   return element?.getAttribute('aria-label') === 'Terminal input';
 }
@@ -134,6 +160,42 @@ export function App() {
   const [terminalFocusRequest, setTerminalFocusRequest] = useState(0);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(initialSidebarCollapsed);
   const [sessionSearchQuery, setSessionSearchQuery] = useState('');
+  const [mountedSessionIds, setMountedSessionIds] = useState<Set<string>>(() => new Set());
+  const mobileLayout = useMediaQuery(MOBILE_MEDIA_QUERY);
+  const sidebarWidth = sidebarCollapsed
+    ? '0px'
+    : mobileLayout
+      ? `min(${MOBILE_SIDEBAR_WIDTH}px, calc(100vw - 48px))`
+      : `${SIDEBAR_EXPANDED_WIDTH}px`;
+
+  const sessionById = useMemo(() => {
+    const byId = new Map<string, Session>();
+    for (const session of sessions) byId.set(session.id, session);
+    if (pendingSession) byId.set(pendingSession.id, pendingSession);
+    if (currentSession) byId.set(currentSession.id, currentSession);
+    return byId;
+  }, [sessions, pendingSession, currentSession]);
+
+  useEffect(() => {
+    setMountedSessionIds((prev) => {
+      const next = new Set<string>();
+      for (const id of prev) {
+        const session = sessionById.get(id);
+        if (!session) continue;
+        if (isLiveSession(session) || id === currentSession?.id) next.add(id);
+      }
+      if (currentSession) next.add(currentSession.id);
+      return sameSet(prev, next) ? prev : next;
+    });
+  }, [currentSession, sessionById]);
+
+  const mountedSessions = useMemo(
+    () =>
+      Array.from(mountedSessionIds)
+        .map((id) => sessionById.get(id))
+        .filter((session): session is Session => Boolean(session)),
+    [mountedSessionIds, sessionById],
+  );
 
   const handleFullscreen = useCallback(() => {
     if (document.fullscreenElement) {
@@ -399,22 +461,50 @@ export function App() {
           display: 'flex',
           flex: 1,
           minHeight: 0,
+          position: 'relative',
         }}
       >
+        {mobileLayout && !sidebarCollapsed && (
+          <button
+            type="button"
+            aria-label="Close sidebar"
+            data-testid="mobile-sidebar-scrim"
+            onClick={() => setSidebarCollapsed(true)}
+            style={{
+              position: 'absolute',
+              top: 0,
+              right: 0,
+              bottom: 0,
+              left: sidebarWidth,
+              zIndex: 3,
+              border: 0,
+              padding: 0,
+              background: 'rgba(0, 0, 0, 0.56)',
+              cursor: 'pointer',
+            }}
+          />
+        )}
         <div
           data-testid="sidebar-shell"
           style={{
-            width: sidebarCollapsed ? '0px' : `${SIDEBAR_EXPANDED_WIDTH}px`,
+            width: sidebarWidth,
             height: '100%',
             flexShrink: 0,
             overflow: 'hidden',
             borderRight: sidebarCollapsed ? 'none' : `1px solid ${APP_BORDER}`,
             background: APP_PANEL,
             transition: 'width 140ms ease',
+            position: mobileLayout ? 'absolute' : 'relative',
+            top: mobileLayout ? 0 : undefined,
+            bottom: mobileLayout ? 0 : undefined,
+            left: mobileLayout ? 0 : undefined,
+            zIndex: mobileLayout ? 4 : undefined,
+            boxShadow:
+              mobileLayout && !sidebarCollapsed ? '18px 0 32px rgba(0, 0, 0, 0.38)' : undefined,
           }}
         >
           {!sidebarCollapsed && (
-            <div style={{ width: `${SIDEBAR_EXPANDED_WIDTH}px`, height: '100%' }}>
+            <div style={{ width: sidebarWidth, height: '100%' }}>
               <SessionList
                 sessions={sessions}
                 currentId={currentId}
@@ -438,17 +528,23 @@ export function App() {
             position: 'relative',
           }}
         >
-          {currentSession ? (
-            <SessionView
-              key={currentSession.id}
-              session={currentSession}
-              autoStart={currentSession.id === autoStartSessionId}
-              focusRequest={terminalFocusRequest}
-              onAutoStartConsumed={() => setAutoStartSessionId(null)}
-              send={send}
-              request={request}
-              onMessage={onMessage}
-            />
+          {currentSession && mountedSessions.length > 0 ? (
+            mountedSessions.map((session) => {
+              const active = session.id === currentSession?.id;
+              return (
+                <SessionView
+                  key={session.id}
+                  session={session}
+                  active={active}
+                  autoStart={active && session.id === autoStartSessionId}
+                  focusRequest={terminalFocusRequest}
+                  onAutoStartConsumed={() => setAutoStartSessionId(null)}
+                  send={send}
+                  request={request}
+                  onMessage={onMessage}
+                />
+              );
+            })
           ) : (
             <div
               style={{

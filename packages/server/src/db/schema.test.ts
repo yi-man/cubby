@@ -13,4 +13,15 @@ describe('schema', () => {
   it('contains terminal outputs table', () => {
     expect(SCHEMA_SQL).toContain('CREATE TABLE IF NOT EXISTS terminal_outputs');
   });
+
+  it('contains terminal output sequence columns', () => {
+    expect(SCHEMA_SQL).toContain('seq_start INTEGER');
+    expect(SCHEMA_SQL).toContain('seq_end INTEGER');
+  });
+
+  it('contains terminal snapshots table', () => {
+    expect(SCHEMA_SQL).toContain('CREATE TABLE IF NOT EXISTS terminal_snapshots');
+    expect(SCHEMA_SQL).toContain('session_id TEXT PRIMARY KEY');
+    expect(SCHEMA_SQL).toContain('seq INTEGER NOT NULL');
+  });
 });

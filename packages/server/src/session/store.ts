@@ -1,8 +1,30 @@
+import { Buffer } from 'node:buffer';
 import { randomUUID } from 'node:crypto';
-import type { CreateSessionInput, Session, SessionStatus } from '@cubby/core';
+import type { CreateSessionInput, Session, SessionStatus, TerminalOutputChunk } from '@cubby/core';
 import type { Database } from '../db/index.js';
 
 const TERMINAL_OUTPUT_HISTORY_LIMIT = 5000;
+
+interface TerminalOutputRow {
+  id: number;
+  data: string;
+  seq_start: number | null;
+  seq_end: number | null;
+}
+
+export interface StoredTerminalSnapshot {
+  data: string;
+  seq: number;
+  cols: number;
+  rows: number;
+}
+
+interface TerminalSnapshotRow {
+  data: string;
+  seq: number;
+  cols: number;
+  rows: number;
+}
 
 export class SessionStore {
   constructor(private db: Database) {}
@@ -88,13 +110,19 @@ export class SessionStore {
 
   appendTerminalOutput(
     sessionId: string,
-    data: string,
+    output: string | TerminalOutputChunk,
     limit = TERMINAL_OUTPUT_HISTORY_LIMIT,
   ): void {
     const now = new Date().toISOString();
+    const data = typeof output === 'string' ? output : output.data;
+    const seqStart = typeof output === 'string' ? null : output.seqStart;
+    const seqEnd = typeof output === 'string' ? null : output.seq;
+
     this.db
-      .prepare('INSERT INTO terminal_outputs (session_id, data, created_at) VALUES (?, ?, ?)')
-      .run(sessionId, data, now);
+      .prepare(
+        'INSERT INTO terminal_outputs (session_id, data, seq_start, seq_end, created_at) VALUES (?, ?, ?, ?, ?)',
+      )
+      .run(sessionId, data, seqStart, seqEnd, now);
 
     this.db
       .prepare(
@@ -112,11 +140,69 @@ export class SessionStore {
   }
 
   getTerminalOutputHistory(sessionId: string, limit = TERMINAL_OUTPUT_HISTORY_LIMIT): string[] {
-    const rows = this.db
+    const rows = this.getTerminalOutputRows(sessionId, limit);
+
+    return latestTerminalRunRecords(rows).map((row) => row.data);
+  }
+
+  getTerminalOutputChunks(
+    sessionId: string,
+    limit = TERMINAL_OUTPUT_HISTORY_LIMIT,
+  ): TerminalOutputChunk[] {
+    const rows = latestTerminalRunRecords(this.getTerminalOutputRows(sessionId, limit));
+    if (rows.length === 0) return [];
+    if (rows.every(hasStoredSequence)) {
+      return rows.map((row) => ({
+        data: row.data,
+        seqStart: row.seq_start,
+        seq: row.seq_end,
+      }));
+    }
+    return synthesizeTerminalOutputChunks(rows.map((row) => row.data));
+  }
+
+  upsertTerminalSnapshot(sessionId: string, snapshot: StoredTerminalSnapshot): void {
+    const now = new Date().toISOString();
+    this.db
       .prepare(
-        `SELECT data
+        `INSERT INTO terminal_snapshots (session_id, data, seq, cols, rows, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?)
+         ON CONFLICT(session_id) DO UPDATE SET
+           data = excluded.data,
+           seq = excluded.seq,
+           cols = excluded.cols,
+           rows = excluded.rows,
+           updated_at = excluded.updated_at`,
+      )
+      .run(sessionId, snapshot.data, snapshot.seq, snapshot.cols, snapshot.rows, now);
+  }
+
+  getTerminalSnapshot(sessionId: string): StoredTerminalSnapshot | null {
+    const row = this.db
+      .prepare('SELECT data, seq, cols, rows FROM terminal_snapshots WHERE session_id = ?')
+      .get(sessionId) as TerminalSnapshotRow | undefined;
+    if (!row) return null;
+    return {
+      data: row.data,
+      seq: row.seq,
+      cols: row.cols,
+      rows: row.rows,
+    };
+  }
+
+  clearTerminalSnapshot(sessionId: string): void {
+    this.db.prepare('DELETE FROM terminal_snapshots WHERE session_id = ?').run(sessionId);
+  }
+
+  private getTerminalOutputRows(
+    sessionId: string,
+    limit = TERMINAL_OUTPUT_HISTORY_LIMIT,
+  ): TerminalOutputRow[] {
+    return this.db
+      .prepare(
+        `SELECT id, data, seq_start, seq_end
          FROM (
-           SELECT id, data
+           SELECT id, data, seq_start, seq_end
            FROM terminal_outputs
            WHERE session_id = ?
            ORDER BY id DESC
@@ -124,9 +210,7 @@ export class SessionStore {
          )
          ORDER BY id ASC`,
       )
-      .all(sessionId, limit) as Record<string, unknown>[];
-
-    return latestTerminalRunHistory(rows.map((row) => row.data as string));
+      .all(sessionId, limit) as TerminalOutputRow[];
   }
 
   private rowToSession(row: Record<string, unknown>): Session {
@@ -146,11 +230,26 @@ export class SessionStore {
   }
 }
 
-function latestTerminalRunHistory(history: string[]): string[] {
+function latestTerminalRunRecords<T extends { data: string }>(history: T[]): T[] {
   for (let index = history.length - 1; index >= 0; index--) {
-    if (isTerminalRunInitialization(history[index])) return history.slice(index);
+    if (isTerminalRunInitialization(history[index].data)) return history.slice(index);
   }
   return history;
+}
+
+function hasStoredSequence(
+  row: TerminalOutputRow,
+): row is TerminalOutputRow & { seq_start: number; seq_end: number } {
+  return typeof row.seq_start === 'number' && typeof row.seq_end === 'number';
+}
+
+function synthesizeTerminalOutputChunks(history: string[]): TerminalOutputChunk[] {
+  let seq = 0;
+  return history.map((data) => {
+    const seqStart = seq;
+    seq += Buffer.byteLength(data, 'utf8');
+    return { data, seqStart, seq };
+  });
 }
 
 function isTerminalRunInitialization(data: string): boolean {

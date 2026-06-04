@@ -28,10 +28,22 @@ CREATE TABLE IF NOT EXISTS terminal_outputs (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   session_id TEXT NOT NULL,
   data TEXT NOT NULL,
+  seq_start INTEGER,
+  seq_end INTEGER,
   created_at TEXT NOT NULL,
   FOREIGN KEY (session_id) REFERENCES sessions(id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_terminal_outputs_session_id_id
   ON terminal_outputs(session_id, id);
+
+CREATE TABLE IF NOT EXISTS terminal_snapshots (
+  session_id TEXT PRIMARY KEY,
+  data TEXT NOT NULL,
+  seq INTEGER NOT NULL,
+  cols INTEGER NOT NULL,
+  rows INTEGER NOT NULL,
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY (session_id) REFERENCES sessions(id)
+);
 `;

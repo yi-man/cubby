@@ -5,9 +5,11 @@ export const WS_COMMANDS = {
   SESSION_KILL: 'session.kill',
   SESSION_LIST: 'session.list',
   SESSION_GET: 'session.get',
+  RECOVERY_RECONCILE: 'recovery.reconcile',
   TERMINAL_SUBSCRIBE: 'terminal.subscribe',
   TERMINAL_UNSUBSCRIBE: 'terminal.unsubscribe',
   TERMINAL_REPLAY: 'terminal.replay',
+  TERMINAL_SNAPSHOT: 'terminal.snapshot',
   TERMINAL_INPUT: 'terminal.input',
   TERMINAL_RESIZE: 'terminal.resize',
 } as const;

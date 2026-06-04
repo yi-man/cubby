@@ -26,12 +26,16 @@ export class WSCommandHandler {
           return this.sessionList(request);
         case WS_COMMANDS.SESSION_GET:
           return this.sessionGet(request);
+        case WS_COMMANDS.RECOVERY_RECONCILE:
+          return this.recoveryReconcile(request);
         case WS_COMMANDS.TERMINAL_SUBSCRIBE:
           return this.terminalSubscribe(ws, request);
         case WS_COMMANDS.TERMINAL_UNSUBSCRIBE:
           return this.terminalUnsubscribe(ws, request);
         case WS_COMMANDS.TERMINAL_REPLAY:
           return this.terminalReplay(request);
+        case WS_COMMANDS.TERMINAL_SNAPSHOT:
+          return this.terminalSnapshot(request);
         case WS_COMMANDS.TERMINAL_INPUT:
           return this.terminalInput(request);
         case WS_COMMANDS.TERMINAL_RESIZE:
@@ -71,8 +75,8 @@ export class WSCommandHandler {
     const size = terminalSizeFromArgs(cols, rows);
     this.hub.subscribe(ws, topic);
 
-    await this.sessionManager.startSession(sessionId, { cwd, ...size }, (data) => {
-      this.hub.broadcast(topic, { evt: 'terminal.output', data: { sessionId, data } });
+    await this.sessionManager.startSession(sessionId, { cwd, ...size }, (chunk) => {
+      this.hub.broadcast(topic, { evt: 'terminal.output', data: { sessionId, ...chunk } });
     });
 
     return { id: req.id, ok: true, data: { sessionId } };
@@ -95,8 +99,8 @@ export class WSCommandHandler {
     const size = terminalSizeFromArgs(cols, rows);
     this.hub.subscribe(ws, topic);
 
-    await this.sessionManager.resumeSession(sessionId, { cwd, ...size }, (data) => {
-      this.hub.broadcast(topic, { evt: 'terminal.output', data: { sessionId, data } });
+    await this.sessionManager.resumeSession(sessionId, { cwd, ...size }, (chunk) => {
+      this.hub.broadcast(topic, { evt: 'terminal.output', data: { sessionId, ...chunk } });
     });
 
     return { id: req.id, ok: true, data: { sessionId } };
@@ -136,15 +140,14 @@ export class WSCommandHandler {
 
   private terminalResize(req: WSRequest): WSResponse {
     const { sessionId, cols, rows } = req.args as { sessionId: string; cols: number; rows: number };
-    const process = this.sessionManager.getProcess(sessionId);
-    if (!process) {
+    const size = terminalSizeFromArgs(cols, rows);
+    if (!this.sessionManager.resizeTerminal(sessionId, size.cols, size.rows)) {
       return {
         id: req.id,
         ok: false,
         error: { code: 'NOT_FOUND', message: 'Session process not found' },
       };
     }
-    process.resize(cols, rows);
     return { id: req.id, ok: true };
   }
 
@@ -163,15 +166,31 @@ export class WSCommandHandler {
   }
 
   private terminalReplay(req: WSRequest): WSResponse {
-    const { sessionId } = req.args as { sessionId: string };
-    const session = this.sessionManager.getSession(sessionId);
-    if (!session) {
-      return { id: req.id, ok: false, error: { code: 'NOT_FOUND', message: 'Session not found' } };
-    }
+    const { sessionId, lastSeq } = req.args as { sessionId: string; lastSeq?: number };
     return {
       id: req.id,
       ok: true,
-      data: { sessionId, chunks: this.sessionManager.getOutputHistory(sessionId) },
+      data: this.sessionManager.getOutputReplay(sessionId, lastSeq ?? 0),
+    };
+  }
+
+  private async terminalSnapshot(req: WSRequest): Promise<WSResponse> {
+    const { sessionId } = req.args as {
+      sessionId: string;
+    };
+    return {
+      id: req.id,
+      ok: true,
+      data: await this.sessionManager.getTerminalSnapshot(sessionId),
+    };
+  }
+
+  private recoveryReconcile(req: WSRequest): WSResponse {
+    const { sessionId, renderedSeq } = req.args as { sessionId: string; renderedSeq?: number };
+    return {
+      id: req.id,
+      ok: true,
+      data: this.sessionManager.reconcileTerminalRecovery(sessionId, renderedSeq ?? 0),
     };
   }
 }

@@ -74,4 +74,57 @@ describe('SessionStore', () => {
       'latest run output',
     ]);
   });
+
+  it('persists terminal output sequence metadata when provided', () => {
+    const session = store.create({ workspaceId: '/tmp', provider: 'mock' });
+
+    store.appendTerminalOutput(session.id, { data: 'abc', seqStart: 0, seq: 3 });
+
+    const rows = db
+      .prepare('SELECT data, seq_start, seq_end FROM terminal_outputs WHERE session_id = ?')
+      .all(session.id) as Array<Record<string, unknown>>;
+
+    expect(rows).toEqual([{ data: 'abc', seq_start: 0, seq_end: 3 }]);
+    expect(store.getTerminalOutputHistory(session.id)).toEqual(['abc']);
+  });
+
+  it('returns retained terminal output chunks with their persisted sequence metadata', () => {
+    const session = store.create({ workspaceId: '/tmp', provider: 'mock' });
+
+    store.appendTerminalOutput(session.id, { data: 'one', seqStart: 0, seq: 3 }, 2);
+    store.appendTerminalOutput(session.id, { data: 'two', seqStart: 3, seq: 6 }, 2);
+    store.appendTerminalOutput(session.id, { data: 'three', seqStart: 6, seq: 11 }, 2);
+
+    expect(store.getTerminalOutputChunks(session.id, 2)).toEqual([
+      { data: 'two', seqStart: 3, seq: 6 },
+      { data: 'three', seqStart: 6, seq: 11 },
+    ]);
+  });
+
+  it('upserts, loads, and clears terminal snapshots', () => {
+    const session = store.create({ workspaceId: '/tmp', provider: 'mock' });
+
+    store.upsertTerminalSnapshot(session.id, {
+      data: 'first snapshot',
+      seq: 14,
+      cols: 100,
+      rows: 30,
+    });
+    store.upsertTerminalSnapshot(session.id, {
+      data: 'second snapshot',
+      seq: 29,
+      cols: 120,
+      rows: 40,
+    });
+
+    expect(store.getTerminalSnapshot(session.id)).toEqual({
+      data: 'second snapshot',
+      seq: 29,
+      cols: 120,
+      rows: 40,
+    });
+
+    store.clearTerminalSnapshot(session.id);
+    expect(store.getTerminalSnapshot(session.id)).toBeNull();
+  });
 });
