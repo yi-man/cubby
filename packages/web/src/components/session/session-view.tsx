@@ -112,6 +112,49 @@ export function SessionView({
     return replayGenerationRef.current === generation;
   }, []);
 
+  const enqueueWriteChunkForGeneration = useCallback(
+    (chunk: TerminalOutputChunk, generation: number) => {
+      const queuedWrite = writeChainRef.current
+        .catch(() => {})
+        .then(() => writeChunkForGeneration(chunk, generation));
+      writeChainRef.current = queuedWrite.then(
+        () => {},
+        () => {},
+      );
+      return queuedWrite;
+    },
+    [writeChunkForGeneration],
+  );
+
+  const enqueueWriteStringForGeneration = useCallback(
+    (data: string, generation: number) => {
+      const queuedWrite = writeChainRef.current
+        .catch(() => {})
+        .then(() => writeStringForGeneration(data, generation));
+      writeChainRef.current = queuedWrite.then(
+        () => {},
+        () => {},
+      );
+      return queuedWrite;
+    },
+    [writeStringForGeneration],
+  );
+
+  const enqueueResetForGeneration = useCallback((generation: number) => {
+    const queuedReset = writeChainRef.current
+      .catch(() => {})
+      .then(() => {
+        if (replayGenerationRef.current !== generation) return false;
+        termRef.current?.reset();
+        return true;
+      });
+    writeChainRef.current = queuedReset.then(
+      () => {},
+      () => {},
+    );
+    return queuedReset;
+  }, []);
+
   const flushPendingLiveChunks = useCallback(
     async (generation: number) => {
       const chunks = filterRenderableLiveChunks(
@@ -126,7 +169,7 @@ export function SessionView({
           pendingLiveChunksRef.current = chunks.slice(index);
           return false;
         }
-        const written = await writeChunkForGeneration(chunk, generation);
+        const written = await enqueueWriteChunkForGeneration(chunk, generation);
         if (!written) {
           pendingLiveChunksRef.current = chunks.slice(index);
           return false;
@@ -135,26 +178,23 @@ export function SessionView({
 
       return true;
     },
-    [writeChunkForGeneration],
+    [enqueueWriteChunkForGeneration],
   );
 
-  const blockRecovery = useCallback((message: string) => {
-    const blockGeneration = replayGenerationRef.current + 1;
-    replayGenerationRef.current = blockGeneration;
-    recoveryBlockedRef.current = true;
-    recoveringRef.current = false;
-    initialRecoveryDoneRef.current = false;
-    pendingLiveChunksRef.current = [];
-    setRecoveryError(message);
-    setReplayState({ loaded: true, hasHistory: false });
-    const resetAfterWrites = writeChainRef.current
-      .catch(() => {})
-      .then(() => {
-        if (!recoveryBlockedRef.current || replayGenerationRef.current !== blockGeneration) return;
-        termRef.current?.reset();
-      });
-    writeChainRef.current = resetAfterWrites;
-  }, []);
+  const blockRecovery = useCallback(
+    (message: string) => {
+      const blockGeneration = replayGenerationRef.current + 1;
+      replayGenerationRef.current = blockGeneration;
+      recoveryBlockedRef.current = true;
+      recoveringRef.current = false;
+      initialRecoveryDoneRef.current = false;
+      pendingLiveChunksRef.current = [];
+      setRecoveryError(message);
+      setReplayState({ loaded: true, hasHistory: false });
+      void enqueueResetForGeneration(blockGeneration);
+    },
+    [enqueueResetForGeneration],
+  );
 
   const queueLiveChunk = useCallback(
     (chunk: TerminalOutputChunk) => {
@@ -263,7 +303,7 @@ export function SessionView({
           );
           for (const chunk of replayChunks) {
             if (cancelled || replayGenerationRef.current !== replayGeneration) return;
-            const written = await writeChunkForGeneration(chunk, replayGeneration);
+            const written = await enqueueWriteChunkForGeneration(chunk, replayGeneration);
             if (!written) return;
           }
           const flushed = await flushPendingLiveChunks(replayGeneration);
@@ -291,7 +331,7 @@ export function SessionView({
     }
 
     setRecoveryError(null);
-    termRef.current?.reset();
+    const resetDone = enqueueResetForGeneration(replayGeneration);
     setReplayState(emptyReplayState());
 
     request({
@@ -305,10 +345,11 @@ export function SessionView({
           setReplayState({ loaded: true, hasHistory: false });
           return;
         }
+        if (!(await resetDone)) return;
         const replayChunks = sanitizeEndedReplayChunks(res.data.chunks.map((chunk) => chunk.data));
         for (const chunk of replayChunks) {
           if (cancelled || replayGenerationRef.current !== replayGeneration) return;
-          const written = await writeStringForGeneration(chunk, replayGeneration);
+          const written = await enqueueWriteStringForGeneration(chunk, replayGeneration);
           if (!written) return;
         }
         if (cancelled || replayGenerationRef.current !== replayGeneration) return;
@@ -319,7 +360,9 @@ export function SessionView({
         });
       })
       .catch(() => {
-        if (!cancelled) setReplayState({ loaded: true, hasHistory: false });
+        if (!cancelled && replayGenerationRef.current === replayGeneration) {
+          setReplayState({ loaded: true, hasHistory: false });
+        }
       });
 
     return () => {
@@ -333,8 +376,9 @@ export function SessionView({
     live,
     recoveryRequest,
     flushPendingLiveChunks,
-    writeChunkForGeneration,
-    writeStringForGeneration,
+    enqueueWriteChunkForGeneration,
+    enqueueWriteStringForGeneration,
+    enqueueResetForGeneration,
     blockRecovery,
   ]);
 
@@ -371,7 +415,6 @@ export function SessionView({
     recoveringRef.current = false;
     initialRecoveryDoneRef.current = false;
     recoveryBlockedRef.current = false;
-    writeChainRef.current = Promise.resolve();
     setRecoveryError(null);
     const { cols, rows } = terminalSizeRef.current;
     const res = await request({
@@ -400,11 +443,12 @@ export function SessionView({
     recoveringRef.current = false;
     initialRecoveryDoneRef.current = false;
     recoveryBlockedRef.current = false;
-    writeChainRef.current = Promise.resolve();
     setRecoveryError(null);
     const { cols, rows } = terminalSizeRef.current;
-    termRef.current?.reset();
-    setReplayState({ loaded: true, hasHistory: true });
+    const resetDone = enqueueResetForGeneration(replayGenerationRef.current);
+    setReplayState({ loaded: true, hasHistory: false });
+    const resetOk = await resetDone;
+    if (!resetOk) return;
     const res = await request({
       id: `resume-${Date.now()}`,
       cmd: 'session.resume',
@@ -412,7 +456,7 @@ export function SessionView({
     });
     if (!res.ok) return;
     termRef.current?.focus();
-  }, [session.id, session.workspaceId, request]);
+  }, [session.id, session.workspaceId, request, enqueueResetForGeneration]);
 
   const handleData = useCallback(
     (data: string) => {
