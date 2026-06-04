@@ -307,7 +307,10 @@ export class SessionManager {
   }
 
   private getOutputHistoryChunks(session: Session): TerminalOutputChunk[] {
-    const persistedHistory = this.store.getTerminalOutputChunks(session.id, this.outputHistoryLimit);
+    const persistedHistory = this.store.getTerminalOutputChunks(
+      session.id,
+      this.outputHistoryLimit,
+    );
     if (persistedHistory.length > 0) return persistedHistory;
     const bufferedHistory = this.outputBuffers.get(session.id)?.getChunks() ?? [];
     if (bufferedHistory.length > 0) return bufferedHistory;
