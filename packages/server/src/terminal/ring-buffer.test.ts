@@ -41,4 +41,54 @@ describe('RingBuffer', () => {
     buf.push('b');
     expect(buf.currentIndex).toBe(2);
   });
+
+  it('returns sequenced chunks when data is pushed', () => {
+    const buf = new RingBuffer(10);
+
+    const first = buf.push('abc');
+    const second = buf.push('你');
+
+    expect(first).toEqual({ data: 'abc', seqStart: 0, seq: 3 });
+    expect(second).toEqual({ data: '你', seqStart: 3, seq: 6 });
+    expect(buf.currentSeq).toBe(6);
+    expect(buf.oldestSeq).toBe(0);
+    expect(buf.getChunks()).toEqual([first, second]);
+  });
+
+  it('replays chunks strictly after a rendered sequence', () => {
+    const buf = new RingBuffer(10);
+    buf.push('first');
+    const second = buf.push('second');
+    const third = buf.push('third');
+
+    expect(buf.replayFrom(second.seqStart)).toEqual({
+      status: 'ok',
+      chunks: [second, third],
+      seq: third.seq,
+    });
+    expect(buf.replayFrom(second.seq)).toEqual({
+      status: 'ok',
+      chunks: [third],
+      seq: third.seq,
+    });
+    expect(buf.replayFrom(third.seq)).toEqual({
+      status: 'ok',
+      chunks: [],
+      seq: third.seq,
+    });
+  });
+
+  it('reports too_old when requested sequence predates retained chunks', () => {
+    const buf = new RingBuffer(2);
+    const first = buf.push('one');
+    const second = buf.push('two');
+    const third = buf.push('three');
+
+    expect(buf.oldestSeq).toBe(second.seqStart);
+    expect(buf.replayFrom(first.seqStart)).toEqual({
+      status: 'too_old',
+      oldestSeq: second.seqStart,
+      seq: third.seq,
+    });
+  });
 });
