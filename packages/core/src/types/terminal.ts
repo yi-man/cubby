@@ -38,6 +38,24 @@ export type TerminalReplayResult =
       sessionId: string;
     };
 
+export type TerminalSnapshotResult =
+  | {
+      status: 'ok';
+      sessionId: string;
+      data: string;
+      seq: number;
+      cols: number;
+      rows: number;
+    }
+  | {
+      status: 'unavailable';
+      sessionId: string;
+    }
+  | {
+      status: 'unknown';
+      sessionId: string;
+    };
+
 export type RecoveryReconcileResult =
   | {
       action: 'noop';
@@ -48,6 +66,11 @@ export type RecoveryReconcileResult =
       action: 'replay';
       sessionId: string;
       fromSeq: number;
+      headSeq: number;
+    }
+  | {
+      action: 'snapshot';
+      sessionId: string;
       headSeq: number;
     }
   | {

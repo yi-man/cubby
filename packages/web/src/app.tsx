@@ -7,7 +7,7 @@ import {
 } from '@cubby/core';
 import { useAtom } from 'jotai';
 import { Maximize2, PanelLeftClose, PanelLeftOpen, SlidersHorizontal } from 'lucide-react';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { currentSessionIdAtom, sessionsAtom } from './atoms/session.js';
 import { SessionList } from './components/session/session-list.js';
 import { SessionView } from './components/session/session-view.js';
@@ -110,6 +110,14 @@ function isLiveSession(session: Session | null): session is Session {
   return session?.status === 'running' || session?.status === 'starting';
 }
 
+function sameSet(left: Set<string>, right: Set<string>): boolean {
+  if (left.size !== right.size) return false;
+  for (const value of left) {
+    if (!right.has(value)) return false;
+  }
+  return true;
+}
+
 function isTerminalInputElement(element: Element | null): boolean {
   return element?.getAttribute('aria-label') === 'Terminal input';
 }
@@ -134,6 +142,36 @@ export function App() {
   const [terminalFocusRequest, setTerminalFocusRequest] = useState(0);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(initialSidebarCollapsed);
   const [sessionSearchQuery, setSessionSearchQuery] = useState('');
+  const [mountedSessionIds, setMountedSessionIds] = useState<Set<string>>(() => new Set());
+
+  const sessionById = useMemo(() => {
+    const byId = new Map<string, Session>();
+    for (const session of sessions) byId.set(session.id, session);
+    if (pendingSession) byId.set(pendingSession.id, pendingSession);
+    if (currentSession) byId.set(currentSession.id, currentSession);
+    return byId;
+  }, [sessions, pendingSession, currentSession]);
+
+  useEffect(() => {
+    setMountedSessionIds((prev) => {
+      const next = new Set<string>();
+      for (const id of prev) {
+        const session = sessionById.get(id);
+        if (!session) continue;
+        if (isLiveSession(session) || id === currentSession?.id) next.add(id);
+      }
+      if (currentSession) next.add(currentSession.id);
+      return sameSet(prev, next) ? prev : next;
+    });
+  }, [currentSession, sessionById]);
+
+  const mountedSessions = useMemo(
+    () =>
+      Array.from(mountedSessionIds)
+        .map((id) => sessionById.get(id))
+        .filter((session): session is Session => Boolean(session)),
+    [mountedSessionIds, sessionById],
+  );
 
   const handleFullscreen = useCallback(() => {
     if (document.fullscreenElement) {
@@ -438,17 +476,23 @@ export function App() {
             position: 'relative',
           }}
         >
-          {currentSession ? (
-            <SessionView
-              key={currentSession.id}
-              session={currentSession}
-              autoStart={currentSession.id === autoStartSessionId}
-              focusRequest={terminalFocusRequest}
-              onAutoStartConsumed={() => setAutoStartSessionId(null)}
-              send={send}
-              request={request}
-              onMessage={onMessage}
-            />
+          {currentSession && mountedSessions.length > 0 ? (
+            mountedSessions.map((session) => {
+              const active = session.id === currentSession?.id;
+              return (
+                <SessionView
+                  key={session.id}
+                  session={session}
+                  active={active}
+                  autoStart={active && session.id === autoStartSessionId}
+                  focusRequest={terminalFocusRequest}
+                  onAutoStartConsumed={() => setAutoStartSessionId(null)}
+                  send={send}
+                  request={request}
+                  onMessage={onMessage}
+                />
+              );
+            })
           ) : (
             <div
               style={{

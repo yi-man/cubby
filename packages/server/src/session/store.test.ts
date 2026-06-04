@@ -100,4 +100,31 @@ describe('SessionStore', () => {
       { data: 'three', seqStart: 6, seq: 11 },
     ]);
   });
+
+  it('upserts, loads, and clears terminal snapshots', () => {
+    const session = store.create({ workspaceId: '/tmp', provider: 'mock' });
+
+    store.upsertTerminalSnapshot(session.id, {
+      data: 'first snapshot',
+      seq: 14,
+      cols: 100,
+      rows: 30,
+    });
+    store.upsertTerminalSnapshot(session.id, {
+      data: 'second snapshot',
+      seq: 29,
+      cols: 120,
+      rows: 40,
+    });
+
+    expect(store.getTerminalSnapshot(session.id)).toEqual({
+      data: 'second snapshot',
+      seq: 29,
+      cols: 120,
+      rows: 40,
+    });
+
+    store.clearTerminalSnapshot(session.id);
+    expect(store.getTerminalSnapshot(session.id)).toBeNull();
+  });
 });

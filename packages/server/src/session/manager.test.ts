@@ -118,7 +118,7 @@ describe('SessionManager', () => {
     });
   });
 
-  it('reconciles missing live output as replay', async () => {
+  it('reconciles cold live recovery as snapshot when a checkpoint is available', async () => {
     const session = manager.createSession({ workspaceId: '/tmp', provider: 'mock' });
     await manager.startSession(session.id, { cwd: '/tmp', cols: 80, rows: 24 });
     await new Promise((r) => setTimeout(r, 20));
@@ -127,9 +127,8 @@ describe('SessionManager', () => {
     if (replay.status !== 'ok') throw new Error('expected ok replay');
 
     expect(manager.reconcileTerminalRecovery(session.id, 0)).toEqual({
-      action: 'replay',
+      action: 'snapshot',
       sessionId: session.id,
-      fromSeq: 0,
       headSeq: replay.seq,
     });
   });
@@ -150,7 +149,7 @@ describe('SessionManager', () => {
     });
   });
 
-  it('reconciles evicted live output as unrecoverable', async () => {
+  it('reconciles evicted live output as snapshot when a checkpoint is available', async () => {
     const provider: AgentProvider = {
       name: 'evicting',
       async spawn(
@@ -178,9 +177,57 @@ describe('SessionManager', () => {
     await manager.startSession(session.id, { cwd: '/tmp', cols: 80, rows: 24 });
 
     expect(manager.reconcileTerminalRecovery(session.id, 0)).toEqual({
-      action: 'unrecoverable',
+      action: 'snapshot',
       sessionId: session.id,
-      reason: 'too_old_no_snapshot',
+      headSeq: 11,
+    });
+  });
+
+  it('returns a live terminal snapshot and replays only output after the snapshot seq', async () => {
+    const firstOutput = 'before clear';
+    const secondOutput = '\x1b[2J\x1b[Hafter clear';
+    const expectedSeq = Buffer.byteLength(`${firstOutput}${secondOutput}`, 'utf8');
+    const provider: AgentProvider = {
+      name: 'snapshot',
+      async spawn(
+        _sessionId: string,
+        _options: SpawnOptions,
+        onOutput: (data: string) => void = () => {},
+      ) {
+        onOutput(firstOutput);
+        onOutput(secondOutput);
+        return {
+          pid: 40_001,
+          onData: (_callback) => {},
+          onExit: (_callback) => {},
+          write: () => {},
+          resize: () => {},
+          kill: () => {},
+        };
+      },
+      async kill() {},
+    };
+    manager.registerProvider(provider);
+    const session = manager.createSession({ workspaceId: '/tmp', provider: 'snapshot' });
+
+    await manager.startSession(session.id, { cwd: '/tmp', cols: 80, rows: 24 });
+    const snapshot = await manager.getTerminalSnapshot(session.id);
+
+    expect(snapshot).toMatchObject({
+      status: 'ok',
+      sessionId: session.id,
+      seq: expectedSeq,
+      cols: 80,
+      rows: 24,
+    });
+    if (snapshot.status !== 'ok') throw new Error('expected ok snapshot');
+    expect(snapshot.data).toContain('after clear');
+    expect(snapshot.data).not.toContain('before clear');
+    expect(manager.getOutputReplay(session.id, snapshot.seq)).toEqual({
+      status: 'ok',
+      sessionId: session.id,
+      chunks: [],
+      seq: snapshot.seq,
     });
   });
 

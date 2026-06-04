@@ -6,11 +6,13 @@ import {
   isRecoveryReconcileData,
   isTerminalOutputData,
   isTerminalReplayData,
+  isTerminalSnapshotData,
 } from './terminal-recovery.js';
 import { sanitizeEndedReplayChunks } from './terminal-replay.js';
 
 interface SessionViewProps {
   session: Session;
+  active?: boolean;
   autoStart?: boolean;
   focusRequest?: number;
   onAutoStartConsumed?: () => void;
@@ -71,6 +73,7 @@ function EmptyEndedHistory() {
 
 export function SessionView({
   session,
+  active = true,
   autoStart = false,
   focusRequest = 0,
   onAutoStartConsumed,
@@ -282,10 +285,45 @@ export function SessionView({
             return;
           }
 
+          let replayFromSeq: number;
+          let restoredSnapshotHistory = false;
+
+          if (res.data.action === 'snapshot') {
+            const snapshotRes = await request({
+              id: `snapshot-${session.id}-${session.status}-${Date.now()}`,
+              cmd: 'terminal.snapshot',
+              args: { sessionId: session.id },
+            });
+            if (cancelled || replayGenerationRef.current !== replayGeneration) return;
+            if (!snapshotRes.ok || !isTerminalSnapshotData(snapshotRes.data, session.id)) {
+              blockRecovery('Terminal snapshot failed');
+              return;
+            }
+            if (snapshotRes.data.status !== 'ok') {
+              blockRecovery('Terminal history is no longer available');
+              return;
+            }
+
+            const resetDone = await enqueueResetForGeneration(replayGeneration);
+            if (cancelled || replayGenerationRef.current !== replayGeneration) return;
+            if (!resetDone) return;
+            const snapshotWritten = await enqueueWriteStringForGeneration(
+              snapshotRes.data.data,
+              replayGeneration,
+            );
+            if (cancelled || replayGenerationRef.current !== replayGeneration) return;
+            if (!snapshotWritten) return;
+            renderedSeqRef.current = Math.max(renderedSeqRef.current, snapshotRes.data.seq);
+            replayFromSeq = snapshotRes.data.seq;
+            restoredSnapshotHistory = snapshotRes.data.data.length > 0;
+          } else {
+            replayFromSeq = res.data.fromSeq;
+          }
+
           const replayRes = await request({
             id: `replay-${session.id}-${session.status}-${Date.now()}`,
             cmd: 'terminal.replay',
-            args: { sessionId: session.id, lastSeq: res.data.fromSeq },
+            args: { sessionId: session.id, lastSeq: replayFromSeq },
           });
           if (cancelled || replayGenerationRef.current !== replayGeneration) return;
           if (!replayRes.ok || !isTerminalReplayData(replayRes.data, session.id)) {
@@ -311,7 +349,10 @@ export function SessionView({
           if (!flushed) setRecoveryRequest((request) => request + 1);
           setReplayState((prev) => ({
             loaded: true,
-            hasHistory: prev.hasHistory || replayChunks.some((chunk) => chunk.data.length > 0),
+            hasHistory:
+              prev.hasHistory ||
+              restoredSnapshotHistory ||
+              replayChunks.some((chunk) => chunk.data.length > 0),
           }));
         })
         .catch(() => {
@@ -404,11 +445,18 @@ export function SessionView({
     const focusRequested = focusRequest !== lastFocusRequestRef.current;
     lastFocusRequestRef.current = focusRequest;
     if (!focusRequested) return;
-    if (!terminalReady || !live) return;
+    if (!active || !terminalReady || !live) return;
     termRef.current?.focus();
-  }, [focusRequest, live, terminalReady]);
+  }, [focusRequest, active, live, terminalReady]);
+
+  useEffect(() => {
+    if (!active || !terminalReady) return;
+    termRef.current?.fit();
+    if (live) termRef.current?.focus();
+  }, [active, live, terminalReady]);
 
   const startSession = useCallback(async () => {
+    if (!active) return;
     replayGenerationRef.current += 1;
     renderedSeqRef.current = 0;
     pendingLiveChunksRef.current = [];
@@ -424,19 +472,20 @@ export function SessionView({
     });
     if (!res.ok) return;
     termRef.current?.focus();
-  }, [session.id, session.workspaceId, request]);
+  }, [session.id, session.workspaceId, active, request]);
 
   useEffect(() => {
-    if (!autoStart || !terminalReady || session.status !== 'draft') return;
+    if (!active || !autoStart || !terminalReady || session.status !== 'draft') return;
     onAutoStartConsumed?.();
     void startSession();
-  }, [autoStart, terminalReady, session.status, startSession, onAutoStartConsumed]);
+  }, [active, autoStart, terminalReady, session.status, startSession, onAutoStartConsumed]);
 
   const handleStop = useCallback(() => {
     send({ id: `kill-${Date.now()}`, cmd: 'session.kill', args: { sessionId: session.id } });
   }, [session.id, send]);
 
   const handleResume = useCallback(async () => {
+    if (!active) return;
     replayGenerationRef.current += 1;
     renderedSeqRef.current = 0;
     pendingLiveChunksRef.current = [];
@@ -456,31 +505,31 @@ export function SessionView({
     });
     if (!res.ok) return;
     termRef.current?.focus();
-  }, [session.id, session.workspaceId, request, enqueueResetForGeneration]);
+  }, [session.id, session.workspaceId, active, request, enqueueResetForGeneration]);
 
   const handleData = useCallback(
     (data: string) => {
-      if (!live) return;
+      if (!active || !live) return;
       send({
         id: `input-${Date.now()}`,
         cmd: 'terminal.input',
         args: { sessionId: session.id, data },
       });
     },
-    [session.id, live, send],
+    [session.id, active, live, send],
   );
 
   const handleResize = useCallback(
     (cols: number, rows: number) => {
       terminalSizeRef.current = { cols, rows };
-      if (!live) return;
+      if (!active || !live) return;
       send({
         id: `resize-${Date.now()}`,
         cmd: 'terminal.resize',
         args: { sessionId: session.id, cols, rows },
       });
     },
-    [session.id, live, send],
+    [session.id, active, live, send],
   );
 
   const showEmptyEndedHistory =
@@ -489,9 +538,17 @@ export function SessionView({
 
   return (
     <div
+      data-testid="session-view"
+      data-active={active ? 'true' : 'false'}
+      aria-hidden={!active}
       style={{
         display: 'flex',
         flexDirection: 'column',
+        position: 'absolute',
+        inset: 0,
+        visibility: active ? 'visible' : 'hidden',
+        pointerEvents: active ? 'auto' : 'none',
+        zIndex: active ? 1 : 0,
         width: '100%',
         height: '100%',
         minHeight: 0,
@@ -612,7 +669,7 @@ export function SessionView({
       >
         <TerminalView
           ref={termRef}
-          interactive={live}
+          interactive={live && active}
           onData={handleData}
           onResize={handleResize}
           onReady={() => setTerminalReady(true)}

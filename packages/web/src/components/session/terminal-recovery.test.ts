@@ -4,6 +4,7 @@ import {
   isRecoveryReconcileData,
   isTerminalOutputData,
   isTerminalReplayData,
+  isTerminalSnapshotData,
 } from './terminal-recovery.js';
 
 describe('terminal recovery helpers', () => {
@@ -40,6 +41,9 @@ describe('terminal recovery helpers', () => {
       true,
     );
     expect(
+      isRecoveryReconcileData({ action: 'snapshot', sessionId: 's1', headSeq: 12 }, 's1'),
+    ).toBe(true);
+    expect(
       isRecoveryReconcileData(
         { action: 'unrecoverable', sessionId: 's1', reason: 'too_old_no_snapshot' },
         's1',
@@ -48,6 +52,29 @@ describe('terminal recovery helpers', () => {
     expect(isRecoveryReconcileData({ action: 'noop', sessionId: 'other', headSeq: 3 }, 's1')).toBe(
       false,
     );
+  });
+
+  it('validates snapshot responses', () => {
+    expect(
+      isTerminalSnapshotData(
+        {
+          status: 'ok',
+          sessionId: 's1',
+          data: 'serialized screen',
+          seq: 17,
+          cols: 100,
+          rows: 30,
+        },
+        's1',
+      ),
+    ).toBe(true);
+    expect(isTerminalSnapshotData({ status: 'unknown', sessionId: 's1' }, 's1')).toBe(true);
+    expect(
+      isTerminalSnapshotData(
+        { status: 'ok', sessionId: 's1', data: 'bad', seq: 1, cols: 0, rows: 30 },
+        's1',
+      ),
+    ).toBe(false);
   });
 
   it('filters live chunks that have already been rendered', () => {

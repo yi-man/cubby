@@ -8,11 +8,14 @@ import type {
   SpawnOptions,
   TerminalOutputChunk,
   TerminalReplayResult,
+  TerminalSnapshotResult,
 } from '@cubby/core';
 import { RingBuffer } from '../terminal/ring-buffer.js';
+import { HeadlessSnapshotBuffer } from '../terminal/terminal-snapshot-buffer.js';
 import type { SessionStore } from './store.js';
 
 const OUTPUT_HISTORY_LIMIT = 5000;
+const SNAPSHOT_PERSIST_DEBOUNCE_MS = 250;
 
 interface SessionManagerOptions {
   outputHistoryLimit?: number;
@@ -22,6 +25,8 @@ export class SessionManager {
   private providers = new Map<string, AgentProvider>();
   private processes = new Map<string, AgentProcess>();
   private outputBuffers = new Map<string, RingBuffer>();
+  private snapshotBuffers = new Map<string, HeadlessSnapshotBuffer>();
+  private snapshotPersistTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private firstInputBuffers = new Map<string, string>();
   private sessionsNeedingResumeInputReset = new Set<string>();
   private statusListeners: ((sessionId: string, status: string) => void)[] = [];
@@ -120,6 +125,7 @@ export class SessionManager {
     if (!provider) throw new Error(`Provider not found: ${session.provider}`);
     const outputBuffer = new RingBuffer(this.outputHistoryLimit);
     this.outputBuffers.set(sessionId, outputBuffer);
+    this.replaceSnapshotBuffer(sessionId, options.cols, options.rows);
 
     this.store.updateStatus(sessionId, 'starting');
     this.notifyStatusChange(sessionId, 'starting');
@@ -132,6 +138,7 @@ export class SessionManager {
         (data) => {
           const chunk = outputBuffer.push(data);
           this.store.appendTerminalOutput(sessionId, chunk, this.outputHistoryLimit);
+          this.writeSnapshotChunk(sessionId, chunk);
           if (this.processes.has(sessionId)) {
             this.store.updateStatus(sessionId, 'running');
             this.notifyStatusChange(sessionId, 'running');
@@ -144,6 +151,7 @@ export class SessionManager {
             this.store.updateStatus(sessionId, 'ended', { exitCode: code, pid: activeProcess.pid });
             this.notifyStatusChange(sessionId, 'ended');
             this.processes.delete(sessionId);
+            this.disposeSnapshotBuffer(sessionId);
           } else {
             earlyExitCode = code;
           }
@@ -154,6 +162,7 @@ export class SessionManager {
         this.store.updateStatus(sessionId, 'ended', { exitCode: earlyExitCode, pid: process.pid });
         this.notifyStatusChange(sessionId, 'ended');
         this.sessionsNeedingResumeInputReset.delete(sessionId);
+        this.disposeSnapshotBuffer(sessionId);
         return;
       }
 
@@ -168,6 +177,7 @@ export class SessionManager {
     } catch (err) {
       this.store.updateStatus(sessionId, 'ended', { exitCode: 1 });
       this.notifyStatusChange(sessionId, 'ended');
+      this.disposeSnapshotBuffer(sessionId);
       throw err;
     }
   }
@@ -184,6 +194,7 @@ export class SessionManager {
         this.processes.delete(sessionId);
       }
     }
+    this.disposeSnapshotBuffer(sessionId);
     this.store.updateStatus(sessionId, 'ended');
     this.notifyStatusChange(sessionId, 'ended');
     this.sessionsNeedingResumeInputReset.delete(sessionId);
@@ -208,6 +219,24 @@ export class SessionManager {
 
   getProcess(sessionId: string): AgentProcess | undefined {
     return this.processes.get(sessionId);
+  }
+
+  resizeTerminal(sessionId: string, cols: number, rows: number): boolean {
+    const process = this.processes.get(sessionId);
+    if (!process) return false;
+    process.resize(cols, rows);
+
+    const snapshotBuffer = this.snapshotBuffers.get(sessionId);
+    if (snapshotBuffer && !snapshotBuffer.disabled) {
+      try {
+        snapshotBuffer.resize(cols, rows);
+        this.scheduleSnapshotPersist(sessionId, snapshotBuffer);
+      } catch {
+        this.disposeSnapshotBuffer(sessionId, snapshotBuffer);
+      }
+    }
+
+    return true;
   }
 
   getOutputReplay(sessionId: string, lastSeq = 0): TerminalReplayResult {
@@ -250,8 +279,18 @@ export class SessionManager {
 
     if (live) {
       if (requestedSeq >= headSeq) return { action: 'noop', sessionId, headSeq };
+      if (
+        requestedSeq === 0 &&
+        headSeq > 0 &&
+        this.hasRecoverableSnapshot(sessionId, requestedSeq)
+      ) {
+        return { action: 'snapshot', sessionId, headSeq };
+      }
       if (buffer?.canReplayFrom(requestedSeq)) {
         return { action: 'replay', sessionId, fromSeq: requestedSeq, headSeq };
+      }
+      if (this.hasRecoverableSnapshot(sessionId, requestedSeq)) {
+        return { action: 'snapshot', sessionId, headSeq };
       }
       return { action: 'unrecoverable', sessionId, reason: 'too_old_no_snapshot' };
     }
@@ -285,6 +324,26 @@ export class SessionManager {
     if (!shouldResetBeforeResumeInput(data)) return '';
     this.sessionsNeedingResumeInputReset.delete(sessionId);
     return '\x15';
+  }
+
+  async getTerminalSnapshot(sessionId: string): Promise<TerminalSnapshotResult> {
+    const session = this.store.get(sessionId);
+    if (!session) return { status: 'unknown', sessionId };
+
+    const snapshotBuffer = this.snapshotBuffers.get(sessionId);
+    if (snapshotBuffer && !snapshotBuffer.disabled) {
+      try {
+        const snapshot = await snapshotBuffer.snapshot();
+        this.store.upsertTerminalSnapshot(sessionId, snapshot);
+        return { status: 'ok', sessionId, ...snapshot };
+      } catch {
+        this.disposeSnapshotBuffer(sessionId, snapshotBuffer);
+      }
+    }
+
+    const storedSnapshot = this.store.getTerminalSnapshot(sessionId);
+    if (storedSnapshot) return { status: 'ok', sessionId, ...storedSnapshot };
+    return { status: 'unavailable', sessionId };
   }
 
   getOutputHistory(sessionId: string): string[] {
@@ -352,6 +411,72 @@ export class SessionManager {
 
     this.firstInputBuffers.set(sessionId, buffer);
     return null;
+  }
+
+  private replaceSnapshotBuffer(sessionId: string, cols: number, rows: number): void {
+    this.disposeSnapshotBuffer(sessionId);
+    this.store.clearTerminalSnapshot(sessionId);
+
+    try {
+      this.snapshotBuffers.set(sessionId, new HeadlessSnapshotBuffer({ cols, rows }));
+    } catch {
+      this.snapshotBuffers.delete(sessionId);
+    }
+  }
+
+  private disposeSnapshotBuffer(sessionId: string, expected?: HeadlessSnapshotBuffer): void {
+    const snapshotBuffer = this.snapshotBuffers.get(sessionId);
+    if (!snapshotBuffer) return;
+    if (expected && snapshotBuffer !== expected) return;
+
+    const timer = this.snapshotPersistTimers.get(sessionId);
+    if (timer) clearTimeout(timer);
+    this.snapshotPersistTimers.delete(sessionId);
+    snapshotBuffer.dispose();
+    this.snapshotBuffers.delete(sessionId);
+  }
+
+  private writeSnapshotChunk(sessionId: string, chunk: TerminalOutputChunk): void {
+    const snapshotBuffer = this.snapshotBuffers.get(sessionId);
+    if (!snapshotBuffer || snapshotBuffer.disabled) return;
+
+    try {
+      snapshotBuffer.write(chunk.data, chunk.seq);
+      this.scheduleSnapshotPersist(sessionId, snapshotBuffer);
+    } catch {
+      this.disposeSnapshotBuffer(sessionId, snapshotBuffer);
+    }
+  }
+
+  private scheduleSnapshotPersist(sessionId: string, snapshotBuffer: HeadlessSnapshotBuffer): void {
+    const existing = this.snapshotPersistTimers.get(sessionId);
+    if (existing) clearTimeout(existing);
+
+    const timer = setTimeout(() => {
+      this.snapshotPersistTimers.delete(sessionId);
+      if (this.snapshotBuffers.get(sessionId) !== snapshotBuffer || snapshotBuffer.disabled) return;
+
+      void snapshotBuffer
+        .snapshot()
+        .then((snapshot) => {
+          if (this.snapshotBuffers.get(sessionId) === snapshotBuffer) {
+            this.store.upsertTerminalSnapshot(sessionId, snapshot);
+          }
+        })
+        .catch(() => {
+          this.disposeSnapshotBuffer(sessionId, snapshotBuffer);
+        });
+    }, SNAPSHOT_PERSIST_DEBOUNCE_MS);
+
+    this.snapshotPersistTimers.set(sessionId, timer);
+  }
+
+  private hasRecoverableSnapshot(sessionId: string, requestedSeq: number): boolean {
+    const snapshotBuffer = this.snapshotBuffers.get(sessionId);
+    if (snapshotBuffer && !snapshotBuffer.disabled) return true;
+
+    const storedSnapshot = this.store.getTerminalSnapshot(sessionId);
+    return Boolean(storedSnapshot && storedSnapshot.seq > requestedSeq);
   }
 }
 

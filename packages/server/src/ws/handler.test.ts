@@ -360,8 +360,53 @@ describe('WSCommandHandler', () => {
     expect(response).toEqual({
       id: 'recover-1',
       ok: true,
-      data: { action: 'replay', sessionId: session.id, fromSeq: 0, headSeq: 3 },
+      data: { action: 'snapshot', sessionId: session.id, headSeq: 3 },
     });
+  });
+
+  it('returns a live terminal snapshot over websocket', async () => {
+    const provider: AgentProvider = {
+      name: 'snapshot',
+      async spawn(
+        _sessionId: string,
+        _options: SpawnOptions,
+        onOutput: (data: string) => void = () => {},
+      ) {
+        queueMicrotask(() => onOutput('snapshot payload'));
+        return {
+          pid: 992,
+          onData: (_callback) => {},
+          onExit: (_callback) => {},
+          write: () => {},
+          resize: () => {},
+          kill: () => {},
+        };
+      },
+      async kill() {},
+    };
+    manager.registerProvider(provider);
+    const session = manager.createSession({ workspaceId: '/tmp', provider: 'snapshot' });
+    await manager.startSession(session.id, { cwd: '/tmp', cols: 100, rows: 30 });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const response = await handler.handle({} as WebSocket, {
+      id: 'snapshot-1',
+      cmd: 'terminal.snapshot',
+      args: { sessionId: session.id },
+    });
+
+    expect(response).toMatchObject({
+      id: 'snapshot-1',
+      ok: true,
+      data: {
+        status: 'ok',
+        sessionId: session.id,
+        seq: Buffer.byteLength('snapshot payload', 'utf8'),
+        cols: 100,
+        rows: 30,
+      },
+    });
+    expect((response.data as { data?: string }).data).toContain('snapshot payload');
   });
 
   it('updates session title from the first terminal input and broadcasts it', async () => {

@@ -12,6 +12,20 @@ interface TerminalOutputRow {
   seq_end: number | null;
 }
 
+export interface StoredTerminalSnapshot {
+  data: string;
+  seq: number;
+  cols: number;
+  rows: number;
+}
+
+interface TerminalSnapshotRow {
+  data: string;
+  seq: number;
+  cols: number;
+  rows: number;
+}
+
 export class SessionStore {
   constructor(private db: Database) {}
 
@@ -145,6 +159,39 @@ export class SessionStore {
       }));
     }
     return synthesizeTerminalOutputChunks(rows.map((row) => row.data));
+  }
+
+  upsertTerminalSnapshot(sessionId: string, snapshot: StoredTerminalSnapshot): void {
+    const now = new Date().toISOString();
+    this.db
+      .prepare(
+        `INSERT INTO terminal_snapshots (session_id, data, seq, cols, rows, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?)
+         ON CONFLICT(session_id) DO UPDATE SET
+           data = excluded.data,
+           seq = excluded.seq,
+           cols = excluded.cols,
+           rows = excluded.rows,
+           updated_at = excluded.updated_at`,
+      )
+      .run(sessionId, snapshot.data, snapshot.seq, snapshot.cols, snapshot.rows, now);
+  }
+
+  getTerminalSnapshot(sessionId: string): StoredTerminalSnapshot | null {
+    const row = this.db
+      .prepare('SELECT data, seq, cols, rows FROM terminal_snapshots WHERE session_id = ?')
+      .get(sessionId) as TerminalSnapshotRow | undefined;
+    if (!row) return null;
+    return {
+      data: row.data,
+      seq: row.seq,
+      cols: row.cols,
+      rows: row.rows,
+    };
+  }
+
+  clearTerminalSnapshot(sessionId: string): void {
+    this.db.prepare('DELETE FROM terminal_snapshots WHERE session_id = ?').run(sessionId);
   }
 
   private getTerminalOutputRows(

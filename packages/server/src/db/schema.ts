@@ -36,4 +36,14 @@ CREATE TABLE IF NOT EXISTS terminal_outputs (
 
 CREATE INDEX IF NOT EXISTS idx_terminal_outputs_session_id_id
   ON terminal_outputs(session_id, id);
+
+CREATE TABLE IF NOT EXISTS terminal_snapshots (
+  session_id TEXT PRIMARY KEY,
+  data TEXT NOT NULL,
+  seq INTEGER NOT NULL,
+  cols INTEGER NOT NULL,
+  rows INTEGER NOT NULL,
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY (session_id) REFERENCES sessions(id)
+);
 `;

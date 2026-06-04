@@ -34,6 +34,8 @@ export class WSCommandHandler {
           return this.terminalUnsubscribe(ws, request);
         case WS_COMMANDS.TERMINAL_REPLAY:
           return this.terminalReplay(request);
+        case WS_COMMANDS.TERMINAL_SNAPSHOT:
+          return this.terminalSnapshot(request);
         case WS_COMMANDS.TERMINAL_INPUT:
           return this.terminalInput(request);
         case WS_COMMANDS.TERMINAL_RESIZE:
@@ -138,15 +140,13 @@ export class WSCommandHandler {
 
   private terminalResize(req: WSRequest): WSResponse {
     const { sessionId, cols, rows } = req.args as { sessionId: string; cols: number; rows: number };
-    const process = this.sessionManager.getProcess(sessionId);
-    if (!process) {
+    if (!this.sessionManager.resizeTerminal(sessionId, cols, rows)) {
       return {
         id: req.id,
         ok: false,
         error: { code: 'NOT_FOUND', message: 'Session process not found' },
       };
     }
-    process.resize(cols, rows);
     return { id: req.id, ok: true };
   }
 
@@ -170,6 +170,15 @@ export class WSCommandHandler {
       id: req.id,
       ok: true,
       data: this.sessionManager.getOutputReplay(sessionId, lastSeq ?? 0),
+    };
+  }
+
+  private async terminalSnapshot(req: WSRequest): Promise<WSResponse> {
+    const { sessionId } = req.args as { sessionId: string };
+    return {
+      id: req.id,
+      ok: true,
+      data: await this.sessionManager.getTerminalSnapshot(sessionId),
     };
   }
 

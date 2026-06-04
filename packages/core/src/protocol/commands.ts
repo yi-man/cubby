@@ -9,6 +9,7 @@ export const WS_COMMANDS = {
   TERMINAL_SUBSCRIBE: 'terminal.subscribe',
   TERMINAL_UNSUBSCRIBE: 'terminal.unsubscribe',
   TERMINAL_REPLAY: 'terminal.replay',
+  TERMINAL_SNAPSHOT: 'terminal.snapshot',
   TERMINAL_INPUT: 'terminal.input',
   TERMINAL_RESIZE: 'terminal.resize',
 } as const;
