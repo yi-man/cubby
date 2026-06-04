@@ -19,6 +19,7 @@ const CURRENT_SESSION_ID_STORAGE_KEY = 'cubby.currentSessionId';
 const MOBILE_MEDIA_QUERY = '(max-width: 767px)';
 const APP_HEADER_HEIGHT = 52;
 const SIDEBAR_EXPANDED_WIDTH = 240;
+const MOBILE_SIDEBAR_WIDTH = 340;
 const ICON_BUTTON_STYLE = {
   width: '32px',
   height: '32px',
@@ -161,6 +162,11 @@ export function App() {
   const [sessionSearchQuery, setSessionSearchQuery] = useState('');
   const [mountedSessionIds, setMountedSessionIds] = useState<Set<string>>(() => new Set());
   const mobileLayout = useMediaQuery(MOBILE_MEDIA_QUERY);
+  const sidebarWidth = sidebarCollapsed
+    ? '0px'
+    : mobileLayout
+      ? `min(${MOBILE_SIDEBAR_WIDTH}px, calc(100vw - 48px))`
+      : `${SIDEBAR_EXPANDED_WIDTH}px`;
 
   const sessionById = useMemo(() => {
     const byId = new Map<string, Session>();
@@ -458,10 +464,30 @@ export function App() {
           position: 'relative',
         }}
       >
+        {mobileLayout && !sidebarCollapsed && (
+          <button
+            type="button"
+            aria-label="Close sidebar"
+            data-testid="mobile-sidebar-scrim"
+            onClick={() => setSidebarCollapsed(true)}
+            style={{
+              position: 'absolute',
+              top: 0,
+              right: 0,
+              bottom: 0,
+              left: sidebarWidth,
+              zIndex: 3,
+              border: 0,
+              padding: 0,
+              background: 'rgba(0, 0, 0, 0.56)',
+              cursor: 'pointer',
+            }}
+          />
+        )}
         <div
           data-testid="sidebar-shell"
           style={{
-            width: sidebarCollapsed ? '0px' : `${SIDEBAR_EXPANDED_WIDTH}px`,
+            width: sidebarWidth,
             height: '100%',
             flexShrink: 0,
             overflow: 'hidden',
@@ -478,7 +504,7 @@ export function App() {
           }}
         >
           {!sidebarCollapsed && (
-            <div style={{ width: `${SIDEBAR_EXPANDED_WIDTH}px`, height: '100%' }}>
+            <div style={{ width: sidebarWidth, height: '100%' }}>
               <SessionList
                 sessions={sessions}
                 currentId={currentId}

@@ -291,10 +291,11 @@ export function SessionView({
           let restoredSnapshotHistory = false;
 
           if (res.data.action === 'snapshot') {
+            const { cols, rows } = terminalSizeRef.current;
             const snapshotRes = await request({
               id: `snapshot-${session.id}-${session.status}-${Date.now()}`,
               cmd: 'terminal.snapshot',
-              args: { sessionId: session.id },
+              args: { sessionId: session.id, cols, rows },
             });
             if (cancelled || replayGenerationRef.current !== replayGeneration) return;
             if (!snapshotRes.ok || !isTerminalSnapshotData(snapshotRes.data, session.id)) {

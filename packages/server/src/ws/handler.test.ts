@@ -439,6 +439,50 @@ describe('WSCommandHandler', () => {
     expect((response.data as { data?: string }).data).toContain('snapshot payload');
   });
 
+  it('returns a live terminal snapshot for requested websocket dimensions', async () => {
+    const provider: AgentProvider = {
+      name: 'sized-snapshot',
+      async spawn(
+        _sessionId: string,
+        _options: SpawnOptions,
+        onOutput: (data: string) => void = () => {},
+      ) {
+        queueMicrotask(() => onOutput('mobile snapshot payload'));
+        return {
+          pid: 993,
+          onData: (_callback) => {},
+          onExit: (_callback) => {},
+          write: () => {},
+          resize: () => {},
+          kill: () => {},
+        };
+      },
+      async kill() {},
+    };
+    manager.registerProvider(provider);
+    const session = manager.createSession({ workspaceId: '/tmp', provider: 'sized-snapshot' });
+    await manager.startSession(session.id, { cwd: '/tmp', cols: 120, rows: 40 });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const response = await handler.handle({} as WebSocket, {
+      id: 'snapshot-sized',
+      cmd: 'terminal.snapshot',
+      args: { sessionId: session.id, cols: 44, rows: 18 },
+    });
+
+    expect(response).toMatchObject({
+      id: 'snapshot-sized',
+      ok: true,
+      data: {
+        status: 'ok',
+        sessionId: session.id,
+        seq: Buffer.byteLength('mobile snapshot payload', 'utf8'),
+        cols: 44,
+        rows: 18,
+      },
+    });
+  });
+
   it('updates session title from the first terminal input and broadcasts it', async () => {
     const writes: string[] = [];
     const provider: AgentProvider = {

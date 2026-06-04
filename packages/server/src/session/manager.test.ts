@@ -231,6 +231,43 @@ describe('SessionManager', () => {
     });
   });
 
+  it('rebuilds a live terminal snapshot for the requested viewport size', async () => {
+    const output = 'desktop sized output before mobile rejoin\r\n';
+    const provider: AgentProvider = {
+      name: 'sized-snapshot',
+      async spawn(
+        _sessionId: string,
+        _options: SpawnOptions,
+        onOutput: (data: string) => void = () => {},
+      ) {
+        onOutput(output);
+        return {
+          pid: 40_002,
+          onData: (_callback) => {},
+          onExit: (_callback) => {},
+          write: () => {},
+          resize: () => {},
+          kill: () => {},
+        };
+      },
+      async kill() {},
+    };
+    manager.registerProvider(provider);
+    const session = manager.createSession({ workspaceId: '/tmp', provider: 'sized-snapshot' });
+
+    await manager.startSession(session.id, { cwd: '/tmp', cols: 120, rows: 40 });
+    const snapshot = await manager.getTerminalSnapshot(session.id, { cols: 44, rows: 18 });
+
+    expect(snapshot).toMatchObject({
+      status: 'ok',
+      sessionId: session.id,
+      seq: Buffer.byteLength(output, 'utf8'),
+      cols: 44,
+      rows: 18,
+    });
+    expect(snapshot.status === 'ok' ? snapshot.data : '').toContain('mobile rejoin');
+  });
+
   it('uses persisted sequence metadata when replaying retained ended output', () => {
     manager = new SessionManager(store, { outputHistoryLimit: 2 });
     const session = manager.createSession({ workspaceId: '/tmp', provider: 'mock' });

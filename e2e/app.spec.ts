@@ -329,7 +329,8 @@ test.describe('Cubby MVP', () => {
     await expect(page.getByRole('button', { name: 'New Session' })).toHaveCount(0);
 
     await page.getByRole('button', { name: 'Expand sidebar' }).click();
-    await expect(sidebar).toHaveCSS('width', '240px');
+    await expect(sidebar).toHaveCSS('width', '340px');
+    await expect(page.getByTestId('mobile-sidebar-scrim')).toBeVisible();
     await expect(page.getByRole('button', { name: 'New Session' })).toBeVisible();
   });
 
@@ -345,13 +346,15 @@ test.describe('Cubby MVP', () => {
       .toBe(390);
 
     await page.getByRole('button', { name: 'Expand sidebar' }).click();
-    await expect(sidebar).toHaveCSS('width', '240px');
+    await expect(sidebar).toHaveCSS('width', '340px');
+    await expect(page.getByTestId('mobile-sidebar-scrim')).toBeVisible();
     await expect
       .poll(() => detail.evaluate((element) => Math.round(element.getBoundingClientRect().width)))
       .toBe(390);
 
-    await page.getByRole('button', { name: 'Collapse sidebar' }).click();
+    await page.getByTestId('mobile-sidebar-scrim').click();
     await expect(sidebar).toHaveCSS('width', '0px');
+    await expect(page.getByTestId('mobile-sidebar-scrim')).toHaveCount(0);
     await expect
       .poll(() => detail.evaluate((element) => Math.round(element.getBoundingClientRect().width)))
       .toBe(390);
@@ -698,7 +701,8 @@ test.describe('Cubby MVP', () => {
     await expect.poll(() => wsCommandCount(page, 'terminal.subscribe'), { timeout: 10000 }).toBe(1);
 
     await page.getByRole('button', { name: 'Expand sidebar' }).click();
-    await expect(page.getByTestId('sidebar-shell')).toHaveCSS('width', '240px');
+    await expect(page.getByTestId('sidebar-shell')).toHaveCSS('width', '340px');
+    await expect(page.getByTestId('mobile-sidebar-scrim')).toBeVisible();
     await page.getByRole('button', { name: 'Collapse sidebar' }).click();
     await expect(page.getByTestId('sidebar-shell')).toHaveCSS('width', '0px');
     await page.waitForTimeout(250);
@@ -721,6 +725,93 @@ test.describe('Cubby MVP', () => {
       );
     });
     expect(resizeCommands).toEqual([]);
+  });
+
+  test('mobile live viewers recover with a mobile-sized terminal snapshot', async ({
+    page,
+    browser,
+  }) => {
+    test.skip(
+      !MOCK_CLAUDE_PROVIDER_ENABLED,
+      'Requires CUBBY_MOCK_CLAUDE_PROVIDER=1 to start a deterministic running session',
+    );
+
+    await page.setViewportSize({ width: 1280, height: 720 });
+    const stamp = Date.now();
+    const workspaceId = `/tmp/cubby-mobile-sized-snapshot-${stamp}`;
+    const running = await createSession(page, {
+      workspaceId,
+      title: `Mobile Sized Snapshot ${stamp}`,
+    });
+
+    await page.goto('/');
+    const desktopGroup = page.getByTestId('workspace-group').filter({ hasText: workspaceId });
+    await selectSessionTab(desktopGroup, running.title);
+    await page.getByRole('button', { name: 'Start', exact: true }).click();
+    await assertActiveDetail(page, { title: running.title, status: 'running', action: 'Stop' });
+    await expect
+      .poll(() => terminalText(page), { timeout: 10000 })
+      .toContain('Mock Claude Code ready');
+
+    const mobile = await browser.newPage({
+      viewport: { width: 390, height: 844 },
+      isMobile: true,
+    });
+    await installWebSocketRecorder(mobile);
+
+    try {
+      await mobile.goto('/');
+      await assertActiveDetail(mobile, {
+        title: running.title,
+        status: 'running',
+        action: 'Stop',
+      });
+
+      await expect
+        .poll(
+          () =>
+            mobile.evaluate((sessionId) => {
+              const commands =
+                (
+                  window as typeof window & {
+                    __wsCommands?: Array<{
+                      id?: string;
+                      cmd?: string;
+                      args?: { sessionId?: string; cols?: number; rows?: number };
+                    }>;
+                  }
+                ).__wsCommands ?? [];
+              const responses =
+                (
+                  window as typeof window & {
+                    __wsResponses?: Array<{
+                      id?: string;
+                      ok?: boolean;
+                      data?: { status?: string; sessionId?: string; cols?: number; rows?: number };
+                    }>;
+                  }
+                ).__wsResponses ?? [];
+              const command = commands.find(
+                (item) => item.cmd === 'terminal.snapshot' && item.args?.sessionId === sessionId,
+              );
+              const response = responses.find(
+                (item) =>
+                  item.id === command?.id &&
+                  item.ok === true &&
+                  item.data?.status === 'ok' &&
+                  item.data.sessionId === sessionId,
+              );
+              return {
+                requestCols: command?.args?.cols ?? 0,
+                responseCols: response?.data?.cols ?? 0,
+              };
+            }, running.id),
+          { timeout: 10000 },
+        )
+        .toEqual({ requestCols: 44, responseCols: 44 });
+    } finally {
+      await mobile.close();
+    }
   });
 
   test('selecting a running session subscribes before reconciling terminal recovery', async ({
