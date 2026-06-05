@@ -26,6 +26,10 @@ export class WSCommandHandler {
           return this.sessionList(request);
         case WS_COMMANDS.SESSION_GET:
           return this.sessionGet(request);
+        case WS_COMMANDS.SESSION_RENAME:
+          return this.sessionRename(request);
+        case WS_COMMANDS.SESSION_DELETE:
+          return this.sessionDelete(request);
         case WS_COMMANDS.RECOVERY_RECONCILE:
           return this.recoveryReconcile(request);
         case WS_COMMANDS.TERMINAL_SUBSCRIBE:
@@ -118,6 +122,24 @@ export class WSCommandHandler {
       return { id: req.id, ok: false, error: { code: 'NOT_FOUND', message: 'Session not found' } };
     }
     return { id: req.id, ok: true, data: session };
+  }
+
+  private sessionRename(req: WSRequest): WSResponse {
+    const { sessionId, title } = req.args as { sessionId: string; title: string };
+    const session = this.sessionManager.renameSession(sessionId, title);
+    this.hub.broadcastToAll({ evt: WS_EVENTS.SESSION_UPDATED, data: session });
+    return { id: req.id, ok: true, data: session };
+  }
+
+  private async sessionDelete(req: WSRequest): Promise<WSResponse> {
+    const { sessionId } = req.args as { sessionId: string };
+    const deleted = await this.sessionManager.deleteSession(sessionId);
+    if (!deleted) {
+      return { id: req.id, ok: false, error: { code: 'NOT_FOUND', message: 'Session not found' } };
+    }
+    const data = { sessionId };
+    this.hub.broadcastToAll({ evt: WS_EVENTS.SESSION_DELETED, data });
+    return { id: req.id, ok: true, data };
   }
 
   private terminalInput(req: WSRequest): WSResponse {

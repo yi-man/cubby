@@ -149,6 +149,82 @@ describe('createServer', () => {
     expect(getResponse.json()).toMatchObject({ id: session.id, status: 'running' });
   });
 
+  it('renames a session through the HTTP API', async () => {
+    const { app } = await createServer(0);
+    const createResponse = await app.inject({
+      method: 'POST',
+      url: '/api/sessions',
+      payload: { workspaceId: '/tmp', provider: 'claude-code', title: 'Draft' },
+    });
+    const session = createResponse.json();
+
+    const renameResponse = await app.inject({
+      method: 'PATCH',
+      url: `/api/sessions/${session.id}`,
+      payload: { title: '  Customer rollout  ' },
+    });
+    const getResponse = await app.inject({ method: 'GET', url: `/api/sessions/${session.id}` });
+    await app.close();
+
+    expect(renameResponse.statusCode).toBe(200);
+    expect(renameResponse.json()).toMatchObject({ id: session.id, title: 'Customer rollout' });
+    expect(getResponse.json()).toMatchObject({ id: session.id, title: 'Customer rollout' });
+  });
+
+  it('returns 400 when renaming a session to an empty title through the HTTP API', async () => {
+    const { app } = await createServer(0);
+    const createResponse = await app.inject({
+      method: 'POST',
+      url: '/api/sessions',
+      payload: { workspaceId: '/tmp', provider: 'claude-code', title: 'Draft' },
+    });
+    const session = createResponse.json();
+
+    const renameResponse = await app.inject({
+      method: 'PATCH',
+      url: `/api/sessions/${session.id}`,
+      payload: { title: '   ' },
+    });
+    await app.close();
+
+    expect(renameResponse.statusCode).toBe(400);
+    expect(renameResponse.json()).toEqual({ error: 'Session title is required' });
+  });
+
+  it('deletes a session through the HTTP API', async () => {
+    const { app } = await createServer(0);
+    const createResponse = await app.inject({
+      method: 'POST',
+      url: '/api/sessions',
+      payload: { workspaceId: '/tmp', provider: 'claude-code', title: 'Delete me' },
+    });
+    const session = createResponse.json();
+
+    const deleteResponse = await app.inject({
+      method: 'DELETE',
+      url: `/api/sessions/${session.id}`,
+    });
+    const getResponse = await app.inject({ method: 'GET', url: `/api/sessions/${session.id}` });
+    await app.close();
+
+    expect(deleteResponse.statusCode).toBe(200);
+    expect(deleteResponse.json()).toEqual({ ok: true, sessionId: session.id });
+    expect(getResponse.json()).toEqual({ error: 'Not found' });
+  });
+
+  it('returns 404 when deleting a missing session through the HTTP API', async () => {
+    const { app } = await createServer(0);
+
+    const deleteResponse = await app.inject({
+      method: 'DELETE',
+      url: '/api/sessions/missing-session',
+    });
+    await app.close();
+
+    expect(deleteResponse.statusCode).toBe(404);
+    expect(deleteResponse.json()).toEqual({ error: 'Not found' });
+  });
+
   it('marks active sessions ended when the server closes', async () => {
     const dataDir = mkdtempSync(join(tmpdir(), 'cubby-server-'));
     dataDirs.push(dataDir);

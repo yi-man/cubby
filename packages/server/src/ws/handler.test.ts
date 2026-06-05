@@ -4,6 +4,7 @@ import { unlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { AgentProvider, SpawnOptions } from '@cubby/core';
+import { WS_COMMANDS, WS_EVENTS } from '@cubby/core';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { WebSocket } from 'ws';
 import { Database } from '../db/index.js';
@@ -32,6 +33,86 @@ describe('WSCommandHandler', () => {
     try {
       unlinkSync(dbPath);
     } catch {}
+  });
+
+  it('renames a session through websocket command and broadcasts the update', async () => {
+    const session = manager.createSession({
+      workspaceId: '/tmp',
+      provider: 'mock',
+      title: 'Draft',
+    });
+    const messages: string[] = [];
+    const client = {
+      readyState: 1,
+      send: (message: string) => messages.push(message),
+    } as WebSocket;
+    hub.addClient(client);
+
+    const response = await handler.handle(client, {
+      id: 'rename-1',
+      cmd: WS_COMMANDS.SESSION_RENAME,
+      args: { sessionId: session.id, title: '  Customer rollout  ' },
+    });
+
+    expect(response).toMatchObject({
+      id: 'rename-1',
+      ok: true,
+      data: { id: session.id, title: 'Customer rollout' },
+    });
+    expect(manager.getSession(session.id)?.title).toBe('Customer rollout');
+    expect(messages.map((message) => JSON.parse(message))).toEqual([
+      {
+        evt: WS_EVENTS.SESSION_UPDATED,
+        data: expect.objectContaining({ id: session.id, title: 'Customer rollout' }),
+      },
+    ]);
+  });
+
+  it('deletes a session through websocket command and broadcasts deletion', async () => {
+    const session = manager.createSession({
+      workspaceId: '/tmp',
+      provider: 'mock',
+      title: 'Delete me',
+    });
+    const messages: string[] = [];
+    const client = {
+      readyState: 1,
+      send: (message: string) => messages.push(message),
+    } as WebSocket;
+    hub.addClient(client);
+
+    const response = await handler.handle(client, {
+      id: 'delete-1',
+      cmd: WS_COMMANDS.SESSION_DELETE,
+      args: { sessionId: session.id },
+    });
+
+    expect(response).toEqual({
+      id: 'delete-1',
+      ok: true,
+      data: { sessionId: session.id },
+    });
+    expect(manager.getSession(session.id)).toBeNull();
+    expect(messages.map((message) => JSON.parse(message))).toEqual([
+      {
+        evt: WS_EVENTS.SESSION_DELETED,
+        data: { sessionId: session.id },
+      },
+    ]);
+  });
+
+  it('returns not found when deleting a missing session through websocket command', async () => {
+    const response = await handler.handle({} as WebSocket, {
+      id: 'delete-missing',
+      cmd: WS_COMMANDS.SESSION_DELETE,
+      args: { sessionId: 'missing-session' },
+    });
+
+    expect(response).toEqual({
+      id: 'delete-missing',
+      ok: false,
+      error: { code: 'NOT_FOUND', message: 'Session not found' },
+    });
   });
 
   it('replays buffered terminal output for a session', async () => {
