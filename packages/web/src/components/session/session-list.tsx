@@ -2,6 +2,16 @@ import type { Session } from '@cubby/core';
 import { ChevronDown, ChevronRight, Plus, Search } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 
+import {
+  groupSessions,
+  matchesSessionSearch,
+  normalizeSearch,
+  sessionTitle,
+  sortSessionsForWorkspace,
+  visibleSessions,
+  workspaceName,
+} from './session-list-model.js';
+
 interface SessionListProps {
   sessions: Session[];
   currentId: string | null;
@@ -11,64 +21,9 @@ interface SessionListProps {
   onCreate: () => void;
 }
 
-interface WorkspaceGroup {
-  workspaceId: string;
-  sessions: Session[];
-}
-
-const VISIBLE_SESSION_LIMIT = 5;
 const SIDEBAR_ICON_PROPS = { size: 16, strokeWidth: 2.2, 'aria-hidden': true } as const;
 const SIDEBAR_SURFACE = '#0b0c0c';
 const SIDEBAR_BORDER = '#202020';
-
-function normalizeSearch(value: string): string {
-  return value.trim().toLowerCase();
-}
-
-function workspaceName(workspaceId: string): string {
-  const parts = workspaceId.split(/[\\/]/).filter(Boolean);
-  return parts.at(-1) ?? workspaceId;
-}
-
-function groupSessions(sessions: Session[]): WorkspaceGroup[] {
-  const groups = new Map<string, Session[]>();
-  for (const session of sessions) {
-    const group = groups.get(session.workspaceId);
-    if (group) {
-      group.push(session);
-    } else {
-      groups.set(session.workspaceId, [session]);
-    }
-  }
-  return Array.from(groups, ([workspaceId, group]) => ({ workspaceId, sessions: group }));
-}
-
-function visibleSessions(groupSessions: Session[], currentId: string | null): Session[] {
-  if (groupSessions.length <= VISIBLE_SESSION_LIMIT) return groupSessions;
-
-  const defaultVisible = groupSessions.slice(0, VISIBLE_SESSION_LIMIT);
-  const current = currentId ? groupSessions.find((session) => session.id === currentId) : null;
-  if (!current || defaultVisible.some((session) => session.id === current.id))
-    return defaultVisible;
-
-  return [
-    current,
-    ...groupSessions
-      .filter((session) => session.id !== current.id)
-      .slice(0, VISIBLE_SESSION_LIMIT - 1),
-  ];
-}
-
-function sessionTitle(session: Session): string {
-  return session.title ?? session.provider;
-}
-
-function matchesSessionSearch(session: Session, query: string): boolean {
-  if (!query) return true;
-  return [sessionTitle(session), session.workspaceId, session.provider, session.status].some(
-    (value) => value.toLowerCase().includes(query),
-  );
-}
 
 function isLiveStatus(status: Session['status']): boolean {
   return status === 'running' || status === 'starting';
@@ -186,7 +141,14 @@ export function SessionList({
     () => sessions.filter((session) => matchesSessionSearch(session, normalizedSearch)),
     [sessions, normalizedSearch],
   );
-  const groups = useMemo(() => groupSessions(filteredSessions), [filteredSessions]);
+  const groups = useMemo(
+    () =>
+      groupSessions(filteredSessions).map((group) => ({
+        ...group,
+        sessions: sortSessionsForWorkspace(group.sessions, currentId),
+      })),
+    [currentId, filteredSessions],
+  );
   const [collapsedWorkspaces, setCollapsedWorkspaces] = useState<Set<string>>(() => new Set());
   const [openMoreWorkspace, setOpenMoreWorkspace] = useState<string | null>(null);
   const [activeSessionByWorkspace, setActiveSessionByWorkspace] = useState<Map<string, string>>(
