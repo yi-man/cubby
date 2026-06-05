@@ -177,6 +177,12 @@ function playSessionFinishedSound(): void {
     const oscillator = context.createOscillator();
     const gain = context.createGain();
     const now = context.currentTime;
+    let closed = false;
+    const closeContext = () => {
+      if (closed) return;
+      closed = true;
+      void context.close().catch(() => {});
+    };
 
     oscillator.type = 'sine';
     oscillator.frequency.setValueAtTime(660, now);
@@ -189,7 +195,8 @@ function playSessionFinishedSound(): void {
     gain.connect(context.destination);
     oscillator.start(now);
     oscillator.stop(now + 0.2);
-    oscillator.onended = () => void context.close().catch(() => {});
+    oscillator.onended = closeContext;
+    window.setTimeout(closeContext, 600);
   } catch {
     // Autoplay or audio device failures should never affect session handling.
   }
@@ -211,6 +218,7 @@ export function App() {
   const [resizingSidebar, setResizingSidebar] = useState(false);
   const [sessionSearchQuery, setSessionSearchQuery] = useState('');
   const [mountedSessionIds, setMountedSessionIds] = useState<Set<string>>(() => new Set());
+  const currentIdRef = useRef(currentId);
   const previousSessionStatusesRef = useRef<Map<string, SessionStatus> | null>(null);
   const mobileLayout = useMediaQuery(MOBILE_MEDIA_QUERY);
   const sidebarWidth = sidebarCollapsed
@@ -248,12 +256,17 @@ export function App() {
     [mountedSessionIds, sessionById],
   );
 
+  useEffect(() => {
+    currentIdRef.current = currentId;
+  }, [currentId]);
+
   const applySessionDeleted = useCallback(
     (sessionId: string) => {
       setSessions((prev) => {
         const nextSessions = prev.filter((session) => session.id !== sessionId);
-        if (currentId === sessionId) {
+        if (currentIdRef.current === sessionId) {
           const nextId = preferredSessionId(nextSessions);
+          currentIdRef.current = nextId;
           setCurrentId(nextId);
           persistCurrentSessionId(nextId);
         }
@@ -267,7 +280,7 @@ export function App() {
         return next;
       });
     },
-    [currentId, setCurrentId, setSessions],
+    [setCurrentId, setSessions],
   );
 
   const handleFullscreen = useCallback(() => {
@@ -479,6 +492,7 @@ export function App() {
 
   const handleSelectSession = useCallback(
     (id: string) => {
+      currentIdRef.current = id;
       setCurrentId(id);
       persistCurrentSessionId(id);
       setTerminalFocusRequest((request) => request + 1);
@@ -687,7 +701,26 @@ export function App() {
             role="separator"
             aria-orientation="vertical"
             aria-label="Resize sidebar"
+            aria-valuemin={MIN_DESKTOP_SIDEBAR_WIDTH}
+            aria-valuemax={MAX_DESKTOP_SIDEBAR_WIDTH}
+            aria-valuenow={desktopSidebarWidth}
+            tabIndex={0}
             className={`sidebar-resize-handle ${resizingSidebar ? 'is-dragging' : ''}`}
+            onKeyDown={(event) => {
+              if (event.key === 'ArrowLeft') {
+                event.preventDefault();
+                setDesktopSidebarWidth((width) => clampDesktopSidebarWidth(width - 16));
+              } else if (event.key === 'ArrowRight') {
+                event.preventDefault();
+                setDesktopSidebarWidth((width) => clampDesktopSidebarWidth(width + 16));
+              } else if (event.key === 'Home') {
+                event.preventDefault();
+                setDesktopSidebarWidth(MIN_DESKTOP_SIDEBAR_WIDTH);
+              } else if (event.key === 'End') {
+                event.preventDefault();
+                setDesktopSidebarWidth(MAX_DESKTOP_SIDEBAR_WIDTH);
+              }
+            }}
             onPointerDown={(event) => {
               event.preventDefault();
               setResizingSidebar(true);

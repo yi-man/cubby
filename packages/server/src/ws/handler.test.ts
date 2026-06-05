@@ -45,7 +45,7 @@ describe('WSCommandHandler', () => {
     const client = {
       readyState: 1,
       send: (message: string) => messages.push(message),
-    } as WebSocket;
+    } as unknown as WebSocket;
     hub.addClient(client);
 
     const response = await handler.handle(client, {
@@ -112,7 +112,7 @@ describe('WSCommandHandler', () => {
     const client = {
       readyState: 1,
       send: (message: string) => messages.push(message),
-    } as WebSocket;
+    } as unknown as WebSocket;
     hub.addClient(client);
 
     const response = await handler.handle(client, {
