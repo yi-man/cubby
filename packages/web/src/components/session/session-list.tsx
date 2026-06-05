@@ -31,6 +31,7 @@ interface SessionListProps {
   onCreate: () => void;
   onRename?: (id: string, title: string) => Promise<boolean>;
   onDelete?: (id: string) => Promise<boolean>;
+  executingSessionIds?: Set<string>;
 }
 
 const SIDEBAR_ICON_PROPS = { size: 16, strokeWidth: 2.2, 'aria-hidden': true } as const;
@@ -41,7 +42,8 @@ function isLiveStatus(status: Session['status']): boolean {
   return status === 'running' || status === 'starting';
 }
 
-function statusLabel(status: Session['status']): string {
+function statusLabel(status: Session['status'], executing = false): string {
+  if (executing) return 'Executing';
   if (status === 'running') return 'Live';
   if (status === 'starting') return 'Starting';
   if (status === 'ended') return 'Closed';
@@ -49,7 +51,17 @@ function statusLabel(status: Session['status']): string {
   return 'Ready';
 }
 
-function sessionTone(status: Session['status']) {
+function sessionTone(status: Session['status'], executing = false) {
+  if (executing) {
+    return {
+      background: '#10242b',
+      border: '#245564',
+      activeBorder: '#287f95',
+      indicator: '#22c8f2',
+      text: '#e7fbff',
+      meta: '#88b9c5',
+    };
+  }
   if (isLiveStatus(status)) {
     return {
       background: '#182915',
@@ -149,6 +161,7 @@ export function SessionList({
   onCreate,
   onRename,
   onDelete,
+  executingSessionIds = new Set(),
 }: SessionListProps) {
   const normalizedSearch = normalizeSearch(searchQuery);
   const filteredSessions = useMemo(
@@ -461,8 +474,9 @@ export function SessionList({
                 <div style={{ marginTop: '2px', position: 'relative' }}>
                   {visible.map((session) => {
                     const active = session.id === currentId;
-                    const tone = sessionTone(session.status);
                     const liveSession = isLiveStatus(session.status);
+                    const executing = liveSession && executingSessionIds.has(session.id);
+                    const tone = sessionTone(session.status, executing);
                     const title = sessionTitle(session);
                     const editing = editingSessionId === session.id;
                     const actionsOpen = openActionsSessionId === session.id;
@@ -512,7 +526,9 @@ export function SessionList({
                             position: 'relative',
                             zIndex: 2,
                             display: 'grid',
-                            gridTemplateColumns: 'minmax(0, 1fr) auto auto',
+                            gridTemplateColumns: executing
+                              ? 'minmax(0, 1fr) auto auto auto'
+                              : 'minmax(0, 1fr) auto auto',
                             gap: '8px',
                             alignItems: 'center',
                             fontWeight: 650,
@@ -603,17 +619,36 @@ export function SessionList({
                             className="session-status-dot"
                             data-live={liveSession ? 'true' : 'false'}
                             aria-hidden="true"
-                            title={statusLabel(session.status)}
+                            title={statusLabel(session.status, executing)}
                             style={{
                               width: '8px',
                               height: '8px',
                               borderRadius: '999px',
                               background: tone.indicator,
-                              boxShadow: liveSession
-                                ? `0 0 0 3px rgba(143, 191, 115, 0.13)`
-                                : 'none',
+                              boxShadow: executing
+                                ? '0 0 0 3px rgba(34, 200, 242, 0.13)'
+                                : liveSession
+                                  ? '0 0 0 3px rgba(143, 191, 115, 0.13)'
+                                  : 'none',
                             }}
                           />
+                          {executing && (
+                            <span
+                              data-testid="session-execution-status"
+                              style={{
+                                border: '1px solid rgba(34, 200, 242, 0.35)',
+                                borderRadius: '999px',
+                                color: '#a8edff',
+                                fontSize: '10px',
+                                fontWeight: 800,
+                                lineHeight: 1,
+                                padding: '4px 6px',
+                                textTransform: 'uppercase',
+                              }}
+                            >
+                              Executing
+                            </span>
+                          )}
                           {!editing && (
                             <button
                               type="button"
@@ -746,12 +781,20 @@ export function SessionList({
                                   className="session-status-dot"
                                   data-live={isLiveStatus(session.status) ? 'true' : 'false'}
                                   aria-hidden="true"
-                                  title={statusLabel(session.status)}
+                                  title={statusLabel(
+                                    session.status,
+                                    isLiveStatus(session.status) &&
+                                      executingSessionIds.has(session.id),
+                                  )}
                                   style={{
                                     width: '7px',
                                     height: '7px',
                                     borderRadius: '999px',
-                                    background: sessionTone(session.status).indicator,
+                                    background: sessionTone(
+                                      session.status,
+                                      isLiveStatus(session.status) &&
+                                        executingSessionIds.has(session.id),
+                                    ).indicator,
                                   }}
                                 />
                               </div>

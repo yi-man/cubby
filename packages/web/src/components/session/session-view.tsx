@@ -13,9 +13,11 @@ import { sanitizeEndedReplayChunks } from './terminal-replay.js';
 interface SessionViewProps {
   session: Session;
   active?: boolean;
+  executing?: boolean;
   autoStart?: boolean;
   focusRequest?: number;
   onAutoStartConsumed?: () => void;
+  onPromptSubmitted?: (sessionId: string) => void;
   send: (req: { id: string; cmd: string; args?: Record<string, unknown> }) => void;
   request: (req: {
     id: string;
@@ -66,6 +68,48 @@ function statusTone(status: Session['status']) {
   };
 }
 
+function collectSubmittedTerminalInput(
+  buffer: string,
+  data: string,
+): { buffer: string; submitted: boolean } {
+  let nextBuffer = buffer;
+  let submitted = false;
+
+  for (let index = 0; index < data.length; index++) {
+    const char = data[index];
+    if (char === '\x1b') {
+      index = skipTerminalEscapeSequence(data, index) - 1;
+      continue;
+    }
+    if (char === '\r' || char === '\n') {
+      if (nextBuffer.trim()) submitted = true;
+      nextBuffer = '';
+      continue;
+    }
+    if (char === '\b' || char === '\x7f') {
+      nextBuffer = nextBuffer.slice(0, -1);
+      continue;
+    }
+    if (char >= ' ') nextBuffer += char;
+  }
+
+  return { buffer: nextBuffer, submitted };
+}
+
+function skipTerminalEscapeSequence(data: string, start: number): number {
+  let index = start + 1;
+  if (data[index] === '[') {
+    index += 1;
+    while (index < data.length) {
+      const code = data.charCodeAt(index);
+      index += 1;
+      if (code >= 0x40 && code <= 0x7e) break;
+    }
+    return index;
+  }
+  return index;
+}
+
 interface ReplayState {
   loaded: boolean;
   hasHistory: boolean;
@@ -105,9 +149,11 @@ function EmptyEndedHistory() {
 export function SessionView({
   session,
   active = true,
+  executing = false,
   autoStart = false,
   focusRequest = 0,
   onAutoStartConsumed,
+  onPromptSubmitted,
   send,
   request,
   onMessage,
@@ -124,6 +170,7 @@ export function SessionView({
   const resizeAuthorityRef = useRef(false);
   const writeChainRef = useRef<Promise<void>>(Promise.resolve());
   const lastFocusRequestRef = useRef(focusRequest);
+  const pendingInputRef = useRef('');
   const [terminalReady, setTerminalReady] = useState(false);
   const [replayState, setReplayState] = useState<ReplayState>(() => emptyReplayState());
   const [recoveryError, setRecoveryError] = useState<string | null>(null);
@@ -567,13 +614,16 @@ export function SessionView({
   const handleData = useCallback(
     (data: string) => {
       if (!active || !live) return;
+      const collectedInput = collectSubmittedTerminalInput(pendingInputRef.current, data);
+      pendingInputRef.current = collectedInput.buffer;
+      if (collectedInput.submitted) onPromptSubmitted?.(session.id);
       send({
         id: `input-${Date.now()}`,
         cmd: 'terminal.input',
         args: { sessionId: session.id, data },
       });
     },
-    [session.id, active, live, send],
+    [session.id, active, live, send, onPromptSubmitted],
   );
 
   const handleResize = useCallback(
@@ -592,7 +642,14 @@ export function SessionView({
   const showEmptyEndedHistory =
     session.status === 'ended' && replayState.loaded && !replayState.hasHistory;
   const showRecoveryError = live && recoveryError !== null;
-  const currentStatusTone = statusTone(session.status);
+  const currentStatusTone = executing
+    ? {
+        label: 'Executing',
+        color: '#22c8f2',
+        border: '#245564',
+        background: '#071a1f',
+      }
+    : statusTone(session.status);
 
   return (
     <div
@@ -665,10 +722,14 @@ export function SessionView({
               height: '7px',
               borderRadius: '999px',
               background: currentStatusTone.color,
-              boxShadow: live ? `0 0 0 3px rgba(143, 191, 115, 0.14)` : 'none',
+              boxShadow: executing
+                ? '0 0 0 3px rgba(34, 200, 242, 0.14)'
+                : live
+                  ? '0 0 0 3px rgba(143, 191, 115, 0.14)'
+                  : 'none',
             }}
           />
-          <span style={VISUALLY_HIDDEN_STYLE}>{session.status}</span>
+          <span style={VISUALLY_HIDDEN_STYLE}>{executing ? 'executing' : session.status}</span>
         </span>
         <span
           style={{

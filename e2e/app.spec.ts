@@ -1373,6 +1373,50 @@ test.describe('Cubby MVP', () => {
       .toBe(1);
   });
 
+  test('submitted prompts show executing state and play a completion sound', async ({ page }) => {
+    test.skip(
+      !MOCK_CLAUDE_PROVIDER_ENABLED,
+      'Requires CUBBY_MOCK_CLAUDE_PROVIDER=1 for deterministic terminal output',
+    );
+
+    await installFinishSoundRecorder(page);
+
+    const stamp = Date.now();
+    const workspaceId = `/tmp/cubby-prompt-executing-${stamp}`;
+    const session = await createSession(page, { workspaceId, title: `Prompt Executing ${stamp}` });
+
+    await page.goto('/');
+
+    const group = page.getByTestId('workspace-group').filter({ hasText: workspaceId });
+    await selectSessionTab(group, session.title);
+    await page.getByRole('button', { name: 'Start', exact: true }).click();
+    await assertActiveDetail(page, { title: session.title, status: 'running', action: 'Stop' });
+    await expect
+      .poll(() => terminalText(page), { timeout: 10000 })
+      .toContain('Mock Claude Code ready');
+
+    await activeTerminal(page).click();
+    await page.keyboard.type(`Prompt activity ${stamp}`);
+    await page.keyboard.press('Enter');
+
+    await expect(activeSessionView(page).getByTestId('session-status')).toHaveText('executing');
+    await expect(
+      group.getByTestId('session-item').filter({ hasText: session.title }),
+    ).toContainText('Executing');
+
+    await expect
+      .poll(
+        () =>
+          page.evaluate(
+            () =>
+              (window as typeof window & { __finishSoundStarts?: number }).__finishSoundStarts ?? 0,
+          ),
+        { timeout: 10000 },
+      )
+      .toBe(1);
+    await assertActiveDetail(page, { title: session.title, status: 'running', action: 'Stop' });
+  });
+
   test('ended session without captured history shows a visible empty state', async ({ page }) => {
     const stamp = Date.now();
     const workspaceId = `/tmp/cubby-ended-empty-${stamp}`;

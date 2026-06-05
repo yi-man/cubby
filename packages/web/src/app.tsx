@@ -23,6 +23,7 @@ const DEFAULT_DESKTOP_SIDEBAR_WIDTH = 240;
 const MIN_DESKTOP_SIDEBAR_WIDTH = 200;
 const MAX_DESKTOP_SIDEBAR_WIDTH = 420;
 const MOBILE_SIDEBAR_WIDTH = 340;
+const PROMPT_COMPLETION_QUIET_MS = 2500;
 const ICON_BUTTON_STYLE = {
   width: '34px',
   height: '34px',
@@ -135,6 +136,10 @@ function isSessionIdData(value: unknown): value is { sessionId: string } {
   return isRecord(value) && typeof value.sessionId === 'string';
 }
 
+function isTerminalOutputEventData(value: unknown): value is { sessionId: string } {
+  return isRecord(value) && typeof value.sessionId === 'string';
+}
+
 function preferredSessionId(sessions: Session[]): string | null {
   const liveSession = sessions.find(
     (session) => session.status === 'running' || session.status === 'starting',
@@ -220,8 +225,13 @@ export function App() {
   const [resizingSidebar, setResizingSidebar] = useState(false);
   const [sessionSearchQuery, setSessionSearchQuery] = useState('');
   const [mountedSessionIds, setMountedSessionIds] = useState<Set<string>>(() => new Set());
+  const [executingSessionIds, setExecutingSessionIds] = useState<Set<string>>(() => new Set());
   const currentIdRef = useRef(currentId);
   const previousSessionStatusesRef = useRef<Map<string, SessionStatus> | null>(null);
+  const promptActivityRef = useRef<Map<string, { generation: number; outputSeen: boolean }>>(
+    new Map(),
+  );
+  const promptCompletionTimersRef = useRef<Map<string, number>>(new Map());
   const mobileLayout = useMediaQuery(MOBILE_MEDIA_QUERY);
   const sidebarWidth = sidebarCollapsed
     ? '0px'
@@ -262,6 +272,70 @@ export function App() {
     currentIdRef.current = currentId;
   }, [currentId]);
 
+  const clearPromptActivity = useCallback((sessionId: string) => {
+    const timer = promptCompletionTimersRef.current.get(sessionId);
+    if (timer !== undefined) window.clearTimeout(timer);
+    promptCompletionTimersRef.current.delete(sessionId);
+    promptActivityRef.current.delete(sessionId);
+    setExecutingSessionIds((prev) => {
+      if (!prev.has(sessionId)) return prev;
+      const next = new Set(prev);
+      next.delete(sessionId);
+      return next;
+    });
+  }, []);
+
+  const completePromptActivity = useCallback(
+    (sessionId: string, generation: number) => {
+      const activity = promptActivityRef.current.get(sessionId);
+      if (!activity || activity.generation !== generation || !activity.outputSeen) return;
+      clearPromptActivity(sessionId);
+      playSessionFinishedSound();
+    },
+    [clearPromptActivity],
+  );
+
+  const handlePromptSubmitted = useCallback((sessionId: string) => {
+    const current = promptActivityRef.current.get(sessionId);
+    const generation = (current?.generation ?? 0) + 1;
+    promptActivityRef.current.set(sessionId, { generation, outputSeen: false });
+    const timer = promptCompletionTimersRef.current.get(sessionId);
+    if (timer !== undefined) window.clearTimeout(timer);
+    promptCompletionTimersRef.current.delete(sessionId);
+    setExecutingSessionIds((prev) => {
+      if (prev.has(sessionId)) return prev;
+      const next = new Set(prev);
+      next.add(sessionId);
+      return next;
+    });
+  }, []);
+
+  const handlePromptOutput = useCallback(
+    (sessionId: string) => {
+      const activity = promptActivityRef.current.get(sessionId);
+      if (!activity) return;
+      activity.outputSeen = true;
+      const timer = promptCompletionTimersRef.current.get(sessionId);
+      if (timer !== undefined) window.clearTimeout(timer);
+      const nextTimer = window.setTimeout(
+        () => completePromptActivity(sessionId, activity.generation),
+        PROMPT_COMPLETION_QUIET_MS,
+      );
+      promptCompletionTimersRef.current.set(sessionId, nextTimer);
+    },
+    [completePromptActivity],
+  );
+
+  useEffect(() => {
+    return () => {
+      for (const timer of promptCompletionTimersRef.current.values()) {
+        window.clearTimeout(timer);
+      }
+      promptCompletionTimersRef.current.clear();
+      promptActivityRef.current.clear();
+    };
+  }, []);
+
   const applySessionDeleted = useCallback(
     (sessionId: string) => {
       setSessions((prev) => {
@@ -281,8 +355,9 @@ export function App() {
         next.delete(sessionId);
         return next;
       });
+      clearPromptActivity(sessionId);
     },
-    [setCurrentId, setSessions],
+    [clearPromptActivity, setCurrentId, setSessions],
   );
 
   const handleFullscreen = useCallback(() => {
@@ -408,6 +483,7 @@ export function App() {
           pending?.id === msg.data.sessionId ? { ...pending, status: msg.data.status } : pending,
         );
         if (msg.data.status === 'ended') {
+          clearPromptActivity(msg.data.sessionId);
           send({ id: 'init', cmd: 'session.list' });
         }
       }
@@ -419,8 +495,21 @@ export function App() {
       if ('evt' in msg && msg.evt === 'session.deleted' && isSessionIdData(msg.data)) {
         applySessionDeleted(msg.data.sessionId);
       }
+      if ('evt' in msg && msg.evt === 'terminal.output' && isTerminalOutputEventData(msg.data)) {
+        handlePromptOutput(msg.data.sessionId);
+      }
     });
-  }, [onMessage, setSessions, setCurrentId, send, pendingSession, currentId, applySessionDeleted]);
+  }, [
+    onMessage,
+    setSessions,
+    setCurrentId,
+    send,
+    pendingSession,
+    currentId,
+    applySessionDeleted,
+    clearPromptActivity,
+    handlePromptOutput,
+  ]);
 
   useEffect(() => {
     if (!connected || !pendingSession) return;
@@ -691,6 +780,7 @@ export function App() {
                 onCreate={() => setShowPicker(true)}
                 onRename={handleRenameSession}
                 onDelete={handleDeleteSession}
+                executingSessionIds={executingSessionIds}
               />
             </div>
           )}
@@ -740,14 +830,17 @@ export function App() {
           {currentSession && mountedSessions.length > 0 ? (
             mountedSessions.map((session) => {
               const active = session.id === currentSession?.id;
+              const executing = executingSessionIds.has(session.id) && isLiveSession(session);
               return (
                 <SessionView
                   key={session.id}
                   session={session}
                   active={active}
+                  executing={executing}
                   autoStart={active && session.id === autoStartSessionId}
                   focusRequest={terminalFocusRequest}
                   onAutoStartConsumed={() => setAutoStartSessionId(null)}
+                  onPromptSubmitted={handlePromptSubmitted}
                   send={send}
                   request={request}
                   onMessage={onMessage}
