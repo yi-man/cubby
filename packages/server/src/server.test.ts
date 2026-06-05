@@ -253,7 +253,7 @@ describe('createServer', () => {
     expect(listedSessionIds).not.toContain(session.id);
   });
 
-  it('broadcasts a session deletion when HTTP DELETE callbacks are passed', async () => {
+  it('deletes a session and broadcasts deletion when HTTP DELETE callbacks are passed', async () => {
     const dataDir = mkdtempSync(join(tmpdir(), 'cubby-routes-'));
     dataDirs.push(dataDir);
     const db = new Database(join(dataDir, 'cubby.db'));
@@ -278,6 +278,7 @@ describe('createServer', () => {
       });
 
       expect(deleteResponse.statusCode).toBe(200);
+      expect(manager.getSession(session.id)).toBeNull();
       expect(clientMessages).toEqual([
         {
           evt: WS_EVENTS.SESSION_DELETED,
