@@ -43,7 +43,7 @@ describe('session list model', () => {
     expect(matchesSessionSearch(customTitleSession, 'missing term')).toBe(false);
   });
 
-  it('sorts active session first, then by updated and created timestamps descending', () => {
+  it('sorts sessions by updated and created timestamps descending without selection state', () => {
     const sessions = [
       session({
         id: 'old-created',
@@ -67,11 +67,11 @@ describe('session list model', () => {
       }),
     ];
 
-    expect(sortSessionsForWorkspace(sessions, 'active').map(({ id }) => id)).toEqual([
-      'active',
+    expect(sortSessionsForWorkspace(sessions).map(({ id }) => id)).toEqual([
       'new-updated',
       'new-created',
       'old-created',
+      'active',
     ]);
     expect(sessions.map(({ id }) => id)).toEqual([
       'old-created',

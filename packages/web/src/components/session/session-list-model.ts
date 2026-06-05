@@ -34,11 +34,8 @@ export function matchesSessionSearch(session: Session, query: string): boolean {
   ].some((value) => normalizeSearch(value).includes(normalizedQuery));
 }
 
-export function sortSessionsForWorkspace(sessions: Session[], currentId: string | null): Session[] {
+export function sortSessionsForWorkspace(sessions: Session[]): Session[] {
   return [...sessions].sort((left, right) => {
-    if (left.id === currentId && right.id !== currentId) return -1;
-    if (right.id === currentId && left.id !== currentId) return 1;
-
     const updatedDelta = Date.parse(right.updatedAt) - Date.parse(left.updatedAt);
     if (updatedDelta !== 0) return updatedDelta;
 

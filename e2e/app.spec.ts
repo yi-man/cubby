@@ -1183,10 +1183,10 @@ test.describe('Cubby MVP', () => {
     await expect(page.getByText('No matching sessions')).toHaveCount(0);
   });
 
-  test('session tabs sort active first and then by recent activity', async ({ page }) => {
+  test('session tabs keep recent activity order when switching active tabs', async ({ page }) => {
     const stamp = Date.now();
     const workspaceId = `/tmp/cubby-tab-order-${stamp}`;
-    const active = await createSession(page, { workspaceId, title: `Order Active ${stamp}` });
+    const olderDraft = await createSession(page, { workspaceId, title: `Order Older ${stamp}` });
     const recentlyRun = await createSession(page, { workspaceId, title: `Order Recent ${stamp}` });
     const newestDraft = await createSession(page, { workspaceId, title: `Order Newest ${stamp}` });
     await startSession(page, recentlyRun);
@@ -1195,14 +1195,44 @@ test.describe('Cubby MVP', () => {
     await page.goto('/');
 
     const group = page.getByTestId('workspace-group').filter({ hasText: workspaceId });
-    await selectSessionTab(group, active.title);
 
-    const orderedText = await group
-      .getByTestId('session-item')
-      .evaluateAll((items) => items.map((item) => item.textContent ?? ''));
-    expect(orderedText[0]).toContain(active.title);
-    expect(orderedText[1]).toContain(recentlyRun.title);
-    expect(orderedText[2]).toContain(newestDraft.title);
+    await expect(
+      group.getByTestId('session-item').filter({ hasText: olderDraft.title }),
+    ).toHaveCount(1);
+    await expect(
+      group.getByTestId('session-item').filter({ hasText: recentlyRun.title }),
+    ).toHaveCount(1);
+    await expect(
+      group.getByTestId('session-item').filter({ hasText: newestDraft.title }),
+    ).toHaveCount(1);
+
+    const normalizeOrder = (texts: string[]) =>
+      texts.map((text) => {
+        if (text.includes(olderDraft.title)) return olderDraft.title;
+        if (text.includes(recentlyRun.title)) return recentlyRun.title;
+        if (text.includes(newestDraft.title)) return newestDraft.title;
+        return text;
+      });
+    const orderedTitles = async () => {
+      const rowTexts = await group
+        .getByTestId('session-item')
+        .evaluateAll((items) => items.map((item) => item.textContent ?? ''));
+      return normalizeOrder(rowTexts);
+    };
+
+    const initialOrder = await orderedTitles();
+
+    await selectSessionTab(group, olderDraft.title);
+    await assertActiveDetail(page, { title: olderDraft.title, status: 'draft', action: 'Start' });
+    expect(await orderedTitles()).toEqual(initialOrder);
+
+    await selectSessionTab(group, newestDraft.title);
+    await assertActiveDetail(page, {
+      title: newestDraft.title,
+      status: 'draft',
+      action: 'Start',
+    });
+    expect(await orderedTitles()).toEqual(initialOrder);
   });
 
   test('session tabs can be renamed and persist after reload', async ({ page }) => {

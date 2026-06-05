@@ -185,9 +185,9 @@ export function SessionList({
     () =>
       groupSessions(filteredSessions).map((group) => ({
         ...group,
-        sessions: sortSessionsForWorkspace(group.sessions, currentId),
+        sessions: sortSessionsForWorkspace(group.sessions),
       })),
-    [currentId, filteredSessions],
+    [filteredSessions],
   );
   const [collapsedWorkspaces, setCollapsedWorkspaces] = useState<Set<string>>(() => new Set());
   const [openMoreWorkspace, setOpenMoreWorkspace] = useState<string | null>(null);
