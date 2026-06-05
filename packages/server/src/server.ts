@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import type { WSRequest } from '@cubby/core';
+import { WS_EVENTS, type WSRequest } from '@cubby/core';
 import fastifyCors from '@fastify/cors';
 import fastifyStatic from '@fastify/static';
 import fastifyWebsocket from '@fastify/websocket';
@@ -66,7 +66,14 @@ export async function createServer(port = 6300) {
   });
 
   // HTTP routes
-  registerRoutes(app, sessionManager);
+  registerRoutes(app, sessionManager, {
+    onSessionUpdated: (session) => {
+      hub.broadcastToAll({ evt: WS_EVENTS.SESSION_UPDATED, data: session });
+    },
+    onSessionDeleted: (sessionId) => {
+      hub.broadcastToAll({ evt: WS_EVENTS.SESSION_DELETED, data: { sessionId } });
+    },
+  });
   app.get('/healthz', async () => ({ status: 'ok' }));
 
   // WebSocket

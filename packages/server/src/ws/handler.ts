@@ -126,9 +126,24 @@ export class WSCommandHandler {
 
   private sessionRename(req: WSRequest): WSResponse {
     const { sessionId, title } = req.args as { sessionId: string; title: string };
-    const session = this.sessionManager.renameSession(sessionId, title);
-    this.hub.broadcastToAll({ evt: WS_EVENTS.SESSION_UPDATED, data: session });
-    return { id: req.id, ok: true, data: session };
+    if (typeof title !== 'string' || !title.trim()) {
+      return {
+        id: req.id,
+        ok: false,
+        error: { code: 'BAD_REQUEST', message: 'Session title is required' },
+      };
+    }
+
+    try {
+      const session = this.sessionManager.renameSession(sessionId, title);
+      this.hub.broadcastToAll({ evt: WS_EVENTS.SESSION_UPDATED, data: session });
+      return { id: req.id, ok: true, data: session };
+    } catch (err) {
+      if (isSessionNotFound(err)) {
+        return { id: req.id, ok: false, error: { code: 'NOT_FOUND', message: 'Session not found' } };
+      }
+      throw err;
+    }
   }
 
   private async sessionDelete(req: WSRequest): Promise<WSResponse> {
@@ -225,6 +240,10 @@ function terminalSizeFromArgs(cols: unknown, rows: unknown): { cols: number; row
     cols: normalizeTerminalDimension(cols, 80, 20, 500),
     rows: normalizeTerminalDimension(rows, 24, 5, 200),
   };
+}
+
+function isSessionNotFound(err: unknown): boolean {
+  return err instanceof Error && err.message === 'Session not found';
 }
 
 function normalizeTerminalDimension(

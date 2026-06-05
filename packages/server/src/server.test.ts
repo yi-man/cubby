@@ -2,9 +2,13 @@ import { type ChildProcess, spawn } from 'node:child_process';
 import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
+import { WS_EVENTS } from '@cubby/core';
+import Fastify from 'fastify';
 import { afterEach, describe, expect, it } from 'vitest';
 import { Database } from './db/index.js';
+import { registerRoutes } from './http/routes.js';
 import { createServer } from './server.js';
+import { SessionManager } from './session/manager.js';
 import { SessionStore } from './session/store.js';
 
 interface SessionFixture {
@@ -171,6 +175,40 @@ describe('createServer', () => {
     expect(getResponse.json()).toMatchObject({ id: session.id, title: 'Customer rollout' });
   });
 
+  it('broadcasts a session update when HTTP PATCH callbacks are passed', async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'cubby-routes-'));
+    dataDirs.push(dataDir);
+    const db = new Database(join(dataDir, 'cubby.db'));
+    const manager = new SessionManager(new SessionStore(db));
+    const clientMessages: unknown[] = [];
+    const app = Fastify();
+    registerRoutes(app, manager, {
+      onSessionUpdated: (session) => {
+        clientMessages.push({ evt: WS_EVENTS.SESSION_UPDATED, data: session });
+      },
+    });
+    const session = manager.createSession({ workspaceId: '/tmp', provider: 'claude-code' });
+
+    try {
+      const renameResponse = await app.inject({
+        method: 'PATCH',
+        url: `/api/sessions/${session.id}`,
+        payload: { title: 'Broadcast title' },
+      });
+
+      expect(renameResponse.statusCode).toBe(200);
+      expect(clientMessages).toEqual([
+        {
+          evt: WS_EVENTS.SESSION_UPDATED,
+          data: expect.objectContaining({ id: session.id, title: 'Broadcast title' }),
+        },
+      ]);
+    } finally {
+      await app.close();
+      db.close();
+    }
+  });
+
   it('returns 400 when renaming a session to an empty title through the HTTP API', async () => {
     const { app } = await createServer(0);
     const createResponse = await app.inject({
@@ -204,12 +242,52 @@ describe('createServer', () => {
       method: 'DELETE',
       url: `/api/sessions/${session.id}`,
     });
-    const getResponse = await app.inject({ method: 'GET', url: `/api/sessions/${session.id}` });
+    const listResponse = await app.inject({ method: 'GET', url: '/api/sessions' });
     await app.close();
 
     expect(deleteResponse.statusCode).toBe(200);
     expect(deleteResponse.json()).toEqual({ ok: true, sessionId: session.id });
-    expect(getResponse.json()).toEqual({ error: 'Not found' });
+    const listedSessionIds = listResponse
+      .json()
+      .map((listedSession: SessionFixture) => listedSession.id);
+    expect(listedSessionIds).not.toContain(session.id);
+  });
+
+  it('broadcasts a session deletion when HTTP DELETE callbacks are passed', async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'cubby-routes-'));
+    dataDirs.push(dataDir);
+    const db = new Database(join(dataDir, 'cubby.db'));
+    const manager = new SessionManager(new SessionStore(db));
+    const clientMessages: unknown[] = [];
+    const app = Fastify();
+    registerRoutes(app, manager, {
+      onSessionDeleted: (sessionId) => {
+        clientMessages.push({ evt: WS_EVENTS.SESSION_DELETED, data: { sessionId } });
+      },
+    });
+    const session = manager.createSession({
+      workspaceId: '/tmp',
+      provider: 'claude-code',
+      title: 'Delete me',
+    });
+
+    try {
+      const deleteResponse = await app.inject({
+        method: 'DELETE',
+        url: `/api/sessions/${session.id}`,
+      });
+
+      expect(deleteResponse.statusCode).toBe(200);
+      expect(clientMessages).toEqual([
+        {
+          evt: WS_EVENTS.SESSION_DELETED,
+          data: { sessionId: session.id },
+        },
+      ]);
+    } finally {
+      await app.close();
+      db.close();
+    }
   });
 
   it('returns 404 when deleting a missing session through the HTTP API', async () => {

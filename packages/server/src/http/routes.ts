@@ -1,10 +1,20 @@
 import { readdir, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
+import type { Session } from '@cubby/core';
 import type { FastifyInstance, FastifyReply } from 'fastify';
 import type { SessionManager } from '../session/manager.js';
 
-export function registerRoutes(app: FastifyInstance, sessionManager: SessionManager) {
+export interface SessionRouteCallbacks {
+  onSessionUpdated?: (session: Session) => void;
+  onSessionDeleted?: (sessionId: string) => void;
+}
+
+export function registerRoutes(
+  app: FastifyInstance,
+  sessionManager: SessionManager,
+  callbacks: SessionRouteCallbacks = {},
+) {
   app.get('/api/browse', async (request) => {
     const { path } = request.query as { path?: string };
     const target = resolve(path || homedir());
@@ -57,7 +67,9 @@ export function registerRoutes(app: FastifyInstance, sessionManager: SessionMana
     }
 
     try {
-      return sessionManager.renameSession(id, body.title);
+      const session = sessionManager.renameSession(id, body.title);
+      callbacks.onSessionUpdated?.(session);
+      return session;
     } catch (err) {
       if (isSessionNotFound(err)) {
         return sendNotFound(reply);
@@ -72,6 +84,7 @@ export function registerRoutes(app: FastifyInstance, sessionManager: SessionMana
     if (!deleted) {
       return sendNotFound(reply);
     }
+    callbacks.onSessionDeleted?.(id);
     return { ok: true, sessionId: id };
   });
 

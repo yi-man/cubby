@@ -68,6 +68,40 @@ describe('WSCommandHandler', () => {
     ]);
   });
 
+  it('returns not found when renaming a missing session through websocket command', async () => {
+    const response = await handler.handle({} as WebSocket, {
+      id: 'rename-missing',
+      cmd: WS_COMMANDS.SESSION_RENAME,
+      args: { sessionId: 'missing-session', title: 'New title' },
+    });
+
+    expect(response).toEqual({
+      id: 'rename-missing',
+      ok: false,
+      error: { code: 'NOT_FOUND', message: 'Session not found' },
+    });
+  });
+
+  it('returns bad request when renaming a session to an empty title through websocket command', async () => {
+    const session = manager.createSession({
+      workspaceId: '/tmp',
+      provider: 'mock',
+      title: 'Draft',
+    });
+
+    const response = await handler.handle({} as WebSocket, {
+      id: 'rename-empty',
+      cmd: WS_COMMANDS.SESSION_RENAME,
+      args: { sessionId: session.id, title: '   ' },
+    });
+
+    expect(response).toEqual({
+      id: 'rename-empty',
+      ok: false,
+      error: { code: 'BAD_REQUEST', message: 'Session title is required' },
+    });
+  });
+
   it('deletes a session through websocket command and broadcasts deletion', async () => {
     const session = manager.createSession({
       workspaceId: '/tmp',
