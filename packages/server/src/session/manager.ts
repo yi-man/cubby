@@ -29,6 +29,7 @@ export class SessionManager {
   private snapshotPersistTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private firstInputBuffers = new Map<string, string>();
   private sessionsNeedingResumeInputReset = new Set<string>();
+  private deletedSessionIds = new Set<string>();
   private statusListeners: ((sessionId: string, status: string) => void)[] = [];
   private readonly outputHistoryLimit: number;
 
@@ -54,7 +55,9 @@ export class SessionManager {
   }
 
   createSession(input: CreateSessionInput): Session {
-    return this.store.create(input);
+    const session = this.store.create(input);
+    this.deletedSessionIds.delete(session.id);
+    return session;
   }
 
   renameSession(sessionId: string, title: string): Session {
@@ -149,6 +152,8 @@ export class SessionManager {
         sessionId,
         { ...options, model: session.model ?? undefined, resume },
         (data) => {
+          if (this.deletedSessionIds.has(sessionId)) return;
+
           const chunk = outputBuffer.push(data);
           this.store.appendTerminalOutput(sessionId, chunk, this.outputHistoryLimit);
           this.writeSnapshotChunk(sessionId, chunk);
@@ -243,7 +248,15 @@ export class SessionManager {
       throw killError;
     }
 
-    return this.store.delete(sessionId);
+    this.deletedSessionIds.add(sessionId);
+    try {
+      const deleted = this.store.delete(sessionId);
+      if (!deleted) this.deletedSessionIds.delete(sessionId);
+      return deleted;
+    } catch (err) {
+      this.deletedSessionIds.delete(sessionId);
+      throw err;
+    }
   }
 
   async shutdown(): Promise<void> {

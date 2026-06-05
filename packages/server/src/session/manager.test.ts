@@ -172,6 +172,40 @@ describe('SessionManager', () => {
     expect(deleteSession).not.toHaveBeenCalled();
   });
 
+  it('ignores late output after a session is deleted', async () => {
+    let capturedOutput: ((data: string) => void) | undefined;
+    const provider: AgentProvider = {
+      name: 'late-output-after-delete',
+      async spawn(
+        _sessionId: string,
+        _options: SpawnOptions,
+        onOutput: (data: string) => void = () => {},
+      ) {
+        capturedOutput = onOutput;
+        return {
+          pid: 32_002,
+          onData: (_callback) => {},
+          onExit: (_callback) => {},
+          write: () => {},
+          resize: () => {},
+          kill: () => {},
+        };
+      },
+      async kill() {},
+    };
+    manager.registerProvider(provider);
+    const session = manager.createSession({
+      workspaceId: '/tmp',
+      provider: 'late-output-after-delete',
+    });
+    await manager.startSession(session.id, { cwd: '/tmp', cols: 80, rows: 24 });
+
+    await manager.deleteSession(session.id);
+
+    expect(() => capturedOutput?.('late output')).not.toThrow();
+    expect(manager.getOutputHistory(session.id)).toEqual([]);
+  });
+
   it('starts a session', async () => {
     const outputs: string[] = [];
     const session = manager.createSession({ workspaceId: '/tmp', provider: 'mock' });
