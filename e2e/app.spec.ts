@@ -381,6 +381,9 @@ test.describe('Cubby MVP', () => {
     expect(Number.parseFloat(styles.paddingLeft)).toBeGreaterThanOrEqual(12);
     expect(styles.terminalColor).toBe('rgb(255, 255, 255)');
     expect(styles.titleColor).toBe('rgb(255, 255, 255)');
+
+    await page.getByRole('button', { name: 'Stop', exact: true }).click();
+    await assertActiveDetail(page, { title: session.title, status: 'ended', action: 'Resume' });
   });
 
   test('sidebar is expanded by default on desktop and remembers user collapse state', async ({

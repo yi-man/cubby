@@ -192,6 +192,13 @@ export function SessionView({
     return queuedReset;
   }, []);
 
+  const scrollTerminalToBottomAfterLayout = useCallback(() => {
+    termRef.current?.scrollToBottom();
+    window.requestAnimationFrame(() => {
+      termRef.current?.scrollToBottom();
+    });
+  }, []);
+
   const flushPendingLiveChunks = useCallback(
     async (generation: number) => {
       const chunks = filterRenderableLiveChunks(
@@ -431,7 +438,7 @@ export function SessionView({
           if (!written) return;
         }
         if (cancelled || replayGenerationRef.current !== replayGeneration) return;
-        termRef.current?.scrollToBottom();
+        scrollTerminalToBottomAfterLayout();
         setReplayState({
           loaded: true,
           hasHistory: replayChunks.some((chunk) => chunk.length > 0),
@@ -458,6 +465,7 @@ export function SessionView({
     enqueueWriteStringForGeneration,
     enqueueResetForGeneration,
     blockRecovery,
+    scrollTerminalToBottomAfterLayout,
   ]);
 
   useEffect(() => {
