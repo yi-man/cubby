@@ -176,6 +176,49 @@ async function installFinishSoundRecorder(page: Page): Promise<void> {
   });
 }
 
+async function installBrowserNotificationRecorder(page: Page): Promise<void> {
+  await page.addInitScript(() => {
+    const notificationWindow = window as typeof window & {
+      __notificationPermission?: NotificationPermission;
+      __notificationPermissionRequests?: number;
+      __notifications?: Array<{ title: string; body?: string; tag?: string }>;
+    };
+    notificationWindow.__notificationPermission = 'default';
+    notificationWindow.__notificationPermissionRequests = 0;
+    notificationWindow.__notifications = [];
+
+    class RecordedNotification {
+      static get permission(): NotificationPermission {
+        return notificationWindow.__notificationPermission ?? 'default';
+      }
+
+      static requestPermission(): Promise<NotificationPermission> {
+        notificationWindow.__notificationPermissionRequests =
+          (notificationWindow.__notificationPermissionRequests ?? 0) + 1;
+        notificationWindow.__notificationPermission = 'granted';
+        return Promise.resolve('granted');
+      }
+
+      onclick: ((this: Notification, ev: Event) => unknown) | null = null;
+
+      constructor(title: string, options?: NotificationOptions) {
+        notificationWindow.__notifications?.push({
+          title,
+          body: options?.body,
+          tag: options?.tag,
+        });
+      }
+
+      close() {}
+    }
+
+    Object.defineProperty(window, 'Notification', {
+      configurable: true,
+      value: RecordedNotification as unknown as typeof Notification,
+    });
+  });
+}
+
 async function sendTerminalInput(page: Page, sessionId: string, data: string): Promise<void> {
   const id = `terminal-input-${Date.now()}`;
   await expect
@@ -1415,6 +1458,76 @@ test.describe('Cubby MVP', () => {
       )
       .toBe(1);
     await assertActiveDetail(page, { title: session.title, status: 'running', action: 'Stop' });
+  });
+
+  test('completed prompts request browser notifications and stay marked until viewed', async ({
+    page,
+  }) => {
+    test.skip(
+      !MOCK_CLAUDE_PROVIDER_ENABLED,
+      'Requires CUBBY_MOCK_CLAUDE_PROVIDER=1 for deterministic terminal output',
+    );
+
+    await installFinishSoundRecorder(page);
+    await installBrowserNotificationRecorder(page);
+
+    const stamp = Date.now();
+    const workspaceId = `/tmp/cubby-prompt-notification-${stamp}`;
+    const running = await createSession(page, {
+      workspaceId,
+      title: `Prompt Notification ${stamp}`,
+    });
+    const other = await createSession(page, {
+      workspaceId,
+      title: `Other Session ${stamp}`,
+    });
+
+    await page.goto('/');
+
+    const group = page.getByTestId('workspace-group').filter({ hasText: workspaceId });
+    const runningRow = group.getByTestId('session-item').filter({ hasText: running.title });
+    await selectSessionTab(group, running.title);
+    await page.getByRole('button', { name: 'Start', exact: true }).click();
+    await assertActiveDetail(page, { title: running.title, status: 'running', action: 'Stop' });
+    await expect
+      .poll(() => terminalText(page), { timeout: 10000 })
+      .toContain('Mock Claude Code ready');
+
+    await activeTerminal(page).click();
+    await page.keyboard.type(`Notify me ${stamp}`);
+    await page.keyboard.press('Enter');
+
+    await expect
+      .poll(
+        () =>
+          page.evaluate(
+            () =>
+              (window as typeof window & { __notificationPermissionRequests?: number })
+                .__notificationPermissionRequests ?? 0,
+          ),
+        { timeout: 10000 },
+      )
+      .toBe(1);
+
+    await selectSessionTab(group, other.title);
+    await assertActiveDetail(page, { title: other.title, status: 'draft', action: 'Start' });
+
+    await expect
+      .poll(
+        () =>
+          page.evaluate(
+            () =>
+              (window as typeof window & { __notifications?: unknown[] }).__notifications?.length ??
+              0,
+          ),
+        { timeout: 10000 },
+      )
+      .toBe(1);
+    await expect(runningRow.getByTestId('session-completion-status')).toHaveText('Done');
+
+    await selectSessionTab(group, running.title);
+    await expect(runningRow.getByTestId('session-completion-status')).toHaveCount(0);
+    await assertActiveDetail(page, { title: running.title, status: 'running', action: 'Stop' });
   });
 
   test('ended session without captured history shows a visible empty state', async ({ page }) => {

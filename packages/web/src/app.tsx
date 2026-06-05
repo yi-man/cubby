@@ -209,6 +209,10 @@ function playSessionFinishedSound(): void {
   }
 }
 
+function canUseBrowserNotifications(): boolean {
+  return typeof window !== 'undefined' && 'Notification' in window;
+}
+
 export function App() {
   const { send, request, onMessage, connected } = useWebSocket(getWsUrl());
   const [sessions, setSessions] = useAtom(sessionsAtom);
@@ -226,8 +230,13 @@ export function App() {
   const [sessionSearchQuery, setSessionSearchQuery] = useState('');
   const [mountedSessionIds, setMountedSessionIds] = useState<Set<string>>(() => new Set());
   const [executingSessionIds, setExecutingSessionIds] = useState<Set<string>>(() => new Set());
+  const [completedPromptSessionIds, setCompletedPromptSessionIds] = useState<Set<string>>(
+    () => new Set(),
+  );
   const currentIdRef = useRef(currentId);
+  const sessionByIdRef = useRef<Map<string, Session>>(new Map());
   const previousSessionStatusesRef = useRef<Map<string, SessionStatus> | null>(null);
+  const notificationPermissionRequestRef = useRef<Promise<NotificationPermission> | null>(null);
   const promptActivityRef = useRef<Map<string, { generation: number; outputSeen: boolean }>>(
     new Map(),
   );
@@ -272,6 +281,68 @@ export function App() {
     currentIdRef.current = currentId;
   }, [currentId]);
 
+  useEffect(() => {
+    sessionByIdRef.current = sessionById;
+  }, [sessionById]);
+
+  const clearPromptCompletionNotice = useCallback((sessionId: string) => {
+    setCompletedPromptSessionIds((prev) => {
+      if (!prev.has(sessionId)) return prev;
+      const next = new Set(prev);
+      next.delete(sessionId);
+      return next;
+    });
+  }, []);
+
+  const requestPromptNotificationPermission =
+    useCallback((): Promise<NotificationPermission> | null => {
+      if (!canUseBrowserNotifications()) return null;
+      if (window.Notification.permission === 'granted') return Promise.resolve('granted');
+      if (window.Notification.permission !== 'default') {
+        return Promise.resolve(window.Notification.permission);
+      }
+
+      const existing = notificationPermissionRequestRef.current;
+      if (existing) return existing;
+
+      const request = window.Notification.requestPermission()
+        .catch(() => 'denied' as NotificationPermission)
+        .finally(() => {
+          notificationPermissionRequestRef.current = null;
+        });
+      notificationPermissionRequestRef.current = request;
+      return request;
+    }, []);
+
+  const showPromptCompletionNotification = useCallback(
+    (sessionId: string): boolean => {
+      if (!canUseBrowserNotifications() || window.Notification.permission !== 'granted') {
+        return false;
+      }
+
+      try {
+        const session = sessionByIdRef.current.get(sessionId) ?? null;
+        const notification = new window.Notification('Cubby prompt done', {
+          body: `${sessionTitle(session)} finished running.`,
+          tag: `cubby-prompt-${sessionId}`,
+        });
+        notification.onclick = () => {
+          window.focus();
+          currentIdRef.current = sessionId;
+          setCurrentId(sessionId);
+          persistCurrentSessionId(sessionId);
+          clearPromptCompletionNotice(sessionId);
+          notification.close();
+        };
+        return true;
+      } catch {
+        // Browser notification failures should not affect session handling.
+        return false;
+      }
+    },
+    [clearPromptCompletionNotice, setCurrentId],
+  );
+
   const clearPromptActivity = useCallback((sessionId: string) => {
     const timer = promptCompletionTimersRef.current.get(sessionId);
     if (timer !== undefined) window.clearTimeout(timer);
@@ -290,25 +361,45 @@ export function App() {
       const activity = promptActivityRef.current.get(sessionId);
       if (!activity || activity.generation !== generation || !activity.outputSeen) return;
       clearPromptActivity(sessionId);
+      if (currentIdRef.current !== sessionId || document.visibilityState !== 'visible') {
+        setCompletedPromptSessionIds((prev) => {
+          if (prev.has(sessionId)) return prev;
+          const next = new Set(prev);
+          next.add(sessionId);
+          return next;
+        });
+      }
       playSessionFinishedSound();
+      const notificationShown = showPromptCompletionNotification(sessionId);
+      const pendingPermissionRequest = notificationPermissionRequestRef.current;
+      if (!notificationShown && pendingPermissionRequest) {
+        void pendingPermissionRequest.then((permission) => {
+          if (permission === 'granted') showPromptCompletionNotification(sessionId);
+        });
+      }
     },
-    [clearPromptActivity],
+    [clearPromptActivity, showPromptCompletionNotification],
   );
 
-  const handlePromptSubmitted = useCallback((sessionId: string) => {
-    const current = promptActivityRef.current.get(sessionId);
-    const generation = (current?.generation ?? 0) + 1;
-    promptActivityRef.current.set(sessionId, { generation, outputSeen: false });
-    const timer = promptCompletionTimersRef.current.get(sessionId);
-    if (timer !== undefined) window.clearTimeout(timer);
-    promptCompletionTimersRef.current.delete(sessionId);
-    setExecutingSessionIds((prev) => {
-      if (prev.has(sessionId)) return prev;
-      const next = new Set(prev);
-      next.add(sessionId);
-      return next;
-    });
-  }, []);
+  const handlePromptSubmitted = useCallback(
+    (sessionId: string) => {
+      const current = promptActivityRef.current.get(sessionId);
+      const generation = (current?.generation ?? 0) + 1;
+      clearPromptCompletionNotice(sessionId);
+      void requestPromptNotificationPermission();
+      promptActivityRef.current.set(sessionId, { generation, outputSeen: false });
+      const timer = promptCompletionTimersRef.current.get(sessionId);
+      if (timer !== undefined) window.clearTimeout(timer);
+      promptCompletionTimersRef.current.delete(sessionId);
+      setExecutingSessionIds((prev) => {
+        if (prev.has(sessionId)) return prev;
+        const next = new Set(prev);
+        next.add(sessionId);
+        return next;
+      });
+    },
+    [clearPromptCompletionNotice, requestPromptNotificationPermission],
+  );
 
   const handlePromptOutput = useCallback(
     (sessionId: string) => {
@@ -356,8 +447,9 @@ export function App() {
         return next;
       });
       clearPromptActivity(sessionId);
+      clearPromptCompletionNotice(sessionId);
     },
-    [clearPromptActivity, setCurrentId, setSessions],
+    [clearPromptActivity, clearPromptCompletionNotice, setCurrentId, setSessions],
   );
 
   const handleFullscreen = useCallback(() => {
@@ -484,6 +576,7 @@ export function App() {
         );
         if (msg.data.status === 'ended') {
           clearPromptActivity(msg.data.sessionId);
+          clearPromptCompletionNotice(msg.data.sessionId);
           send({ id: 'init', cmd: 'session.list' });
         }
       }
@@ -508,6 +601,7 @@ export function App() {
     currentId,
     applySessionDeleted,
     clearPromptActivity,
+    clearPromptCompletionNotice,
     handlePromptOutput,
   ]);
 
@@ -525,6 +619,21 @@ export function App() {
     }, 2000);
     return () => window.clearInterval(intervalId);
   }, [connected, pendingSession, sessions, send]);
+
+  useEffect(() => {
+    if (!currentId || document.visibilityState !== 'visible') return;
+    clearPromptCompletionNotice(currentId);
+  }, [clearPromptCompletionNotice, currentId]);
+
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (!currentIdRef.current || document.visibilityState !== 'visible') return;
+      clearPromptCompletionNotice(currentIdRef.current);
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
+  }, [clearPromptCompletionNotice]);
 
   useEffect(() => {
     window.localStorage.setItem(SIDEBAR_STATE_STORAGE_KEY, String(sidebarCollapsed));
@@ -583,10 +692,11 @@ export function App() {
       currentIdRef.current = id;
       setCurrentId(id);
       persistCurrentSessionId(id);
+      clearPromptCompletionNotice(id);
       setTerminalFocusRequest((request) => request + 1);
       if (mobileLayout) setSidebarCollapsed(true);
     },
-    [setCurrentId, mobileLayout],
+    [clearPromptCompletionNotice, setCurrentId, mobileLayout],
   );
 
   const handleRenameSession = useCallback(
@@ -781,6 +891,7 @@ export function App() {
                 onRename={handleRenameSession}
                 onDelete={handleDeleteSession}
                 executingSessionIds={executingSessionIds}
+                completedPromptSessionIds={completedPromptSessionIds}
               />
             </div>
           )}

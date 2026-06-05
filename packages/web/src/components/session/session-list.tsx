@@ -32,6 +32,7 @@ interface SessionListProps {
   onRename?: (id: string, title: string) => Promise<boolean>;
   onDelete?: (id: string) => Promise<boolean>;
   executingSessionIds?: Set<string>;
+  completedPromptSessionIds?: Set<string>;
 }
 
 const SIDEBAR_ICON_PROPS = { size: 16, strokeWidth: 2.2, 'aria-hidden': true } as const;
@@ -42,8 +43,9 @@ function isLiveStatus(status: Session['status']): boolean {
   return status === 'running' || status === 'starting';
 }
 
-function statusLabel(status: Session['status'], executing = false): string {
+function statusLabel(status: Session['status'], executing = false, completed = false): string {
   if (executing) return 'Executing';
+  if (completed) return 'Done';
   if (status === 'running') return 'Live';
   if (status === 'starting') return 'Starting';
   if (status === 'ended') return 'Closed';
@@ -51,7 +53,7 @@ function statusLabel(status: Session['status'], executing = false): string {
   return 'Ready';
 }
 
-function sessionTone(status: Session['status'], executing = false) {
+function sessionTone(status: Session['status'], executing = false, completed = false) {
   if (executing) {
     return {
       background: '#10242b',
@@ -60,6 +62,16 @@ function sessionTone(status: Session['status'], executing = false) {
       indicator: '#22c8f2',
       text: '#e7fbff',
       meta: '#88b9c5',
+    };
+  }
+  if (completed) {
+    return {
+      background: '#151f12',
+      border: '#34502d',
+      activeBorder: '#5d8d48',
+      indicator: '#98d36e',
+      text: '#ecf8e8',
+      meta: '#9fbe93',
     };
   }
   if (isLiveStatus(status)) {
@@ -162,6 +174,7 @@ export function SessionList({
   onRename,
   onDelete,
   executingSessionIds = new Set(),
+  completedPromptSessionIds = new Set(),
 }: SessionListProps) {
   const normalizedSearch = normalizeSearch(searchQuery);
   const filteredSessions = useMemo(
@@ -476,7 +489,8 @@ export function SessionList({
                     const active = session.id === currentId;
                     const liveSession = isLiveStatus(session.status);
                     const executing = liveSession && executingSessionIds.has(session.id);
-                    const tone = sessionTone(session.status, executing);
+                    const completed = completedPromptSessionIds.has(session.id);
+                    const tone = sessionTone(session.status, executing, completed);
                     const title = sessionTitle(session);
                     const editing = editingSessionId === session.id;
                     const actionsOpen = openActionsSessionId === session.id;
@@ -491,7 +505,7 @@ export function SessionList({
                           overflow: 'visible',
                           padding: '10px 10px 10px 13px',
                           cursor: 'pointer',
-                          background: active ? tone.background : '#141414',
+                          background: active || completed ? tone.background : '#141414',
                           borderRadius: '6px',
                           marginBottom: '7px',
                           border: `1px solid ${active ? tone.activeBorder : tone.border}`,
@@ -499,9 +513,10 @@ export function SessionList({
                           display: 'block',
                           width: '100%',
                           textAlign: 'left',
-                          boxShadow: active
-                            ? `inset 3px 0 0 ${tone.indicator}, inset 0 0 0 1px rgba(255,255,255,0.04)`
-                            : 'inset 3px 0 0 #2d2d2a',
+                          boxShadow:
+                            active || completed
+                              ? `inset 3px 0 0 ${tone.indicator}, inset 0 0 0 1px rgba(255,255,255,0.04)`
+                              : 'inset 3px 0 0 #2d2d2a',
                         }}
                       >
                         <button
@@ -526,9 +541,10 @@ export function SessionList({
                             position: 'relative',
                             zIndex: 2,
                             display: 'grid',
-                            gridTemplateColumns: executing
-                              ? 'minmax(0, 1fr) auto auto auto'
-                              : 'minmax(0, 1fr) auto auto',
+                            gridTemplateColumns:
+                              executing || completed
+                                ? 'minmax(0, 1fr) auto auto auto'
+                                : 'minmax(0, 1fr) auto auto',
                             gap: '8px',
                             alignItems: 'center',
                             fontWeight: 650,
@@ -619,7 +635,7 @@ export function SessionList({
                             className="session-status-dot"
                             data-live={liveSession ? 'true' : 'false'}
                             aria-hidden="true"
-                            title={statusLabel(session.status, executing)}
+                            title={statusLabel(session.status, executing, completed)}
                             style={{
                               width: '8px',
                               height: '8px',
@@ -627,9 +643,11 @@ export function SessionList({
                               background: tone.indicator,
                               boxShadow: executing
                                 ? '0 0 0 3px rgba(34, 200, 242, 0.13)'
-                                : liveSession
-                                  ? '0 0 0 3px rgba(143, 191, 115, 0.13)'
-                                  : 'none',
+                                : completed
+                                  ? '0 0 0 3px rgba(152, 211, 110, 0.13)'
+                                  : liveSession
+                                    ? '0 0 0 3px rgba(143, 191, 115, 0.13)'
+                                    : 'none',
                             }}
                           />
                           {executing && (
@@ -647,6 +665,23 @@ export function SessionList({
                               }}
                             >
                               Executing
+                            </span>
+                          )}
+                          {!executing && completed && (
+                            <span
+                              data-testid="session-completion-status"
+                              style={{
+                                border: '1px solid rgba(152, 211, 110, 0.38)',
+                                borderRadius: '999px',
+                                color: '#c8f6ad',
+                                fontSize: '10px',
+                                fontWeight: 800,
+                                lineHeight: 1,
+                                padding: '4px 6px',
+                                textTransform: 'uppercase',
+                              }}
+                            >
+                              Done
                             </span>
                           )}
                           {!editing && (
@@ -734,72 +769,71 @@ export function SessionList({
                             padding: '4px',
                           }}
                         >
-                          {hidden.map((session) => (
-                            <button
-                              type="button"
-                              key={session.id}
-                              aria-label={`Session ${sessionTitle(session)}`}
-                              data-testid="session-more-item"
-                              onClick={() => {
-                                setOpenMoreWorkspace(null);
-                                onSelect(session.id);
-                              }}
-                              style={{
-                                display: 'block',
-                                width: '100%',
-                                border: 'none',
-                                borderRadius: '4px',
-                                background: 'transparent',
-                                color: '#ffffff',
-                                cursor: 'pointer',
-                                padding: '7px 8px',
-                                textAlign: 'left',
-                              }}
-                            >
-                              <div
+                          {hidden.map((session) => {
+                            const liveSession = isLiveStatus(session.status);
+                            const executing = liveSession && executingSessionIds.has(session.id);
+                            const completed = completedPromptSessionIds.has(session.id);
+                            const tone = sessionTone(session.status, executing, completed);
+
+                            return (
+                              <button
+                                type="button"
+                                key={session.id}
+                                aria-label={`Session ${sessionTitle(session)}`}
+                                data-testid="session-more-item"
+                                onClick={() => {
+                                  setOpenMoreWorkspace(null);
+                                  onSelect(session.id);
+                                }}
                                 style={{
-                                  display: 'grid',
-                                  gridTemplateColumns: 'minmax(0, 1fr) auto',
-                                  gap: '8px',
-                                  alignItems: 'center',
-                                  fontSize: '12px',
-                                  fontWeight: 700,
-                                  overflow: 'hidden',
+                                  display: 'block',
+                                  width: '100%',
+                                  border: 'none',
+                                  borderRadius: '4px',
+                                  background: completed ? '#151f12' : 'transparent',
+                                  color: '#ffffff',
+                                  cursor: 'pointer',
+                                  padding: '7px 8px',
+                                  textAlign: 'left',
                                 }}
                               >
-                                <span
+                                <div
                                   style={{
-                                    minWidth: 0,
+                                    display: 'grid',
+                                    gridTemplateColumns: 'minmax(0, 1fr) auto',
+                                    gap: '8px',
+                                    alignItems: 'center',
+                                    fontSize: '12px',
+                                    fontWeight: 700,
                                     overflow: 'hidden',
-                                    textOverflow: 'ellipsis',
-                                    whiteSpace: 'nowrap',
                                   }}
                                 >
-                                  <SessionTitle session={session} fontSize="12px" />
-                                </span>
-                                <span
-                                  className="session-status-dot"
-                                  data-live={isLiveStatus(session.status) ? 'true' : 'false'}
-                                  aria-hidden="true"
-                                  title={statusLabel(
-                                    session.status,
-                                    isLiveStatus(session.status) &&
-                                      executingSessionIds.has(session.id),
-                                  )}
-                                  style={{
-                                    width: '7px',
-                                    height: '7px',
-                                    borderRadius: '999px',
-                                    background: sessionTone(
-                                      session.status,
-                                      isLiveStatus(session.status) &&
-                                        executingSessionIds.has(session.id),
-                                    ).indicator,
-                                  }}
-                                />
-                              </div>
-                            </button>
-                          ))}
+                                  <span
+                                    style={{
+                                      minWidth: 0,
+                                      overflow: 'hidden',
+                                      textOverflow: 'ellipsis',
+                                      whiteSpace: 'nowrap',
+                                    }}
+                                  >
+                                    <SessionTitle session={session} fontSize="12px" />
+                                  </span>
+                                  <span
+                                    className="session-status-dot"
+                                    data-live={liveSession ? 'true' : 'false'}
+                                    aria-hidden="true"
+                                    title={statusLabel(session.status, executing, completed)}
+                                    style={{
+                                      width: '7px',
+                                      height: '7px',
+                                      borderRadius: '999px',
+                                      background: tone.indicator,
+                                    }}
+                                  />
+                                </div>
+                              </button>
+                            );
+                          })}
                         </div>
                       )}
                     </div>
