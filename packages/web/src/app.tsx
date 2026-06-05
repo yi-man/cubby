@@ -546,7 +546,7 @@ export function App() {
         height: '100dvh',
         overflow: 'hidden',
         background: APP_SURFACE,
-        color: '#e7e4dd',
+        color: '#ffffff',
         fontFamily: 'system-ui, sans-serif',
       }}
     >

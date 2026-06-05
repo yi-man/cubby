@@ -290,6 +290,44 @@ test.describe('Cubby MVP', () => {
     expect(metrics.rootRect?.height).toBe(metrics.viewport.height);
   });
 
+  test('terminal frame uses padding and true white foreground text', async ({ page }) => {
+    const stamp = Date.now();
+    const workspaceId = `/tmp/cubby-terminal-frame-${stamp}`;
+    const session = await createSession(page, {
+      workspaceId,
+      title: `Terminal Frame ${stamp}`,
+    });
+
+    await page.goto('/');
+    const group = page.getByTestId('workspace-group').filter({ hasText: workspaceId });
+    await selectSessionTab(group, session.title);
+    await page.getByRole('button', { name: 'Start', exact: true }).click();
+    await assertActiveDetail(page, { title: session.title, status: 'running', action: 'Stop' });
+    await expect(activeTerminal(page)).toBeVisible({ timeout: 5000 });
+
+    const frame = activeSessionView(page).getByTestId('terminal-frame');
+    await expect(frame).toBeVisible();
+
+    const styles = await frame.evaluate((element) => {
+      const computed = getComputedStyle(element);
+      const xterm = element.querySelector('.xterm');
+      const title = document.querySelector(
+        '[data-testid="session-view"][data-active="true"] [data-testid="session-title"]',
+      );
+      return {
+        paddingRight: computed.paddingRight,
+        paddingLeft: computed.paddingLeft,
+        terminalColor: xterm ? getComputedStyle(xterm).color : null,
+        titleColor: title ? getComputedStyle(title).color : null,
+      };
+    });
+
+    expect(Number.parseFloat(styles.paddingRight)).toBeGreaterThanOrEqual(12);
+    expect(Number.parseFloat(styles.paddingLeft)).toBeGreaterThanOrEqual(12);
+    expect(styles.terminalColor).toBe('rgb(255, 255, 255)');
+    expect(styles.titleColor).toBe('rgb(255, 255, 255)');
+  });
+
   test('sidebar is expanded by default on desktop and remembers user collapse state', async ({
     page,
   }) => {

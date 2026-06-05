@@ -93,7 +93,7 @@ function EmptyEndedHistory() {
       }}
     >
       <div>
-        <div style={{ color: '#dedbd2', fontSize: '14px', fontWeight: 700 }}>
+        <div style={{ color: '#ffffff', fontSize: '14px', fontWeight: 700 }}>
           No terminal history captured
         </div>
         <div style={{ marginTop: '6px', fontSize: '12px' }}>Session ended</div>
@@ -625,7 +625,7 @@ export function SessionView({
             overflow: 'hidden',
             textOverflow: 'ellipsis',
             whiteSpace: 'nowrap',
-            color: '#d8d6cf',
+            color: '#ffffff',
             fontSize: '13px',
             fontWeight: 650,
           }}
@@ -718,7 +718,7 @@ export function SessionView({
                 border: '1px solid #303030',
                 borderRadius: '6px',
                 background: '#171717',
-                color: '#dedbd2',
+                color: '#ffffff',
                 cursor: 'pointer',
                 fontWeight: 650,
               }}
@@ -729,12 +729,14 @@ export function SessionView({
         </div>
       </div>
       <div
+        data-testid="terminal-frame"
         style={{
           flex: 1,
           minHeight: 0,
           overflow: 'hidden',
           position: 'relative',
           background: '#050606',
+          padding: '12px 14px 14px',
         }}
       >
         <TerminalView
@@ -745,7 +747,17 @@ export function SessionView({
           onResize={handleResize}
           onReady={() => setTerminalReady(true)}
         />
-        {showEmptyEndedHistory && <EmptyEndedHistory />}
+        {showEmptyEndedHistory && (
+          <div
+            style={{
+              position: 'absolute',
+              inset: '12px 14px 14px',
+              pointerEvents: 'none',
+            }}
+          >
+            <EmptyEndedHistory />
+          </div>
+        )}
         {showRecoveryError && (
           <div
             data-testid="terminal-recovery-error"
@@ -757,7 +769,7 @@ export function SessionView({
               justifyContent: 'center',
               padding: '24px',
               background: 'rgba(5, 6, 6, 0.92)',
-              color: '#dedbd2',
+              color: '#ffffff',
               textAlign: 'center',
               pointerEvents: 'none',
             }}

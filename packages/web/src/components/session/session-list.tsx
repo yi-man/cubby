@@ -66,7 +66,7 @@ function sessionTone(status: Session['status']) {
       border: '#3b3b3b',
       activeBorder: '#5b5b57',
       indicator: '#989890',
-      text: '#dedbd2',
+      text: '#ffffff',
       meta: '#8e8d86',
     };
   }
@@ -287,7 +287,7 @@ export function SessionList({
               border: 'none',
               outline: 'none',
               background: 'transparent',
-              color: '#d8d8d4',
+              color: '#ffffff',
               font: 'inherit',
               fontSize: '12px',
             }}
@@ -433,7 +433,7 @@ export function SessionList({
                         display: 'block',
                         fontSize: '12px',
                         fontWeight: 650,
-                        color: workspaceActive ? '#d7d7d2' : '#a8a8a1',
+                        color: workspaceActive ? '#ffffff' : '#a8a8a1',
                         overflow: 'hidden',
                         textOverflow: 'ellipsis',
                         whiteSpace: 'nowrap',
@@ -715,7 +715,7 @@ export function SessionList({
                                 border: 'none',
                                 borderRadius: '4px',
                                 background: 'transparent',
-                                color: '#dedbd2',
+                                color: '#ffffff',
                                 cursor: 'pointer',
                                 padding: '7px 8px',
                                 textAlign: 'left',

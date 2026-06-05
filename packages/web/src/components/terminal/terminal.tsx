@@ -114,7 +114,7 @@ export const TerminalView = forwardRef<TerminalHandle, TerminalViewProps>(functi
       fontFamily: '"SFMono-Regular", "SF Mono", Menlo, Consolas, monospace',
       theme: {
         background: '#050606',
-        foreground: '#e6e2da',
+        foreground: '#ffffff',
         cursor: '#22c8f2',
         selectionBackground: '#263238',
         black: '#050606',
@@ -131,7 +131,7 @@ export const TerminalView = forwardRef<TerminalHandle, TerminalViewProps>(functi
         brightMagenta: '#d7b8ff',
         cyan: '#58d7f5',
         brightCyan: '#78e4ff',
-        white: '#dedbd2',
+        white: '#ffffff',
         brightWhite: '#ffffff',
       },
     });
