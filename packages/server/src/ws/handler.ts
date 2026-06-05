@@ -140,7 +140,11 @@ export class WSCommandHandler {
       return { id: req.id, ok: true, data: session };
     } catch (err) {
       if (isSessionNotFound(err)) {
-        return { id: req.id, ok: false, error: { code: 'NOT_FOUND', message: 'Session not found' } };
+        return {
+          id: req.id,
+          ok: false,
+          error: { code: 'NOT_FOUND', message: 'Session not found' },
+        };
       }
       throw err;
     }

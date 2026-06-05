@@ -92,9 +92,9 @@ describe('SessionStore', () => {
     expect(store.getTerminalOutputHistory(session.id)).toEqual([]);
     expect(store.getTerminalSnapshot(session.id)).toBeNull();
     expect(
-      db.prepare('SELECT COUNT(*) AS count FROM terminals WHERE session_id = ?').get(
-        session.id,
-      ) as Record<string, number>,
+      db
+        .prepare('SELECT COUNT(*) AS count FROM terminals WHERE session_id = ?')
+        .get(session.id) as Record<string, number>,
     ).toEqual({ count: 0 });
     expect(store.delete(session.id)).toBe(false);
   });

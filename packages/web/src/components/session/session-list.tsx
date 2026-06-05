@@ -10,7 +10,7 @@ import {
   Trash2,
   X,
 } from 'lucide-react';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 
 import {
   groupSessions,
@@ -172,6 +172,7 @@ export function SessionList({
   const [editingTitle, setEditingTitle] = useState('');
   const [openActionsSessionId, setOpenActionsSessionId] = useState<string | null>(null);
   const [busySessionId, setBusySessionId] = useState<string | null>(null);
+  const renameInputRef = useRef<HTMLInputElement | null>(null);
 
   const beginRename = (session: Session) => {
     setOpenActionsSessionId(null);
@@ -229,6 +230,12 @@ export function SessionList({
       return next;
     });
   }, [currentId, sessions]);
+
+  useEffect(() => {
+    if (!editingSessionId) return;
+    renameInputRef.current?.focus();
+    renameInputRef.current?.select();
+  }, [editingSessionId]);
 
   return (
     <div
@@ -465,7 +472,6 @@ export function SessionList({
                       <div
                         key={session.id}
                         data-testid="session-item"
-                        onClick={() => onSelect(session.id)}
                         style={{
                           position: 'relative',
                           overflow: 'visible',
@@ -522,7 +528,6 @@ export function SessionList({
                                 event.stopPropagation();
                                 void submitRename(session.id);
                               }}
-                              onClick={(event) => event.stopPropagation()}
                               style={{
                                 display: 'grid',
                                 gridTemplateColumns: 'minmax(0, 1fr) 28px 28px',
@@ -533,10 +538,12 @@ export function SessionList({
                               }}
                             >
                               <input
+                                ref={renameInputRef}
                                 aria-label={`Rename ${title}`}
                                 value={editingTitle}
                                 disabled={busy}
                                 onChange={(event) => setEditingTitle(event.target.value)}
+                                onClick={(event) => event.stopPropagation()}
                                 onKeyDown={(event) => {
                                   if (event.key === 'Escape') {
                                     event.stopPropagation();
@@ -544,7 +551,6 @@ export function SessionList({
                                     setEditingTitle('');
                                   }
                                 }}
-                                autoFocus
                                 style={{
                                   minWidth: 0,
                                   height: '28px',
@@ -563,6 +569,7 @@ export function SessionList({
                                 className="session-icon-action"
                                 aria-label="Save session name"
                                 disabled={busy || editingTitle.trim().length === 0}
+                                onClick={(event) => event.stopPropagation()}
                               >
                                 <Check size={15} strokeWidth={2.2} aria-hidden="true" />
                               </button>
@@ -627,15 +634,14 @@ export function SessionList({
                           )}
                         </div>
                         {actionsOpen && (
-                          <div
-                            className="session-actions-menu"
-                            role="menu"
-                            onClick={(event) => event.stopPropagation()}
-                          >
+                          <div className="session-actions-menu" role="menu">
                             <button
                               type="button"
                               role="menuitem"
-                              onClick={() => beginRename(session)}
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                beginRename(session);
+                              }}
                             >
                               <Pencil size={14} strokeWidth={2.2} aria-hidden="true" />
                               Rename
@@ -643,7 +649,10 @@ export function SessionList({
                             <button
                               type="button"
                               role="menuitem"
-                              onClick={() => void confirmDelete(session)}
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                void confirmDelete(session);
+                              }}
                             >
                               <Trash2 size={14} strokeWidth={2.2} aria-hidden="true" />
                               Delete

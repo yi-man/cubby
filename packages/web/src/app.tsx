@@ -351,10 +351,7 @@ export function App() {
 
     for (const [sessionId, status] of currentStatuses) {
       const previousStatus = previousStatuses.get(sessionId);
-      if (
-        status === 'ended' &&
-        (previousStatus === 'starting' || previousStatus === 'running')
-      ) {
+      if (status === 'ended' && (previousStatus === 'starting' || previousStatus === 'running')) {
         playSessionFinishedSound();
       }
     }
@@ -697,8 +694,7 @@ export function App() {
           )}
         </div>
         {!sidebarCollapsed && !mobileLayout && (
-          <div
-            role="separator"
+          <hr
             aria-orientation="vertical"
             aria-label="Resize sidebar"
             aria-valuemin={MIN_DESKTOP_SIDEBAR_WIDTH}
