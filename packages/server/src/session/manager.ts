@@ -57,6 +57,19 @@ export class SessionManager {
     return this.store.create(input);
   }
 
+  renameSession(sessionId: string, title: string): Session {
+    const trimmedTitle = title.trim();
+    if (!trimmedTitle) throw new Error('Session title is required');
+
+    const session = this.store.get(sessionId);
+    if (!session) throw new Error('Session not found');
+
+    this.store.updateTitle(sessionId, trimmedTitle);
+    const updated = this.store.get(sessionId);
+    if (!updated) throw new Error('Session not found');
+    return updated;
+  }
+
   getSession(id: string): Session | null {
     return this.store.get(id);
   }
@@ -201,6 +214,36 @@ export class SessionManager {
     if (killError) {
       throw killError;
     }
+  }
+
+  async deleteSession(sessionId: string): Promise<boolean> {
+    const session = this.store.get(sessionId);
+    if (!session) return false;
+
+    const process = this.processes.get(sessionId);
+    let killError: unknown;
+    if (process) {
+      try {
+        process.kill();
+      } catch (err) {
+        killError = err;
+      } finally {
+        this.processes.delete(sessionId);
+      }
+    }
+
+    this.clearRuntimeState(sessionId);
+
+    if (isLiveSession(session.status)) {
+      this.store.updateStatus(sessionId, 'ended', process ? { pid: process.pid } : undefined);
+      this.notifyStatusChange(sessionId, 'ended');
+    }
+
+    if (killError) {
+      throw killError;
+    }
+
+    return this.store.delete(sessionId);
   }
 
   async shutdown(): Promise<void> {
@@ -417,6 +460,13 @@ export class SessionManager {
 
     this.firstInputBuffers.set(sessionId, buffer);
     return null;
+  }
+
+  private clearRuntimeState(sessionId: string): void {
+    this.disposeSnapshotBuffer(sessionId);
+    this.outputBuffers.delete(sessionId);
+    this.firstInputBuffers.delete(sessionId);
+    this.sessionsNeedingResumeInputReset.delete(sessionId);
   }
 
   private replaceSnapshotBuffer(sessionId: string, cols: number, rows: number): void {
