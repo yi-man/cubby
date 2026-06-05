@@ -121,6 +121,61 @@ async function wsCommandCount(page: Page, cmd: string): Promise<number> {
   }, cmd);
 }
 
+async function installFinishSoundRecorder(page: Page): Promise<void> {
+  await page.addInitScript(() => {
+    const audioWindow = window as typeof window & {
+      __finishSoundStarts?: number;
+      __finishSoundClosed?: number;
+      webkitAudioContext?: typeof AudioContext;
+    };
+    audioWindow.__finishSoundStarts = 0;
+    audioWindow.__finishSoundClosed = 0;
+    const ramp = {
+      setValueAtTime: () => {},
+      exponentialRampToValueAtTime: () => {},
+    };
+
+    class RecordedAudioContext {
+      currentTime = 0;
+      destination = {};
+
+      createOscillator() {
+        return {
+          type: 'sine',
+          frequency: ramp,
+          connect: () => {},
+          start: () => {
+            audioWindow.__finishSoundStarts = (audioWindow.__finishSoundStarts ?? 0) + 1;
+          },
+          stop: () => {},
+          onended: null,
+        };
+      }
+
+      createGain() {
+        return {
+          gain: ramp,
+          connect: () => {},
+        };
+      }
+
+      close() {
+        audioWindow.__finishSoundClosed = (audioWindow.__finishSoundClosed ?? 0) + 1;
+        return Promise.resolve();
+      }
+    }
+
+    Object.defineProperty(window, 'AudioContext', {
+      configurable: true,
+      value: RecordedAudioContext as unknown as typeof AudioContext,
+    });
+    Object.defineProperty(window, 'webkitAudioContext', {
+      configurable: true,
+      value: RecordedAudioContext as unknown as typeof AudioContext,
+    });
+  });
+}
+
 async function sendTerminalInput(page: Page, sessionId: string, data: string): Promise<void> {
   const id = `terminal-input-${Date.now()}`;
   await expect
@@ -361,6 +416,34 @@ test.describe('Cubby MVP', () => {
     await page.reload();
     await expect(sidebar).toHaveCSS('width', '240px');
     await expect(page.getByRole('button', { name: 'New Session' })).toBeVisible();
+  });
+
+  test('desktop sidebar width can be dragged and persists after reload', async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 720 });
+    await page.goto('/');
+    await page.evaluate(() => {
+      window.localStorage.removeItem('cubby.sidebarCollapsed');
+      window.localStorage.removeItem('cubby.sidebarWidth');
+    });
+    await page.reload();
+
+    const sidebar = page.getByTestId('sidebar-shell');
+    const resizeHandle = page.getByRole('separator', { name: 'Resize sidebar' });
+    await expect(sidebar).toHaveCSS('width', '240px');
+
+    const box = await resizeHandle.boundingBox();
+    expect(box).not.toBeNull();
+    if (!box) return;
+
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(320, box.y + box.height / 2);
+    await page.mouse.up();
+
+    await expect(sidebar).toHaveCSS('width', '320px');
+
+    await page.reload();
+    await expect(sidebar).toHaveCSS('width', '320px');
   });
 
   test('sidebar is collapsed by default on mobile without stored browser state', async ({
@@ -1028,6 +1111,123 @@ test.describe('Cubby MVP', () => {
     });
   });
 
+  test('session search matches provider text and workspace headers do not show counts', async ({
+    page,
+  }) => {
+    const stamp = Date.now();
+    const workspaceId = `/tmp/cubby-search-provider-${stamp}`;
+    const session = await createSession(page, {
+      workspaceId,
+      title: `Provider Search ${stamp}`,
+    });
+
+    await page.goto('/');
+
+    const group = page.getByTestId('workspace-group').filter({ hasText: workspaceId });
+    await expect(group.getByTestId('session-item').filter({ hasText: session.title })).toHaveCount(
+      1,
+    );
+    await expect(group.getByTestId('workspace-tab')).not.toContainText(/\d+\s+sessions?/i);
+
+    await page.getByLabel('Search sessions').fill('claude-code');
+
+    await expect(group.getByTestId('session-item').filter({ hasText: session.title })).toHaveCount(
+      1,
+    );
+    await expect(page.getByText('No matching sessions')).toHaveCount(0);
+  });
+
+  test('session tabs sort active first and then by recent activity', async ({ page }) => {
+    const stamp = Date.now();
+    const workspaceId = `/tmp/cubby-tab-order-${stamp}`;
+    const active = await createSession(page, { workspaceId, title: `Order Active ${stamp}` });
+    const recentlyRun = await createSession(page, { workspaceId, title: `Order Recent ${stamp}` });
+    const newestDraft = await createSession(page, { workspaceId, title: `Order Newest ${stamp}` });
+    await startSession(page, recentlyRun);
+    await stopSession(page, recentlyRun);
+
+    await page.goto('/');
+
+    const group = page.getByTestId('workspace-group').filter({ hasText: workspaceId });
+    await selectSessionTab(group, active.title);
+
+    const orderedText = await group
+      .getByTestId('session-item')
+      .evaluateAll((items) => items.map((item) => item.textContent ?? ''));
+    expect(orderedText[0]).toContain(active.title);
+    expect(orderedText[1]).toContain(recentlyRun.title);
+    expect(orderedText[2]).toContain(newestDraft.title);
+  });
+
+  test('session tabs can be renamed and persist after reload', async ({ page }) => {
+    const stamp = Date.now();
+    const workspaceId = `/tmp/cubby-rename-${stamp}`;
+    const session = await createSession(page, { workspaceId, title: `Rename Before ${stamp}` });
+    const renamedTitle = `Rename After ${stamp}`;
+
+    await page.goto('/');
+
+    const group = page.getByTestId('workspace-group').filter({ hasText: workspaceId });
+    await selectSessionTab(group, session.title);
+    const row = group.getByTestId('session-item').filter({ hasText: session.title });
+    await row.getByRole('button', { name: `Session actions for ${session.title}` }).click();
+    await page.getByRole('menuitem', { name: 'Rename' }).click();
+    await page.getByLabel(`Rename ${session.title}`).fill(renamedTitle);
+    await page.getByRole('button', { name: 'Save session name' }).click();
+
+    await assertActiveDetail(page, {
+      title: renamedTitle,
+      status: 'draft',
+      action: 'Start',
+    });
+    await expect(group.getByTestId('session-item').filter({ hasText: renamedTitle })).toHaveCount(
+      1,
+    );
+
+    await page.reload();
+    await assertActiveDetail(page, {
+      title: renamedTitle,
+      status: 'draft',
+      action: 'Start',
+    });
+    await expect(
+      page
+        .getByTestId('workspace-group')
+        .filter({ hasText: workspaceId })
+        .getByTestId('session-item')
+        .filter({ hasText: renamedTitle }),
+    ).toHaveCount(1);
+  });
+
+  test('deleting a running session asks for confirmation and removes it from the list', async ({
+    page,
+  }) => {
+    const stamp = Date.now();
+    const workspaceId = `/tmp/cubby-delete-running-${stamp}`;
+    const session = await createSession(page, { workspaceId, title: `Delete Running ${stamp}` });
+    await startSession(page, session);
+
+    await page.goto('/');
+
+    const group = page.getByTestId('workspace-group').filter({ hasText: workspaceId });
+    await selectSessionTab(group, session.title);
+    const row = group.getByTestId('session-item').filter({ hasText: session.title });
+    await row.getByRole('button', { name: `Session actions for ${session.title}` }).click();
+
+    page.once('dialog', async (dialog) => {
+      expect(dialog.message()).toContain(`Delete session "${session.title}"?`);
+      expect(dialog.message()).toContain('This will stop the running session.');
+      await dialog.accept();
+    });
+    await page.getByRole('menuitem', { name: 'Delete' }).click();
+
+    await expect(group.getByTestId('session-item').filter({ hasText: session.title })).toHaveCount(
+      0,
+    );
+    const getResponse = await page.request.get(`/api/sessions/${session.id}`);
+    expect(await getResponse.json()).toEqual({ error: 'Not found' });
+  });
+
   test('slash command session tabs render distinctly and select exactly', async ({ page }) => {
     const stamp = Date.now();
     const workspaceId = `/tmp/cubby-slash-tabs-${stamp}`;
@@ -1136,6 +1336,38 @@ test.describe('Cubby MVP', () => {
       status: 'running',
       action: 'Stop',
     });
+  });
+
+  test('ending a running session plays the finish sound once', async ({ page }) => {
+    test.skip(
+      !MOCK_CLAUDE_PROVIDER_ENABLED,
+      'Requires CUBBY_MOCK_CLAUDE_PROVIDER=1 for deterministic session stop handling',
+    );
+
+    await installFinishSoundRecorder(page);
+
+    const stamp = Date.now();
+    const workspaceId = `/tmp/cubby-finish-sound-${stamp}`;
+    const session = await createSession(page, { workspaceId, title: `Finish Sound ${stamp}` });
+
+    await page.goto('/');
+
+    const group = page.getByTestId('workspace-group').filter({ hasText: workspaceId });
+    await selectSessionTab(group, session.title);
+    await page.getByRole('button', { name: 'Start', exact: true }).click();
+    await assertActiveDetail(page, { title: session.title, status: 'running', action: 'Stop' });
+
+    await page.getByRole('button', { name: 'Stop', exact: true }).click();
+    await assertActiveDetail(page, { title: session.title, status: 'ended', action: 'Resume' });
+
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            (window as typeof window & { __finishSoundStarts?: number }).__finishSoundStarts ?? 0,
+        ),
+      )
+      .toBe(1);
   });
 
   test('ended session without captured history shows a visible empty state', async ({ page }) => {

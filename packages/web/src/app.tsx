@@ -67,7 +67,9 @@ function clampDesktopSidebarWidth(width: number): number {
 
 function initialDesktopSidebarWidth(): number {
   if (typeof window === 'undefined') return DEFAULT_DESKTOP_SIDEBAR_WIDTH;
-  const stored = Number(window.localStorage.getItem(SIDEBAR_WIDTH_STORAGE_KEY));
+  const storedValue = window.localStorage.getItem(SIDEBAR_WIDTH_STORAGE_KEY);
+  if (storedValue === null) return DEFAULT_DESKTOP_SIDEBAR_WIDTH;
+  const stored = Number(storedValue);
   if (!Number.isFinite(stored)) return DEFAULT_DESKTOP_SIDEBAR_WIDTH;
   return clampDesktopSidebarWidth(stored);
 }
