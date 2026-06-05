@@ -238,19 +238,24 @@ describe('createServer', () => {
     });
     const session = createResponse.json();
 
+    const beforeDeleteResponse = await app.inject({
+      method: 'GET',
+      url: `/api/sessions/${session.id}`,
+    });
     const deleteResponse = await app.inject({
       method: 'DELETE',
       url: `/api/sessions/${session.id}`,
     });
-    const listResponse = await app.inject({ method: 'GET', url: '/api/sessions' });
+    const afterDeleteResponse = await app.inject({
+      method: 'GET',
+      url: `/api/sessions/${session.id}`,
+    });
     await app.close();
 
+    expect(beforeDeleteResponse.json()).toMatchObject({ id: session.id });
     expect(deleteResponse.statusCode).toBe(200);
     expect(deleteResponse.json()).toEqual({ ok: true, sessionId: session.id });
-    const listedSessionIds = listResponse
-      .json()
-      .map((listedSession: SessionFixture) => listedSession.id);
-    expect(listedSessionIds).not.toContain(session.id);
+    expect(afterDeleteResponse.json()).toEqual({ error: 'Not found' });
   });
 
   it('deletes a session and broadcasts deletion when HTTP DELETE callbacks are passed', async () => {
