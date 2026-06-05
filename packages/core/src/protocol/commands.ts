@@ -5,6 +5,8 @@ export const WS_COMMANDS = {
   SESSION_KILL: 'session.kill',
   SESSION_LIST: 'session.list',
   SESSION_GET: 'session.get',
+  SESSION_RENAME: 'session.rename',
+  SESSION_DELETE: 'session.delete',
   RECOVERY_RECONCILE: 'recovery.reconcile',
   TERMINAL_SUBSCRIBE: 'terminal.subscribe',
   TERMINAL_UNSUBSCRIBE: 'terminal.unsubscribe',
@@ -20,6 +22,7 @@ export const WS_EVENTS = {
   SESSION_STATUS: 'session.status',
   SESSION_CREATED: 'session.created',
   SESSION_UPDATED: 'session.updated',
+  SESSION_DELETED: 'session.deleted',
   TERMINAL_OUTPUT: 'terminal.output',
   TERMINAL_EXIT: 'terminal.exit',
 } as const;

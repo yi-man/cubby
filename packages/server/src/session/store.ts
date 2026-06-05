@@ -108,6 +108,17 @@ export class SessionStore {
       .run(title, now, id);
   }
 
+  delete(id: string): boolean {
+    this.db.prepare('DELETE FROM terminal_snapshots WHERE session_id = ?').run(id);
+    this.db.prepare('DELETE FROM terminal_outputs WHERE session_id = ?').run(id);
+    this.db.prepare('DELETE FROM terminals WHERE session_id = ?').run(id);
+    const result = this.db.prepare('DELETE FROM sessions WHERE id = ?').run(id) as {
+      changes: number;
+    };
+
+    return result.changes > 0;
+  }
+
   appendTerminalOutput(
     sessionId: string,
     output: string | TerminalOutputChunk,
