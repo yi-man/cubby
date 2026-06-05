@@ -6,7 +6,7 @@ import {
   type WSResponse,
 } from '@cubby/core';
 import { useAtom } from 'jotai';
-import { Maximize2, PanelLeftClose, PanelLeftOpen, SlidersHorizontal } from 'lucide-react';
+import { Maximize2, PanelLeft, SlidersHorizontal } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { currentSessionIdAtom, sessionsAtom } from './atoms/session.js';
 import { SessionList } from './components/session/session-list.js';
@@ -21,12 +21,9 @@ const APP_HEADER_HEIGHT = 52;
 const SIDEBAR_EXPANDED_WIDTH = 240;
 const MOBILE_SIDEBAR_WIDTH = 340;
 const ICON_BUTTON_STYLE = {
-  width: '32px',
-  height: '32px',
-  border: '1px solid #262626',
-  borderRadius: '6px',
-  background: '#151515',
-  color: '#b8b8b8',
+  width: '34px',
+  height: '34px',
+  borderRadius: '7px',
   cursor: 'pointer',
   display: 'flex',
   alignItems: 'center',
@@ -347,8 +344,9 @@ export function App() {
       setCurrentId(session.id);
       persistCurrentSessionId(session.id);
       setAutoStartSessionId(session.id);
+      if (mobileLayout) setSidebarCollapsed(true);
     },
-    [request, setCurrentId],
+    [request, setCurrentId, mobileLayout],
   );
 
   const handleSelectSession = useCallback(
@@ -356,8 +354,9 @@ export function App() {
       setCurrentId(id);
       persistCurrentSessionId(id);
       setTerminalFocusRequest((request) => request + 1);
+      if (mobileLayout) setSidebarCollapsed(true);
     },
-    [setCurrentId],
+    [setCurrentId, mobileLayout],
   );
 
   return (
@@ -381,29 +380,26 @@ export function App() {
           flexShrink: 0,
           display: 'flex',
           alignItems: 'center',
-          gap: '8px',
-          padding: '0 8px',
+          gap: '10px',
+          padding: '0 10px',
           borderBottom: `1px solid ${APP_BORDER}`,
-          background: APP_SURFACE,
+          background: 'linear-gradient(180deg, #080a09 0%, #050606 100%)',
           position: 'relative',
         }}
       >
         <button
           type="button"
           aria-label={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+          aria-pressed={!sidebarCollapsed}
+          className={`header-icon-button sidebar-toggle-button ${
+            sidebarCollapsed ? 'is-collapsed' : 'is-expanded'
+          }`}
           data-testid="sidebar-toggle"
           title={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
           onClick={() => setSidebarCollapsed((collapsed) => !collapsed)}
-          style={{
-            ...ICON_BUTTON_STYLE,
-            color: '#d7d7d2',
-          }}
+          style={ICON_BUTTON_STYLE}
         >
-          {sidebarCollapsed ? (
-            <PanelLeftOpen {...HEADER_ICON_PROPS} />
-          ) : (
-            <PanelLeftClose {...HEADER_ICON_PROPS} />
-          )}
+          <PanelLeft {...HEADER_ICON_PROPS} />
         </button>
         <div
           style={{
@@ -434,6 +430,7 @@ export function App() {
         <button
           type="button"
           aria-label="Toggle fullscreen"
+          className="header-icon-button"
           title="Toggle fullscreen"
           onClick={handleFullscreen}
           style={ICON_BUTTON_STYLE}
@@ -443,6 +440,7 @@ export function App() {
         <button
           type="button"
           aria-label="Settings"
+          className="header-icon-button"
           title="Settings"
           disabled
           style={{
@@ -548,15 +546,36 @@ export function App() {
           ) : (
             <div
               style={{
+                flex: 1,
+                width: '100%',
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
                 height: '100%',
+                padding: mobileLayout ? '24px' : 'clamp(32px, 5vw, 64px)',
                 color: '#777773',
-                background: APP_SURFACE,
+                background:
+                  'radial-gradient(circle at 50% 42%, rgba(34, 200, 242, 0.06), transparent 34%), #050606',
               }}
             >
-              Select or create a session
+              <div
+                style={{
+                  width: '100%',
+                  minHeight: mobileLayout ? '180px' : '260px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  border: '1px dashed #242826',
+                  borderRadius: '8px',
+                  background: 'rgba(11, 12, 12, 0.52)',
+                  color: '#8f928b',
+                  fontSize: '13px',
+                  fontWeight: 600,
+                  textAlign: 'center',
+                }}
+              >
+                Select or create a session
+              </div>
             </div>
           )}
         </div>

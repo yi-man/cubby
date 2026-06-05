@@ -130,7 +130,10 @@ export class WSCommandHandler {
         error: { code: 'NOT_FOUND', message: 'Session process not found' },
       };
     }
-    process.write(`${this.sessionManager.consumeResumeInputResetPrefix(sessionId, data)}${data}`);
+    const input = this.sessionManager.prepareTerminalInput(sessionId, data);
+    if (input) {
+      process.write(input);
+    }
     const updated = this.sessionManager.recordTerminalInput(sessionId, data);
     if (updated) {
       this.hub.broadcastToAll({ evt: WS_EVENTS.SESSION_UPDATED, data: updated });

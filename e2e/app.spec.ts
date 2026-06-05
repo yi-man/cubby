@@ -364,6 +364,35 @@ test.describe('Cubby MVP', () => {
       .toBe(390);
   });
 
+  test('mobile sidebar collapses after selecting a session', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    const stamp = Date.now();
+    const workspaceId = `/tmp/cubby-mobile-select-collapse-${stamp}`;
+    const first = await createSession(page, {
+      workspaceId,
+      title: `Mobile Collapse First ${stamp}`,
+    });
+    const second = await createSession(page, {
+      workspaceId,
+      title: `Mobile Collapse Second ${stamp}`,
+    });
+
+    await page.goto('/');
+    await assertActiveDetail(page, { title: second.title, status: 'draft', action: 'Start' });
+    const sidebar = page.getByTestId('sidebar-shell');
+
+    await page.getByRole('button', { name: 'Expand sidebar' }).click();
+    await expect(sidebar).toHaveCSS('width', '340px');
+    await expect(page.getByTestId('mobile-sidebar-scrim')).toBeVisible();
+
+    const group = page.getByTestId('workspace-group').filter({ hasText: workspaceId });
+    await group.getByTestId('session-item').filter({ hasText: first.title }).click();
+
+    await assertActiveDetail(page, { title: first.title, status: 'draft', action: 'Start' });
+    await expect(sidebar).toHaveCSS('width', '0px');
+    await expect(page.getByTestId('mobile-sidebar-scrim')).toHaveCount(0);
+  });
+
   test('switching sessions resets the right terminal pane', async ({ page }) => {
     const firstTitle = `Switch First ${Date.now()}`;
     const secondTitle = `Switch Second ${Date.now()}`;

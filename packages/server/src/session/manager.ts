@@ -319,11 +319,15 @@ export class SessionManager {
     return { action: 'unrecoverable', sessionId, reason: 'unknown_session' };
   }
 
-  consumeResumeInputResetPrefix(sessionId: string, data: string): string {
-    if (!this.sessionsNeedingResumeInputReset.has(sessionId)) return '';
-    if (!shouldResetBeforeResumeInput(data)) return '';
+  prepareTerminalInput(sessionId: string, data: string): string {
+    if (!this.sessionsNeedingResumeInputReset.has(sessionId)) return data;
+
+    const input = stripTerminalFocusEvents(data);
+    if (!input) return '';
+    if (!shouldResetBeforeResumeInput(input)) return input;
+
     this.sessionsNeedingResumeInputReset.delete(sessionId);
-    return '\x15';
+    return `\x15${input}`;
   }
 
   async getTerminalSnapshot(sessionId: string, _size?: unknown): Promise<TerminalSnapshotResult> {
@@ -557,6 +561,10 @@ function shouldResetBeforeResumeInput(data: string): boolean {
   }
 
   return false;
+}
+
+function stripTerminalFocusEvents(input: string): string {
+  return input.replaceAll('\x1b[I', '').replaceAll('\x1b[O', '');
 }
 
 function skipEscapeSequence(input: string, startIndex: number): number {

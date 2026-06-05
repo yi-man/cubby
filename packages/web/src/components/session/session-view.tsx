@@ -29,10 +29,41 @@ function isLiveStatus(status: Session['status']): boolean {
   return status === 'starting' || status === 'running';
 }
 
-function statusColor(status: Session['status']): string {
-  if (status === 'running' || status === 'starting') return '#8fbf73';
-  if (status === 'ended') return '#8d8d87';
-  return '#c78a7c';
+const VISUALLY_HIDDEN_STYLE = {
+  position: 'absolute',
+  width: '1px',
+  height: '1px',
+  padding: 0,
+  margin: '-1px',
+  overflow: 'hidden',
+  clip: 'rect(0, 0, 0, 0)',
+  whiteSpace: 'nowrap',
+  border: 0,
+} as const;
+
+function statusTone(status: Session['status']) {
+  if (status === 'running' || status === 'starting') {
+    return {
+      label: status === 'starting' ? 'Starting' : 'Live',
+      color: '#8fbf73',
+      border: '#31442d',
+      background: '#111b0f',
+    };
+  }
+  if (status === 'ended') {
+    return {
+      label: 'Closed',
+      color: '#989890',
+      border: '#363633',
+      background: '#161616',
+    };
+  }
+  return {
+    label: status === 'draft' ? 'Draft' : 'Ready',
+    color: '#c78a7c',
+    border: '#4b2825',
+    background: '#21110f',
+  };
 }
 
 interface ReplayState {
@@ -553,6 +584,7 @@ export function SessionView({
   const showEmptyEndedHistory =
     session.status === 'ended' && replayState.loaded && !replayState.hasHistory;
   const showRecoveryError = live && recoveryError !== null;
+  const currentStatusTone = statusTone(session.status);
 
   return (
     <div
@@ -602,13 +634,33 @@ export function SessionView({
         </span>
         <span
           data-testid="session-status"
+          title={currentStatusTone.label}
           style={{
-            color: statusColor(session.status),
-            fontSize: '11px',
-            fontVariantNumeric: 'tabular-nums',
+            position: 'relative',
+            flexShrink: 0,
+            width: '22px',
+            height: '22px',
+            border: `1px solid ${currentStatusTone.border}`,
+            borderRadius: '999px',
+            background: currentStatusTone.background,
+            display: 'inline-flex',
+            alignItems: 'center',
+            justifyContent: 'center',
           }}
         >
-          {session.status}
+          <span
+            aria-hidden="true"
+            className="session-status-dot"
+            data-live={live ? 'true' : 'false'}
+            style={{
+              width: '7px',
+              height: '7px',
+              borderRadius: '999px',
+              background: currentStatusTone.color,
+              boxShadow: live ? `0 0 0 3px rgba(143, 191, 115, 0.14)` : 'none',
+            }}
+          />
+          <span style={VISUALLY_HIDDEN_STYLE}>{session.status}</span>
         </span>
         <span
           style={{

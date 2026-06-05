@@ -249,6 +249,42 @@ describe('WSCommandHandler', () => {
     expect(writes).toEqual(['\x1b', '\x15/']);
   });
 
+  it('drops xterm focus events before the first real resumed terminal input', async () => {
+    const writes: string[] = [];
+    const provider: AgentProvider = {
+      name: 'mock',
+      async spawn() {
+        return {
+          pid: 459,
+          onData: (_callback) => {},
+          onExit: (_callback) => {},
+          write: (data) => writes.push(data),
+          resize: () => {},
+          kill: () => {},
+        };
+      },
+      async kill() {},
+    };
+    manager.registerProvider(provider);
+    const session = manager.createSession({ workspaceId: '/tmp', provider: 'mock' });
+    await manager.startSession(session.id, { cwd: '/tmp', cols: 80, rows: 24 });
+    await manager.killSession(session.id);
+    await manager.resumeSession(session.id, { cwd: '/tmp', cols: 80, rows: 24 });
+
+    await handler.handle({} as WebSocket, {
+      id: 'resume-focus-in',
+      cmd: 'terminal.input',
+      args: { sessionId: session.id, data: '\x1b[I' },
+    });
+    await handler.handle({} as WebSocket, {
+      id: 'resume-focus-out-slash',
+      cmd: 'terminal.input',
+      args: { sessionId: session.id, data: '\x1b[O/' },
+    });
+
+    expect(writes).toEqual(['\x15/']);
+  });
+
   it('starts a session with requested terminal dimensions', async () => {
     const spawnOptions: SpawnOptions[] = [];
     const provider: AgentProvider = {
