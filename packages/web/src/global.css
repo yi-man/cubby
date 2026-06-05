@@ -67,6 +67,41 @@ input::placeholder {
   color: #9aa09a;
 }
 
+.sidebar-resize-handle {
+  position: relative;
+  z-index: 2;
+  width: 8px;
+  flex: 0 0 8px;
+  margin-left: -4px;
+  margin-right: -4px;
+  cursor: col-resize;
+  touch-action: none;
+}
+
+.sidebar-resize-handle::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 3px;
+  width: 1px;
+  background: transparent;
+  transition:
+    background 120ms ease,
+    box-shadow 120ms ease;
+}
+
+.sidebar-resize-handle:hover::before,
+.sidebar-resize-handle.is-dragging::before {
+  background: #22c8f2;
+  box-shadow: 0 0 0 1px rgba(34, 200, 242, 0.24);
+}
+
+body.sidebar-resizing {
+  cursor: col-resize;
+  user-select: none;
+}
+
 .session-status-dot {
   flex-shrink: 0;
 }

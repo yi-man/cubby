@@ -19,6 +19,8 @@ interface SessionListProps {
   onSearchQueryChange: (query: string) => void;
   onSelect: (id: string) => void;
   onCreate: () => void;
+  onRename?: (id: string, title: string) => Promise<boolean>;
+  onDelete?: (id: string) => Promise<boolean>;
 }
 
 const SIDEBAR_ICON_PROPS = { size: 16, strokeWidth: 2.2, 'aria-hidden': true } as const;

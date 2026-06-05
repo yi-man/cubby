@@ -7,7 +7,7 @@ import {
 } from '@cubby/core';
 import { useAtom } from 'jotai';
 import { Maximize2, PanelLeft, SlidersHorizontal } from 'lucide-react';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { currentSessionIdAtom, sessionsAtom } from './atoms/session.js';
 import { SessionList } from './components/session/session-list.js';
 import { SessionView } from './components/session/session-view.js';
@@ -15,10 +15,13 @@ import { DirPicker } from './components/workspace/dir-picker.js';
 import { useWebSocket } from './hooks/use-ws.js';
 
 const SIDEBAR_STATE_STORAGE_KEY = 'cubby.sidebarCollapsed';
+const SIDEBAR_WIDTH_STORAGE_KEY = 'cubby.sidebarWidth';
 const CURRENT_SESSION_ID_STORAGE_KEY = 'cubby.currentSessionId';
 const MOBILE_MEDIA_QUERY = '(max-width: 767px)';
 const APP_HEADER_HEIGHT = 52;
-const SIDEBAR_EXPANDED_WIDTH = 240;
+const DEFAULT_DESKTOP_SIDEBAR_WIDTH = 240;
+const MIN_DESKTOP_SIDEBAR_WIDTH = 200;
+const MAX_DESKTOP_SIDEBAR_WIDTH = 420;
 const MOBILE_SIDEBAR_WIDTH = 340;
 const ICON_BUTTON_STYLE = {
   width: '34px',
@@ -35,6 +38,12 @@ const APP_PANEL = '#0b0c0c';
 const APP_BORDER = '#202020';
 const HEADER_ICON_PROPS = { size: 16, strokeWidth: 2.1, 'aria-hidden': true } as const;
 
+declare global {
+  interface Window {
+    webkitAudioContext?: typeof AudioContext;
+  }
+}
+
 function sessionTitle(session: Session | null): string {
   return session?.title ?? session?.provider ?? 'No session selected';
 }
@@ -50,6 +59,17 @@ function initialSidebarCollapsed(): boolean {
   if (stored === 'true') return true;
   if (stored === 'false') return false;
   return window.matchMedia(MOBILE_MEDIA_QUERY).matches;
+}
+
+function clampDesktopSidebarWidth(width: number): number {
+  return Math.min(MAX_DESKTOP_SIDEBAR_WIDTH, Math.max(MIN_DESKTOP_SIDEBAR_WIDTH, width));
+}
+
+function initialDesktopSidebarWidth(): number {
+  if (typeof window === 'undefined') return DEFAULT_DESKTOP_SIDEBAR_WIDTH;
+  const stored = Number(window.localStorage.getItem(SIDEBAR_WIDTH_STORAGE_KEY));
+  if (!Number.isFinite(stored)) return DEFAULT_DESKTOP_SIDEBAR_WIDTH;
+  return clampDesktopSidebarWidth(stored);
 }
 
 function useMediaQuery(query: string): boolean {
@@ -109,6 +129,10 @@ function isSessionStatusData(
   );
 }
 
+function isSessionIdData(value: unknown): value is { sessionId: string } {
+  return isRecord(value) && typeof value.sessionId === 'string';
+}
+
 function preferredSessionId(sessions: Session[]): string | null {
   const liveSession = sessions.find(
     (session) => session.status === 'running' || session.status === 'starting',
@@ -144,6 +168,33 @@ function isEditableElement(element: Element | null): boolean {
   return element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement;
 }
 
+function playSessionFinishedSound(): void {
+  try {
+    const AudioContextClass = window.AudioContext ?? window.webkitAudioContext;
+    if (!AudioContextClass) return;
+
+    const context = new AudioContextClass();
+    const oscillator = context.createOscillator();
+    const gain = context.createGain();
+    const now = context.currentTime;
+
+    oscillator.type = 'sine';
+    oscillator.frequency.setValueAtTime(660, now);
+    oscillator.frequency.exponentialRampToValueAtTime(880, now + 0.08);
+    gain.gain.setValueAtTime(0.0001, now);
+    gain.gain.exponentialRampToValueAtTime(0.08, now + 0.015);
+    gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.18);
+
+    oscillator.connect(gain);
+    gain.connect(context.destination);
+    oscillator.start(now);
+    oscillator.stop(now + 0.2);
+    oscillator.onended = () => void context.close().catch(() => {});
+  } catch {
+    // Autoplay or audio device failures should never affect session handling.
+  }
+}
+
 export function App() {
   const { send, request, onMessage, connected } = useWebSocket(getWsUrl());
   const [sessions, setSessions] = useAtom(sessionsAtom);
@@ -156,14 +207,17 @@ export function App() {
   const [autoStartSessionId, setAutoStartSessionId] = useState<string | null>(null);
   const [terminalFocusRequest, setTerminalFocusRequest] = useState(0);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(initialSidebarCollapsed);
+  const [desktopSidebarWidth, setDesktopSidebarWidth] = useState(initialDesktopSidebarWidth);
+  const [resizingSidebar, setResizingSidebar] = useState(false);
   const [sessionSearchQuery, setSessionSearchQuery] = useState('');
   const [mountedSessionIds, setMountedSessionIds] = useState<Set<string>>(() => new Set());
+  const previousSessionStatusesRef = useRef<Map<string, SessionStatus> | null>(null);
   const mobileLayout = useMediaQuery(MOBILE_MEDIA_QUERY);
   const sidebarWidth = sidebarCollapsed
     ? '0px'
     : mobileLayout
       ? `min(${MOBILE_SIDEBAR_WIDTH}px, calc(100vw - 48px))`
-      : `${SIDEBAR_EXPANDED_WIDTH}px`;
+      : `${desktopSidebarWidth}px`;
 
   const sessionById = useMemo(() => {
     const byId = new Map<string, Session>();
@@ -192,6 +246,28 @@ export function App() {
         .map((id) => sessionById.get(id))
         .filter((session): session is Session => Boolean(session)),
     [mountedSessionIds, sessionById],
+  );
+
+  const applySessionDeleted = useCallback(
+    (sessionId: string) => {
+      setSessions((prev) => {
+        const nextSessions = prev.filter((session) => session.id !== sessionId);
+        if (currentId === sessionId) {
+          const nextId = preferredSessionId(nextSessions);
+          setCurrentId(nextId);
+          persistCurrentSessionId(nextId);
+        }
+        return nextSessions.length === prev.length ? prev : nextSessions;
+      });
+      setPendingSession((pending) => (pending?.id === sessionId ? null : pending));
+      setMountedSessionIds((prev) => {
+        if (!prev.has(sessionId)) return prev;
+        const next = new Set(prev);
+        next.delete(sessionId);
+        return next;
+      });
+    },
+    [currentId, setCurrentId, setSessions],
   );
 
   const handleFullscreen = useCallback(() => {
@@ -249,6 +325,29 @@ export function App() {
     persistCurrentSessionId(nextId);
   }, [sessions, currentId, pendingSession, setCurrentId]);
 
+  useEffect(() => {
+    const currentStatuses = new Map<string, SessionStatus>();
+    for (const session of sessions) currentStatuses.set(session.id, session.status);
+    if (pendingSession) currentStatuses.set(pendingSession.id, pendingSession.status);
+
+    const previousStatuses = previousSessionStatusesRef.current;
+    if (!previousStatuses) {
+      previousSessionStatusesRef.current = currentStatuses;
+      return;
+    }
+
+    for (const [sessionId, status] of currentStatuses) {
+      const previousStatus = previousStatuses.get(sessionId);
+      if (
+        status === 'ended' &&
+        (previousStatus === 'starting' || previousStatus === 'running')
+      ) {
+        playSessionFinishedSound();
+      }
+    }
+    previousSessionStatusesRef.current = currentStatuses;
+  }, [pendingSession, sessions]);
+
   // Handle responses
   useEffect(() => {
     return onMessage((msg: WSResponse | WSEvent) => {
@@ -305,8 +404,11 @@ export function App() {
         setPendingSession((pending) => (pending?.id === msg.data.id ? msg.data : pending));
         send({ id: 'init', cmd: 'session.list' });
       }
+      if ('evt' in msg && msg.evt === 'session.deleted' && isSessionIdData(msg.data)) {
+        applySessionDeleted(msg.data.sessionId);
+      }
     });
-  }, [onMessage, setSessions, setCurrentId, send, pendingSession, currentId]);
+  }, [onMessage, setSessions, setCurrentId, send, pendingSession, currentId, applySessionDeleted]);
 
   useEffect(() => {
     if (!connected || !pendingSession) return;
@@ -326,6 +428,32 @@ export function App() {
   useEffect(() => {
     window.localStorage.setItem(SIDEBAR_STATE_STORAGE_KEY, String(sidebarCollapsed));
   }, [sidebarCollapsed]);
+
+  useEffect(() => {
+    window.localStorage.setItem(SIDEBAR_WIDTH_STORAGE_KEY, String(desktopSidebarWidth));
+  }, [desktopSidebarWidth]);
+
+  useEffect(() => {
+    if (!resizingSidebar) return;
+
+    document.body.classList.add('sidebar-resizing');
+    const handlePointerMove = (event: PointerEvent) => {
+      setDesktopSidebarWidth(clampDesktopSidebarWidth(event.clientX));
+    };
+    const handlePointerUp = () => {
+      setResizingSidebar(false);
+    };
+
+    window.addEventListener('pointermove', handlePointerMove);
+    window.addEventListener('pointerup', handlePointerUp);
+    window.addEventListener('pointercancel', handlePointerUp);
+    return () => {
+      document.body.classList.remove('sidebar-resizing');
+      window.removeEventListener('pointermove', handlePointerMove);
+      window.removeEventListener('pointerup', handlePointerUp);
+      window.removeEventListener('pointercancel', handlePointerUp);
+    };
+  }, [resizingSidebar]);
 
   const handleDirConfirm = useCallback(
     async (workspaceId: string) => {
@@ -357,6 +485,44 @@ export function App() {
       if (mobileLayout) setSidebarCollapsed(true);
     },
     [setCurrentId, mobileLayout],
+  );
+
+  const handleRenameSession = useCallback(
+    async (id: string, title: string): Promise<boolean> => {
+      try {
+        const response = await request({
+          id: `rename-${Date.now()}`,
+          cmd: 'session.rename',
+          args: { sessionId: id, title },
+        });
+        if (!response.ok || !isSession(response.data)) return false;
+        const session = response.data;
+        setSessions((prev) => prev.map((item) => (item.id === session.id ? session : item)));
+        setPendingSession((pending) => (pending?.id === session.id ? session : pending));
+        return true;
+      } catch {
+        return false;
+      }
+    },
+    [request, setSessions],
+  );
+
+  const handleDeleteSession = useCallback(
+    async (id: string): Promise<boolean> => {
+      try {
+        const response = await request({
+          id: `delete-${Date.now()}`,
+          cmd: 'session.delete',
+          args: { sessionId: id },
+        });
+        if (!response.ok || !isSessionIdData(response.data)) return false;
+        applySessionDeleted(response.data.sessionId);
+        return true;
+      } catch {
+        return false;
+      }
+    },
+    [applySessionDeleted, request],
   );
 
   return (
@@ -491,7 +657,7 @@ export function App() {
             overflow: 'hidden',
             borderRight: sidebarCollapsed ? 'none' : `1px solid ${APP_BORDER}`,
             background: APP_PANEL,
-            transition: 'width 140ms ease',
+            transition: resizingSidebar ? 'none' : 'width 140ms ease',
             position: mobileLayout ? 'absolute' : 'relative',
             top: mobileLayout ? 0 : undefined,
             bottom: mobileLayout ? 0 : undefined,
@@ -510,10 +676,24 @@ export function App() {
                 onSearchQueryChange={setSessionSearchQuery}
                 onSelect={handleSelectSession}
                 onCreate={() => setShowPicker(true)}
+                onRename={handleRenameSession}
+                onDelete={handleDeleteSession}
               />
             </div>
           )}
         </div>
+        {!sidebarCollapsed && !mobileLayout && (
+          <div
+            role="separator"
+            aria-orientation="vertical"
+            aria-label="Resize sidebar"
+            className={`sidebar-resize-handle ${resizingSidebar ? 'is-dragging' : ''}`}
+            onPointerDown={(event) => {
+              event.preventDefault();
+              setResizingSidebar(true);
+            }}
+          />
+        )}
         <div
           data-testid="session-detail-pane"
           style={{
