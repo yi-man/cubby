@@ -32,17 +32,12 @@ export class MockClaudeCodeProvider implements AgentProvider {
       for (const listener of exitListeners) listener(code);
     };
 
-    const startupMessage = () => {
-      const mode = options.resume ? 'resumed' : 'ready';
-      emitData(`Mock Claude Code ${mode} for ${sessionId.slice(0, 8)}\r\n`);
-    };
-    for (const delay of [50, 200, 500]) {
-      timers.push(
-        setTimeout(() => {
-          startupMessage();
-        }, delay),
-      );
-    }
+    timers.push(
+      setTimeout(() => {
+        const mode = options.resume ? 'resumed' : 'ready';
+        emitData(`Mock Claude Code ${mode} for ${sessionId.slice(0, 8)}\r\n`);
+      }, 50),
+    );
     timers.push(
       setTimeout(() => {
         const mode = options.resume ? 'resumed' : 'ready';

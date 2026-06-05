@@ -1,7 +1,7 @@
 import { type ChildProcess, spawn } from 'node:child_process';
 import { existsSync, mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { homedir, tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { Database } from './db/index.js';
 import { createServer } from './server.js';
@@ -87,6 +87,17 @@ describe('createServer', () => {
     await app.close();
 
     expect(existsSync(join(dataDir, 'cubby.db'))).toBe(true);
+  });
+
+  it('defaults workspace browsing to the user home directory', async () => {
+    const { app } = await createServer(0);
+    const response = await app.inject({ method: 'GET', url: '/api/browse' });
+    const body = response.json();
+    await app.close();
+
+    expect(response.statusCode).toBe(200);
+    expect(body.path).toBe(resolve(homedir()));
+    expect(Array.isArray(body.entries)).toBe(true);
   });
 
   it('marks persisted live sessions as ended on startup', async () => {

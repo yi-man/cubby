@@ -1,4 +1,5 @@
 import { readdir, stat } from 'node:fs/promises';
+import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import type { SessionManager } from '../session/manager.js';
@@ -6,7 +7,7 @@ import type { SessionManager } from '../session/manager.js';
 export function registerRoutes(app: FastifyInstance, sessionManager: SessionManager) {
   app.get('/api/browse', async (request) => {
     const { path } = request.query as { path?: string };
-    const target = resolve(path || '/');
+    const target = resolve(path || homedir());
     const entries = await readdir(target);
     const items: { name: string; path: string; isDir: boolean }[] = [];
     for (const name of entries) {
