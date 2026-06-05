@@ -26,6 +26,10 @@ export class WSCommandHandler {
           return this.sessionList(request);
         case WS_COMMANDS.SESSION_GET:
           return this.sessionGet(request);
+        case WS_COMMANDS.SESSION_RENAME:
+          return this.sessionRename(request);
+        case WS_COMMANDS.SESSION_DELETE:
+          return this.sessionDelete(request);
         case WS_COMMANDS.RECOVERY_RECONCILE:
           return this.recoveryReconcile(request);
         case WS_COMMANDS.TERMINAL_SUBSCRIBE:
@@ -120,6 +124,43 @@ export class WSCommandHandler {
     return { id: req.id, ok: true, data: session };
   }
 
+  private sessionRename(req: WSRequest): WSResponse {
+    const { sessionId, title } = req.args as { sessionId: string; title: string };
+    if (typeof title !== 'string' || !title.trim()) {
+      return {
+        id: req.id,
+        ok: false,
+        error: { code: 'BAD_REQUEST', message: 'Session title is required' },
+      };
+    }
+
+    try {
+      const session = this.sessionManager.renameSession(sessionId, title);
+      this.hub.broadcastToAll({ evt: WS_EVENTS.SESSION_UPDATED, data: session });
+      return { id: req.id, ok: true, data: session };
+    } catch (err) {
+      if (isSessionNotFound(err)) {
+        return {
+          id: req.id,
+          ok: false,
+          error: { code: 'NOT_FOUND', message: 'Session not found' },
+        };
+      }
+      throw err;
+    }
+  }
+
+  private async sessionDelete(req: WSRequest): Promise<WSResponse> {
+    const { sessionId } = req.args as { sessionId: string };
+    const deleted = await this.sessionManager.deleteSession(sessionId);
+    if (!deleted) {
+      return { id: req.id, ok: false, error: { code: 'NOT_FOUND', message: 'Session not found' } };
+    }
+    const data = { sessionId };
+    this.hub.broadcastToAll({ evt: WS_EVENTS.SESSION_DELETED, data });
+    return { id: req.id, ok: true, data };
+  }
+
   private terminalInput(req: WSRequest): WSResponse {
     const { sessionId, data } = req.args as { sessionId: string; data: string };
     const process = this.sessionManager.getProcess(sessionId);
@@ -203,6 +244,10 @@ function terminalSizeFromArgs(cols: unknown, rows: unknown): { cols: number; row
     cols: normalizeTerminalDimension(cols, 80, 20, 500),
     rows: normalizeTerminalDimension(rows, 24, 5, 200),
   };
+}
+
+function isSessionNotFound(err: unknown): boolean {
+  return err instanceof Error && err.message === 'Session not found';
 }
 
 function normalizeTerminalDimension(

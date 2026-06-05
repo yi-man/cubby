@@ -3,7 +3,7 @@ import { unlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { AgentProvider, SpawnOptions } from '@cubby/core';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Database } from '../db/index.js';
 import { SessionManager } from './manager.js';
 import { SessionStore } from './store.js';
@@ -68,6 +68,142 @@ describe('SessionManager', () => {
   it('creates a session', () => {
     const session = manager.createSession({ workspaceId: '/tmp', provider: 'mock' });
     expect(session.status).toBe('draft');
+  });
+
+  it('renames a session with a trimmed title', () => {
+    const session = manager.createSession({ workspaceId: '/tmp', provider: 'mock' });
+
+    const updated = manager.renameSession(session.id, '  Customer rollout plan  ');
+
+    expect(updated.title).toBe('Customer rollout plan');
+    expect(manager.getSession(session.id)?.title).toBe('Customer rollout plan');
+  });
+
+  it('rejects renaming a session to an empty title', () => {
+    const session = manager.createSession({ workspaceId: '/tmp', provider: 'mock' });
+
+    expect(() => manager.renameSession(session.id, '   ')).toThrow('Session title is required');
+  });
+
+  it('rejects renaming a missing session', () => {
+    expect(() => manager.renameSession('missing-session', 'New title')).toThrow(
+      'Session not found',
+    );
+  });
+
+  it('deletes an ended session and removes persisted output', async () => {
+    const session = manager.createSession({ workspaceId: '/tmp', provider: 'mock' });
+    store.appendTerminalOutput(session.id, { data: 'saved output', seqStart: 0, seq: 12 });
+    store.updateStatus(session.id, 'ended', { exitCode: 0 });
+
+    await expect(manager.deleteSession(session.id)).resolves.toBe(true);
+
+    expect(store.get(session.id)).toBeNull();
+    expect(store.getTerminalOutputHistory(session.id, 10)).toEqual([]);
+    expect(manager.getOutputHistory(session.id)).toEqual([]);
+  });
+
+  it('stops a live process before deleting a session', async () => {
+    const killed: string[] = [];
+    const provider: AgentProvider = {
+      name: 'delete-live',
+      async spawn(sessionId: string) {
+        return {
+          pid: 32_000,
+          onData: (_callback) => {},
+          onExit: (_callback) => {},
+          write: () => {},
+          resize: () => {},
+          kill: () => {
+            killed.push(sessionId);
+          },
+        };
+      },
+      async kill() {},
+    };
+    manager.registerProvider(provider);
+    const session = manager.createSession({ workspaceId: '/tmp', provider: 'delete-live' });
+    await manager.startSession(session.id, { cwd: '/tmp', cols: 80, rows: 24 });
+    const updateStatus = vi.spyOn(store, 'updateStatus');
+    const statuses: string[] = [];
+    manager.onStatusChange((sessionId, status) => {
+      if (sessionId === session.id) statuses.push(status);
+    });
+
+    await expect(manager.deleteSession(session.id)).resolves.toBe(true);
+
+    expect(killed).toEqual([session.id]);
+    expect(manager.getProcess(session.id)).toBeUndefined();
+    expect(updateStatus).toHaveBeenCalledWith(session.id, 'ended', { pid: 32_000 });
+    expect(statuses).toContain('ended');
+    expect(store.get(session.id)).toBeNull();
+  });
+
+  it('clears live state and preserves the session when delete kill throws', async () => {
+    const killError = new Error('delete kill failed');
+    const provider: AgentProvider = {
+      name: 'delete-throwing-kill',
+      async spawn() {
+        return {
+          pid: 32_001,
+          onData: (_callback) => {},
+          onExit: (_callback) => {},
+          write: () => {},
+          resize: () => {},
+          kill: () => {
+            throw killError;
+          },
+        };
+      },
+      async kill() {},
+    };
+    manager.registerProvider(provider);
+    const session = manager.createSession({
+      workspaceId: '/tmp',
+      provider: 'delete-throwing-kill',
+    });
+    await manager.startSession(session.id, { cwd: '/tmp', cols: 80, rows: 24 });
+    const deleteSession = vi.spyOn(store, 'delete');
+
+    await expect(() => manager.deleteSession(session.id)).rejects.toThrow('delete kill failed');
+
+    expect(manager.getProcess(session.id)).toBeUndefined();
+    expect(store.get(session.id)).toMatchObject({ status: 'ended', pid: 32_001 });
+    expect(deleteSession).not.toHaveBeenCalled();
+  });
+
+  it('ignores late output after a session is deleted', async () => {
+    let capturedOutput: ((data: string) => void) | undefined;
+    const provider: AgentProvider = {
+      name: 'late-output-after-delete',
+      async spawn(
+        _sessionId: string,
+        _options: SpawnOptions,
+        onOutput: (data: string) => void = () => {},
+      ) {
+        capturedOutput = onOutput;
+        return {
+          pid: 32_002,
+          onData: (_callback) => {},
+          onExit: (_callback) => {},
+          write: () => {},
+          resize: () => {},
+          kill: () => {},
+        };
+      },
+      async kill() {},
+    };
+    manager.registerProvider(provider);
+    const session = manager.createSession({
+      workspaceId: '/tmp',
+      provider: 'late-output-after-delete',
+    });
+    await manager.startSession(session.id, { cwd: '/tmp', cols: 80, rows: 24 });
+
+    await manager.deleteSession(session.id);
+
+    expect(() => capturedOutput?.('late output')).not.toThrow();
+    expect(manager.getOutputHistory(session.id)).toEqual([]);
   });
 
   it('starts a session', async () => {

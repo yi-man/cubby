@@ -1,6 +1,26 @@
 import type { Session } from '@cubby/core';
-import { ChevronDown, ChevronRight, Plus, Search } from 'lucide-react';
-import { useEffect, useMemo, useState } from 'react';
+import {
+  Check,
+  ChevronDown,
+  ChevronRight,
+  MoreHorizontal,
+  Pencil,
+  Plus,
+  Search,
+  Trash2,
+  X,
+} from 'lucide-react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+
+import {
+  groupSessions,
+  matchesSessionSearch,
+  normalizeSearch,
+  sessionTitle,
+  sortSessionsForWorkspace,
+  visibleSessions,
+  workspaceName,
+} from './session-list-model.js';
 
 interface SessionListProps {
   sessions: Session[];
@@ -9,72 +29,23 @@ interface SessionListProps {
   onSearchQueryChange: (query: string) => void;
   onSelect: (id: string) => void;
   onCreate: () => void;
+  onRename?: (id: string, title: string) => Promise<boolean>;
+  onDelete?: (id: string) => Promise<boolean>;
+  executingSessionIds?: Set<string>;
+  completedPromptSessionIds?: Set<string>;
 }
 
-interface WorkspaceGroup {
-  workspaceId: string;
-  sessions: Session[];
-}
-
-const VISIBLE_SESSION_LIMIT = 5;
 const SIDEBAR_ICON_PROPS = { size: 16, strokeWidth: 2.2, 'aria-hidden': true } as const;
 const SIDEBAR_SURFACE = '#0b0c0c';
 const SIDEBAR_BORDER = '#202020';
-
-function normalizeSearch(value: string): string {
-  return value.trim().toLowerCase();
-}
-
-function workspaceName(workspaceId: string): string {
-  const parts = workspaceId.split(/[\\/]/).filter(Boolean);
-  return parts.at(-1) ?? workspaceId;
-}
-
-function groupSessions(sessions: Session[]): WorkspaceGroup[] {
-  const groups = new Map<string, Session[]>();
-  for (const session of sessions) {
-    const group = groups.get(session.workspaceId);
-    if (group) {
-      group.push(session);
-    } else {
-      groups.set(session.workspaceId, [session]);
-    }
-  }
-  return Array.from(groups, ([workspaceId, group]) => ({ workspaceId, sessions: group }));
-}
-
-function visibleSessions(groupSessions: Session[], currentId: string | null): Session[] {
-  if (groupSessions.length <= VISIBLE_SESSION_LIMIT) return groupSessions;
-
-  const defaultVisible = groupSessions.slice(0, VISIBLE_SESSION_LIMIT);
-  const current = currentId ? groupSessions.find((session) => session.id === currentId) : null;
-  if (!current || defaultVisible.some((session) => session.id === current.id))
-    return defaultVisible;
-
-  return [
-    current,
-    ...groupSessions
-      .filter((session) => session.id !== current.id)
-      .slice(0, VISIBLE_SESSION_LIMIT - 1),
-  ];
-}
-
-function sessionTitle(session: Session): string {
-  return session.title ?? session.provider;
-}
-
-function matchesSessionSearch(session: Session, query: string): boolean {
-  if (!query) return true;
-  return [sessionTitle(session), session.workspaceId, session.provider, session.status].some(
-    (value) => value.toLowerCase().includes(query),
-  );
-}
 
 function isLiveStatus(status: Session['status']): boolean {
   return status === 'running' || status === 'starting';
 }
 
-function statusLabel(status: Session['status']): string {
+function statusLabel(status: Session['status'], executing = false, completed = false): string {
+  if (executing) return 'Executing';
+  if (completed) return 'Done';
   if (status === 'running') return 'Live';
   if (status === 'starting') return 'Starting';
   if (status === 'ended') return 'Closed';
@@ -82,7 +53,27 @@ function statusLabel(status: Session['status']): string {
   return 'Ready';
 }
 
-function sessionTone(status: Session['status']) {
+function sessionTone(status: Session['status'], executing = false, completed = false) {
+  if (executing) {
+    return {
+      background: '#10242b',
+      border: '#245564',
+      activeBorder: '#287f95',
+      indicator: '#22c8f2',
+      text: '#e7fbff',
+      meta: '#88b9c5',
+    };
+  }
+  if (completed) {
+    return {
+      background: '#151f12',
+      border: '#34502d',
+      activeBorder: '#5d8d48',
+      indicator: '#98d36e',
+      text: '#ecf8e8',
+      meta: '#9fbe93',
+    };
+  }
   if (isLiveStatus(status)) {
     return {
       background: '#182915',
@@ -99,7 +90,7 @@ function sessionTone(status: Session['status']) {
       border: '#3b3b3b',
       activeBorder: '#5b5b57',
       indicator: '#989890',
-      text: '#dedbd2',
+      text: '#ffffff',
       meta: '#8e8d86',
     };
   }
@@ -180,18 +171,79 @@ export function SessionList({
   onSearchQueryChange,
   onSelect,
   onCreate,
+  onRename,
+  onDelete,
+  executingSessionIds = new Set(),
+  completedPromptSessionIds = new Set(),
 }: SessionListProps) {
   const normalizedSearch = normalizeSearch(searchQuery);
   const filteredSessions = useMemo(
     () => sessions.filter((session) => matchesSessionSearch(session, normalizedSearch)),
     [sessions, normalizedSearch],
   );
-  const groups = useMemo(() => groupSessions(filteredSessions), [filteredSessions]);
+  const groups = useMemo(
+    () =>
+      groupSessions(filteredSessions).map((group) => ({
+        ...group,
+        sessions: sortSessionsForWorkspace(group.sessions),
+      })),
+    [filteredSessions],
+  );
   const [collapsedWorkspaces, setCollapsedWorkspaces] = useState<Set<string>>(() => new Set());
   const [openMoreWorkspace, setOpenMoreWorkspace] = useState<string | null>(null);
   const [activeSessionByWorkspace, setActiveSessionByWorkspace] = useState<Map<string, string>>(
     () => new Map(),
   );
+  const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
+  const [editingTitle, setEditingTitle] = useState('');
+  const [openActionsSessionId, setOpenActionsSessionId] = useState<string | null>(null);
+  const [busySessionId, setBusySessionId] = useState<string | null>(null);
+  const renameInputRef = useRef<HTMLInputElement | null>(null);
+
+  const beginRename = (session: Session) => {
+    setOpenActionsSessionId(null);
+    setEditingSessionId(session.id);
+    setEditingTitle(sessionTitle(session));
+  };
+
+  const submitRename = async (sessionId: string) => {
+    if (!onRename) return;
+    const nextTitle = editingTitle.trim();
+    if (!nextTitle) return;
+
+    setBusySessionId(sessionId);
+    try {
+      const renamed = await onRename(sessionId, nextTitle);
+      if (renamed) {
+        setEditingSessionId(null);
+        setEditingTitle('');
+      }
+    } finally {
+      setBusySessionId(null);
+    }
+  };
+
+  const confirmDelete = async (session: Session) => {
+    if (!onDelete) return;
+    setOpenActionsSessionId(null);
+    const title = sessionTitle(session);
+    const runningWarning = isLiveStatus(session.status)
+      ? '\n\nThis will stop the running session.'
+      : '';
+    const confirmed = window.confirm(`Delete session "${title}"?${runningWarning}`);
+    if (!confirmed) return;
+
+    setBusySessionId(session.id);
+    try {
+      const deleted = await onDelete(session.id);
+      if (deleted && editingSessionId === session.id) {
+        setEditingSessionId(null);
+        setEditingTitle('');
+      }
+    } finally {
+      setBusySessionId(null);
+    }
+  };
 
   useEffect(() => {
     const current = sessions.find((session) => session.id === currentId);
@@ -204,6 +256,12 @@ export function SessionList({
       return next;
     });
   }, [currentId, sessions]);
+
+  useEffect(() => {
+    if (!editingSessionId) return;
+    renameInputRef.current?.focus();
+    renameInputRef.current?.select();
+  }, [editingSessionId]);
 
   return (
     <div
@@ -255,7 +313,7 @@ export function SessionList({
               border: 'none',
               outline: 'none',
               background: 'transparent',
-              color: '#d8d8d4',
+              color: '#ffffff',
               font: 'inherit',
               fontSize: '12px',
             }}
@@ -312,10 +370,6 @@ export function SessionList({
           const hidden = group.sessions.filter(
             (session) => !visible.some((visibleSession) => visibleSession.id === session.id),
           );
-          const hasLiveSession = group.sessions.some(
-            (session) => session.status === 'running' || session.status === 'starting',
-          );
-
           return (
             <section
               key={group.workspaceId}
@@ -393,8 +447,7 @@ export function SessionList({
                     color: '#cdd6f4',
                     cursor: 'pointer',
                     display: 'grid',
-                    gridTemplateColumns: 'minmax(0, 1fr) auto',
-                    gap: '8px',
+                    gridTemplateColumns: 'minmax(0, 1fr)',
                     alignItems: 'center',
                     padding: '4px 2px 4px 0',
                     textAlign: 'left',
@@ -406,7 +459,7 @@ export function SessionList({
                         display: 'block',
                         fontSize: '12px',
                         fontWeight: 650,
-                        color: workspaceActive ? '#d7d7d2' : '#a8a8a1',
+                        color: workspaceActive ? '#ffffff' : '#a8a8a1',
                         overflow: 'hidden',
                         textOverflow: 'ellipsis',
                         whiteSpace: 'nowrap',
@@ -427,15 +480,6 @@ export function SessionList({
                       {group.workspaceId}
                     </span>
                   </span>
-                  <span
-                    style={{
-                      color: hasLiveSession ? '#8aa777' : '#6f6f6a',
-                      fontSize: '10px',
-                      fontVariantNumeric: 'tabular-nums',
-                    }}
-                  >
-                    {group.sessions.length}
-                  </span>
                 </button>
               </div>
 
@@ -443,22 +487,25 @@ export function SessionList({
                 <div style={{ marginTop: '2px', position: 'relative' }}>
                   {visible.map((session) => {
                     const active = session.id === currentId;
-                    const tone = sessionTone(session.status);
                     const liveSession = isLiveStatus(session.status);
+                    const executing = liveSession && executingSessionIds.has(session.id);
+                    const completed = completedPromptSessionIds.has(session.id);
+                    const tone = sessionTone(session.status, executing, completed);
+                    const title = sessionTitle(session);
+                    const editing = editingSessionId === session.id;
+                    const actionsOpen = openActionsSessionId === session.id;
+                    const busy = busySessionId === session.id;
 
                     return (
-                      <button
-                        type="button"
+                      <div
                         key={session.id}
-                        aria-label={`Session ${sessionTitle(session)}`}
                         data-testid="session-item"
-                        onClick={() => onSelect(session.id)}
                         style={{
                           position: 'relative',
-                          overflow: 'hidden',
+                          overflow: 'visible',
                           padding: '10px 10px 10px 13px',
                           cursor: 'pointer',
-                          background: active ? tone.background : '#141414',
+                          background: active || completed ? tone.background : '#141414',
                           borderRadius: '6px',
                           marginBottom: '7px',
                           border: `1px solid ${active ? tone.activeBorder : tone.border}`,
@@ -466,49 +513,223 @@ export function SessionList({
                           display: 'block',
                           width: '100%',
                           textAlign: 'left',
-                          boxShadow: active
-                            ? `inset 3px 0 0 ${tone.indicator}, inset 0 0 0 1px rgba(255,255,255,0.04)`
-                            : 'inset 3px 0 0 #2d2d2a',
+                          boxShadow:
+                            active || completed
+                              ? `inset 3px 0 0 ${tone.indicator}, inset 0 0 0 1px rgba(255,255,255,0.04)`
+                              : 'inset 3px 0 0 #2d2d2a',
                         }}
                       >
+                        <button
+                          type="button"
+                          aria-label={`Session ${title}`}
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            onSelect(session.id);
+                          }}
+                          style={{
+                            position: 'absolute',
+                            inset: 0,
+                            zIndex: 1,
+                            border: 'none',
+                            background: 'transparent',
+                            padding: 0,
+                            cursor: 'pointer',
+                          }}
+                        />
                         <div
                           style={{
+                            position: 'relative',
+                            zIndex: 2,
                             display: 'grid',
-                            gridTemplateColumns: 'minmax(0, 1fr) auto',
+                            gridTemplateColumns:
+                              executing || completed
+                                ? 'minmax(0, 1fr) auto auto auto'
+                                : 'minmax(0, 1fr) auto auto',
                             gap: '8px',
                             alignItems: 'center',
                             fontWeight: 650,
                             fontSize: '13px',
                             overflow: 'hidden',
+                            pointerEvents: 'none',
                           }}
                         >
-                          <span
-                            style={{
-                              minWidth: 0,
-                              overflow: 'hidden',
-                              textOverflow: 'ellipsis',
-                              whiteSpace: 'nowrap',
-                            }}
-                          >
-                            <SessionTitle session={session} fontSize="13px" />
-                          </span>
+                          {editing ? (
+                            <form
+                              onSubmit={(event) => {
+                                event.preventDefault();
+                                event.stopPropagation();
+                                void submitRename(session.id);
+                              }}
+                              style={{
+                                display: 'grid',
+                                gridTemplateColumns: 'minmax(0, 1fr) 28px 28px',
+                                gap: '5px',
+                                alignItems: 'center',
+                                minWidth: 0,
+                                pointerEvents: 'auto',
+                              }}
+                            >
+                              <input
+                                ref={renameInputRef}
+                                aria-label={`Rename ${title}`}
+                                value={editingTitle}
+                                disabled={busy}
+                                onChange={(event) => setEditingTitle(event.target.value)}
+                                onClick={(event) => event.stopPropagation()}
+                                onKeyDown={(event) => {
+                                  if (event.key === 'Escape') {
+                                    event.stopPropagation();
+                                    setEditingSessionId(null);
+                                    setEditingTitle('');
+                                  }
+                                }}
+                                style={{
+                                  minWidth: 0,
+                                  height: '28px',
+                                  border: '1px solid #3a3f3c',
+                                  borderRadius: '5px',
+                                  background: '#090a0a',
+                                  color: '#ffffff',
+                                  padding: '0 8px',
+                                  font: 'inherit',
+                                  fontSize: '12px',
+                                  outline: 'none',
+                                }}
+                              />
+                              <button
+                                type="submit"
+                                className="session-icon-action"
+                                aria-label="Save session name"
+                                disabled={busy || editingTitle.trim().length === 0}
+                                onClick={(event) => event.stopPropagation()}
+                              >
+                                <Check size={15} strokeWidth={2.2} aria-hidden="true" />
+                              </button>
+                              <button
+                                type="button"
+                                className="session-icon-action"
+                                aria-label="Cancel rename"
+                                disabled={busy}
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  setEditingSessionId(null);
+                                  setEditingTitle('');
+                                }}
+                              >
+                                <X size={15} strokeWidth={2.2} aria-hidden="true" />
+                              </button>
+                            </form>
+                          ) : (
+                            <span
+                              style={{
+                                minWidth: 0,
+                                overflow: 'hidden',
+                                textOverflow: 'ellipsis',
+                                whiteSpace: 'nowrap',
+                              }}
+                            >
+                              <SessionTitle session={session} fontSize="13px" />
+                            </span>
+                          )}
                           <span
                             className="session-status-dot"
                             data-live={liveSession ? 'true' : 'false'}
                             aria-hidden="true"
-                            title={statusLabel(session.status)}
+                            title={statusLabel(session.status, executing, completed)}
                             style={{
                               width: '8px',
                               height: '8px',
                               borderRadius: '999px',
                               background: tone.indicator,
-                              boxShadow: liveSession
-                                ? `0 0 0 3px rgba(143, 191, 115, 0.13)`
-                                : 'none',
+                              boxShadow: executing
+                                ? '0 0 0 3px rgba(34, 200, 242, 0.13)'
+                                : completed
+                                  ? '0 0 0 3px rgba(152, 211, 110, 0.13)'
+                                  : liveSession
+                                    ? '0 0 0 3px rgba(143, 191, 115, 0.13)'
+                                    : 'none',
                             }}
                           />
+                          {executing && (
+                            <span
+                              data-testid="session-execution-status"
+                              style={{
+                                border: '1px solid rgba(34, 200, 242, 0.35)',
+                                borderRadius: '999px',
+                                color: '#a8edff',
+                                fontSize: '10px',
+                                fontWeight: 800,
+                                lineHeight: 1,
+                                padding: '4px 6px',
+                                textTransform: 'uppercase',
+                              }}
+                            >
+                              Executing
+                            </span>
+                          )}
+                          {!executing && completed && (
+                            <span
+                              data-testid="session-completion-status"
+                              style={{
+                                border: '1px solid rgba(152, 211, 110, 0.38)',
+                                borderRadius: '999px',
+                                color: '#c8f6ad',
+                                fontSize: '10px',
+                                fontWeight: 800,
+                                lineHeight: 1,
+                                padding: '4px 6px',
+                                textTransform: 'uppercase',
+                              }}
+                            >
+                              Done
+                            </span>
+                          )}
+                          {!editing && (
+                            <button
+                              type="button"
+                              className="session-icon-action"
+                              aria-label={`Session actions for ${title}`}
+                              aria-expanded={actionsOpen}
+                              disabled={busy}
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                setOpenActionsSessionId((prev) =>
+                                  prev === session.id ? null : session.id,
+                                );
+                              }}
+                              style={{ pointerEvents: 'auto' }}
+                            >
+                              <MoreHorizontal size={15} strokeWidth={2.2} aria-hidden="true" />
+                            </button>
+                          )}
                         </div>
-                      </button>
+                        {actionsOpen && (
+                          <div className="session-actions-menu" role="menu">
+                            <button
+                              type="button"
+                              role="menuitem"
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                beginRename(session);
+                              }}
+                            >
+                              <Pencil size={14} strokeWidth={2.2} aria-hidden="true" />
+                              Rename
+                            </button>
+                            <button
+                              type="button"
+                              role="menuitem"
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                void confirmDelete(session);
+                              }}
+                            >
+                              <Trash2 size={14} strokeWidth={2.2} aria-hidden="true" />
+                              Delete
+                            </button>
+                          </div>
+                        )}
+                      </div>
                     );
                   })}
                   {hidden.length > 0 && (
@@ -548,64 +769,71 @@ export function SessionList({
                             padding: '4px',
                           }}
                         >
-                          {hidden.map((session) => (
-                            <button
-                              type="button"
-                              key={session.id}
-                              aria-label={`Session ${sessionTitle(session)}`}
-                              data-testid="session-more-item"
-                              onClick={() => {
-                                setOpenMoreWorkspace(null);
-                                onSelect(session.id);
-                              }}
-                              style={{
-                                display: 'block',
-                                width: '100%',
-                                border: 'none',
-                                borderRadius: '4px',
-                                background: 'transparent',
-                                color: '#dedbd2',
-                                cursor: 'pointer',
-                                padding: '7px 8px',
-                                textAlign: 'left',
-                              }}
-                            >
-                              <div
+                          {hidden.map((session) => {
+                            const liveSession = isLiveStatus(session.status);
+                            const executing = liveSession && executingSessionIds.has(session.id);
+                            const completed = completedPromptSessionIds.has(session.id);
+                            const tone = sessionTone(session.status, executing, completed);
+
+                            return (
+                              <button
+                                type="button"
+                                key={session.id}
+                                aria-label={`Session ${sessionTitle(session)}`}
+                                data-testid="session-more-item"
+                                onClick={() => {
+                                  setOpenMoreWorkspace(null);
+                                  onSelect(session.id);
+                                }}
                                 style={{
-                                  display: 'grid',
-                                  gridTemplateColumns: 'minmax(0, 1fr) auto',
-                                  gap: '8px',
-                                  alignItems: 'center',
-                                  fontSize: '12px',
-                                  fontWeight: 700,
-                                  overflow: 'hidden',
+                                  display: 'block',
+                                  width: '100%',
+                                  border: 'none',
+                                  borderRadius: '4px',
+                                  background: completed ? '#151f12' : 'transparent',
+                                  color: '#ffffff',
+                                  cursor: 'pointer',
+                                  padding: '7px 8px',
+                                  textAlign: 'left',
                                 }}
                               >
-                                <span
+                                <div
                                   style={{
-                                    minWidth: 0,
+                                    display: 'grid',
+                                    gridTemplateColumns: 'minmax(0, 1fr) auto',
+                                    gap: '8px',
+                                    alignItems: 'center',
+                                    fontSize: '12px',
+                                    fontWeight: 700,
                                     overflow: 'hidden',
-                                    textOverflow: 'ellipsis',
-                                    whiteSpace: 'nowrap',
                                   }}
                                 >
-                                  <SessionTitle session={session} fontSize="12px" />
-                                </span>
-                                <span
-                                  className="session-status-dot"
-                                  data-live={isLiveStatus(session.status) ? 'true' : 'false'}
-                                  aria-hidden="true"
-                                  title={statusLabel(session.status)}
-                                  style={{
-                                    width: '7px',
-                                    height: '7px',
-                                    borderRadius: '999px',
-                                    background: sessionTone(session.status).indicator,
-                                  }}
-                                />
-                              </div>
-                            </button>
-                          ))}
+                                  <span
+                                    style={{
+                                      minWidth: 0,
+                                      overflow: 'hidden',
+                                      textOverflow: 'ellipsis',
+                                      whiteSpace: 'nowrap',
+                                    }}
+                                  >
+                                    <SessionTitle session={session} fontSize="12px" />
+                                  </span>
+                                  <span
+                                    className="session-status-dot"
+                                    data-live={liveSession ? 'true' : 'false'}
+                                    aria-hidden="true"
+                                    title={statusLabel(session.status, executing, completed)}
+                                    style={{
+                                      width: '7px',
+                                      height: '7px',
+                                      borderRadius: '999px',
+                                      background: tone.indicator,
+                                    }}
+                                  />
+                                </div>
+                              </button>
+                            );
+                          })}
                         </div>
                       )}
                     </div>

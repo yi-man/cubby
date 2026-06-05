@@ -13,9 +13,11 @@ import { sanitizeEndedReplayChunks } from './terminal-replay.js';
 interface SessionViewProps {
   session: Session;
   active?: boolean;
+  executing?: boolean;
   autoStart?: boolean;
   focusRequest?: number;
   onAutoStartConsumed?: () => void;
+  onPromptSubmitted?: (sessionId: string) => void;
   send: (req: { id: string; cmd: string; args?: Record<string, unknown> }) => void;
   request: (req: {
     id: string;
@@ -66,6 +68,48 @@ function statusTone(status: Session['status']) {
   };
 }
 
+function collectSubmittedTerminalInput(
+  buffer: string,
+  data: string,
+): { buffer: string; submitted: boolean } {
+  let nextBuffer = buffer;
+  let submitted = false;
+
+  for (let index = 0; index < data.length; index++) {
+    const char = data[index];
+    if (char === '\x1b') {
+      index = skipTerminalEscapeSequence(data, index) - 1;
+      continue;
+    }
+    if (char === '\r' || char === '\n') {
+      if (nextBuffer.trim()) submitted = true;
+      nextBuffer = '';
+      continue;
+    }
+    if (char === '\b' || char === '\x7f') {
+      nextBuffer = nextBuffer.slice(0, -1);
+      continue;
+    }
+    if (char >= ' ') nextBuffer += char;
+  }
+
+  return { buffer: nextBuffer, submitted };
+}
+
+function skipTerminalEscapeSequence(data: string, start: number): number {
+  let index = start + 1;
+  if (data[index] === '[') {
+    index += 1;
+    while (index < data.length) {
+      const code = data.charCodeAt(index);
+      index += 1;
+      if (code >= 0x40 && code <= 0x7e) break;
+    }
+    return index;
+  }
+  return index;
+}
+
 interface ReplayState {
   loaded: boolean;
   hasHistory: boolean;
@@ -93,7 +137,7 @@ function EmptyEndedHistory() {
       }}
     >
       <div>
-        <div style={{ color: '#dedbd2', fontSize: '14px', fontWeight: 700 }}>
+        <div style={{ color: '#ffffff', fontSize: '14px', fontWeight: 700 }}>
           No terminal history captured
         </div>
         <div style={{ marginTop: '6px', fontSize: '12px' }}>Session ended</div>
@@ -105,9 +149,11 @@ function EmptyEndedHistory() {
 export function SessionView({
   session,
   active = true,
+  executing = false,
   autoStart = false,
   focusRequest = 0,
   onAutoStartConsumed,
+  onPromptSubmitted,
   send,
   request,
   onMessage,
@@ -124,6 +170,7 @@ export function SessionView({
   const resizeAuthorityRef = useRef(false);
   const writeChainRef = useRef<Promise<void>>(Promise.resolve());
   const lastFocusRequestRef = useRef(focusRequest);
+  const pendingInputRef = useRef('');
   const [terminalReady, setTerminalReady] = useState(false);
   const [replayState, setReplayState] = useState<ReplayState>(() => emptyReplayState());
   const [recoveryError, setRecoveryError] = useState<string | null>(null);
@@ -190,6 +237,13 @@ export function SessionView({
       () => {},
     );
     return queuedReset;
+  }, []);
+
+  const scrollTerminalToBottomAfterLayout = useCallback(() => {
+    termRef.current?.scrollToBottom();
+    window.requestAnimationFrame(() => {
+      termRef.current?.scrollToBottom();
+    });
   }, []);
 
   const flushPendingLiveChunks = useCallback(
@@ -431,7 +485,7 @@ export function SessionView({
           if (!written) return;
         }
         if (cancelled || replayGenerationRef.current !== replayGeneration) return;
-        termRef.current?.scrollToBottom();
+        scrollTerminalToBottomAfterLayout();
         setReplayState({
           loaded: true,
           hasHistory: replayChunks.some((chunk) => chunk.length > 0),
@@ -458,6 +512,7 @@ export function SessionView({
     enqueueWriteStringForGeneration,
     enqueueResetForGeneration,
     blockRecovery,
+    scrollTerminalToBottomAfterLayout,
   ]);
 
   useEffect(() => {
@@ -559,13 +614,16 @@ export function SessionView({
   const handleData = useCallback(
     (data: string) => {
       if (!active || !live) return;
+      const collectedInput = collectSubmittedTerminalInput(pendingInputRef.current, data);
+      pendingInputRef.current = collectedInput.buffer;
+      if (collectedInput.submitted) onPromptSubmitted?.(session.id);
       send({
         id: `input-${Date.now()}`,
         cmd: 'terminal.input',
         args: { sessionId: session.id, data },
       });
     },
-    [session.id, active, live, send],
+    [session.id, active, live, send, onPromptSubmitted],
   );
 
   const handleResize = useCallback(
@@ -584,7 +642,14 @@ export function SessionView({
   const showEmptyEndedHistory =
     session.status === 'ended' && replayState.loaded && !replayState.hasHistory;
   const showRecoveryError = live && recoveryError !== null;
-  const currentStatusTone = statusTone(session.status);
+  const currentStatusTone = executing
+    ? {
+        label: 'Executing',
+        color: '#22c8f2',
+        border: '#245564',
+        background: '#071a1f',
+      }
+    : statusTone(session.status);
 
   return (
     <div
@@ -625,7 +690,7 @@ export function SessionView({
             overflow: 'hidden',
             textOverflow: 'ellipsis',
             whiteSpace: 'nowrap',
-            color: '#d8d6cf',
+            color: '#ffffff',
             fontSize: '13px',
             fontWeight: 650,
           }}
@@ -657,10 +722,14 @@ export function SessionView({
               height: '7px',
               borderRadius: '999px',
               background: currentStatusTone.color,
-              boxShadow: live ? `0 0 0 3px rgba(143, 191, 115, 0.14)` : 'none',
+              boxShadow: executing
+                ? '0 0 0 3px rgba(34, 200, 242, 0.14)'
+                : live
+                  ? '0 0 0 3px rgba(143, 191, 115, 0.14)'
+                  : 'none',
             }}
           />
-          <span style={VISUALLY_HIDDEN_STYLE}>{session.status}</span>
+          <span style={VISUALLY_HIDDEN_STYLE}>{executing ? 'executing' : session.status}</span>
         </span>
         <span
           style={{
@@ -718,7 +787,7 @@ export function SessionView({
                 border: '1px solid #303030',
                 borderRadius: '6px',
                 background: '#171717',
-                color: '#dedbd2',
+                color: '#ffffff',
                 cursor: 'pointer',
                 fontWeight: 650,
               }}
@@ -729,12 +798,14 @@ export function SessionView({
         </div>
       </div>
       <div
+        data-testid="terminal-frame"
         style={{
           flex: 1,
           minHeight: 0,
           overflow: 'hidden',
           position: 'relative',
           background: '#050606',
+          padding: '12px 14px 14px',
         }}
       >
         <TerminalView
@@ -745,7 +816,17 @@ export function SessionView({
           onResize={handleResize}
           onReady={() => setTerminalReady(true)}
         />
-        {showEmptyEndedHistory && <EmptyEndedHistory />}
+        {showEmptyEndedHistory && (
+          <div
+            style={{
+              position: 'absolute',
+              inset: '12px 14px 14px',
+              pointerEvents: 'none',
+            }}
+          >
+            <EmptyEndedHistory />
+          </div>
+        )}
         {showRecoveryError && (
           <div
             data-testid="terminal-recovery-error"
@@ -757,7 +838,7 @@ export function SessionView({
               justifyContent: 'center',
               padding: '24px',
               background: 'rgba(5, 6, 6, 0.92)',
-              color: '#dedbd2',
+              color: '#ffffff',
               textAlign: 'center',
               pointerEvents: 'none',
             }}

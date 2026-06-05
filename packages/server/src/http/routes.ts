@@ -1,10 +1,20 @@
 import { readdir, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
-import type { FastifyInstance } from 'fastify';
+import type { Session } from '@cubby/core';
+import type { FastifyInstance, FastifyReply } from 'fastify';
 import type { SessionManager } from '../session/manager.js';
 
-export function registerRoutes(app: FastifyInstance, sessionManager: SessionManager) {
+export interface SessionRouteCallbacks {
+  onSessionUpdated?: (session: Session) => void;
+  onSessionDeleted?: (sessionId: string) => void;
+}
+
+export function registerRoutes(
+  app: FastifyInstance,
+  sessionManager: SessionManager,
+  callbacks: SessionRouteCallbacks = {},
+) {
   app.get('/api/browse', async (request) => {
     const { path } = request.query as { path?: string };
     const target = resolve(path || homedir());
@@ -49,6 +59,35 @@ export function registerRoutes(app: FastifyInstance, sessionManager: SessionMana
     return session;
   });
 
+  app.patch('/api/sessions/:id', async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const body = request.body as { title?: unknown } | undefined;
+    if (typeof body?.title !== 'string' || !body.title.trim()) {
+      return reply.code(400).send({ error: 'Session title is required' });
+    }
+
+    try {
+      const session = sessionManager.renameSession(id, body.title);
+      callbacks.onSessionUpdated?.(session);
+      return session;
+    } catch (err) {
+      if (isSessionNotFound(err)) {
+        return sendNotFound(reply);
+      }
+      throw err;
+    }
+  });
+
+  app.delete('/api/sessions/:id', async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const deleted = await sessionManager.deleteSession(id);
+    if (!deleted) {
+      return sendNotFound(reply);
+    }
+    callbacks.onSessionDeleted?.(id);
+    return { ok: true, sessionId: id };
+  });
+
   app.post('/api/sessions/:id/start', async (request) => {
     const { id } = request.params as { id: string };
     const body = request.body as { cwd?: string; cols?: number; rows?: number } | undefined;
@@ -76,6 +115,14 @@ export function registerRoutes(app: FastifyInstance, sessionManager: SessionMana
     });
     return { ok: true };
   });
+}
+
+function sendNotFound(reply: FastifyReply) {
+  return reply.code(404).send({ error: 'Not found' });
+}
+
+function isSessionNotFound(err: unknown): boolean {
+  return err instanceof Error && err.message === 'Session not found';
 }
 
 function normalizeTerminalDimension(

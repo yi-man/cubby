@@ -2,9 +2,18 @@ import { randomUUID } from 'node:crypto';
 import { unlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { WS_COMMANDS, WS_EVENTS } from '@cubby/core';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { Database } from '../db/index.js';
 import { SessionStore } from './store.js';
+
+describe('protocol session commands and events', () => {
+  it('exposes session rename and delete protocol constants', () => {
+    expect(WS_COMMANDS.SESSION_RENAME).toBe('session.rename');
+    expect(WS_COMMANDS.SESSION_DELETE).toBe('session.delete');
+    expect(WS_EVENTS.SESSION_DELETED).toBe('session.deleted');
+  });
+});
 
 describe('SessionStore', () => {
   let db: Database;
@@ -60,6 +69,34 @@ describe('SessionStore', () => {
 
   it('returns null for non-existent session', () => {
     expect(store.get('nonexistent')).toBeNull();
+  });
+
+  it('deletes a session and related terminal records', () => {
+    const session = store.create({ workspaceId: '/tmp/test', provider: 'claude-code' });
+    const terminalId = randomUUID();
+    const now = new Date().toISOString();
+
+    db.prepare(
+      'INSERT INTO terminals (id, session_id, title, pid, cols, rows, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+    ).run(terminalId, session.id, 'main', 123, 120, 40, now);
+    store.appendTerminalOutput(session.id, { data: 'hello', seqStart: 0, seq: 5 });
+    store.upsertTerminalSnapshot(session.id, {
+      data: 'snapshot',
+      seq: 5,
+      cols: 120,
+      rows: 40,
+    });
+
+    expect(store.delete(session.id)).toBe(true);
+    expect(store.get(session.id)).toBeNull();
+    expect(store.getTerminalOutputHistory(session.id)).toEqual([]);
+    expect(store.getTerminalSnapshot(session.id)).toBeNull();
+    expect(
+      db
+        .prepare('SELECT COUNT(*) AS count FROM terminals WHERE session_id = ?')
+        .get(session.id) as Record<string, number>,
+    ).toEqual({ count: 0 });
+    expect(store.delete(session.id)).toBe(false);
   });
 
   it('returns only the latest terminal run when history contains shell initialization markers', () => {
