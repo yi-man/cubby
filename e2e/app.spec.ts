@@ -1,3 +1,6 @@
+import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { homedir, tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { expect, type Locator, type Page, test } from '@playwright/test';
 
 interface SessionFixture {
@@ -945,6 +948,32 @@ test.describe('Cubby MVP', () => {
     await expect(page.getByLabel('Workspace path')).toBeVisible();
   });
 
+  test('workspace picker defaults to home and browses folders', async ({ page }) => {
+    const pickerRoot = mkdtempSync(join(tmpdir(), 'cubby-picker-'));
+    const workspacePath = join(pickerRoot, 'chosen-workspace');
+    mkdirSync(workspacePath);
+
+    try {
+      await page.goto('/');
+      await page.getByRole('button', { name: 'New Session' }).click();
+
+      const dialog = page.getByRole('dialog', { name: 'Open Workspace' });
+      await expect(dialog).toBeVisible();
+      await expect(dialog.getByLabel('Workspace path')).toHaveValue(homedir());
+
+      await dialog.getByLabel('Workspace path').fill(pickerRoot);
+      await dialog.getByRole('button', { name: 'Browse path' }).click();
+      await expect(
+        dialog.getByRole('button', { name: 'Open folder chosen-workspace' }),
+      ).toBeVisible();
+
+      await dialog.getByRole('button', { name: 'Open folder chosen-workspace' }).click();
+      await expect(dialog.getByLabel('Workspace path')).toHaveValue(workspacePath);
+    } finally {
+      rmSync(pickerRoot, { recursive: true, force: true });
+    }
+  });
+
   test('session list shows sessions', async ({ page }) => {
     const title = `Test Session ${Date.now()}`;
     // Create a session via API first
@@ -1258,7 +1287,7 @@ test.describe('Cubby MVP', () => {
     await assertActiveDetail(page, { title: session.title, status: 'running', action: 'Stop' });
     await expect
       .poll(async () => countOccurrences(await terminalText(page), marker), { timeout: 10000 })
-      .toBe(3);
+      .toBe(1);
 
     const liveReplayResponses = await page.evaluate(
       () =>

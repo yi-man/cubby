@@ -89,7 +89,6 @@ function sessionTone(status: Session['status']) {
       border: '#31442d',
       activeBorder: '#5d8d48',
       indicator: '#8fbf73',
-      rail: '#6fa35a',
       text: '#dcebd4',
       meta: '#96aa8a',
     };
@@ -100,7 +99,6 @@ function sessionTone(status: Session['status']) {
       border: '#3b3b3b',
       activeBorder: '#5b5b57',
       indicator: '#989890',
-      rail: '#555550',
       text: '#dedbd2',
       meta: '#8e8d86',
     };
@@ -110,7 +108,6 @@ function sessionTone(status: Session['status']) {
     border: '#4b2825',
     activeBorder: '#745047',
     indicator: '#c78a7c',
-    rail: '#8f5c54',
     text: '#ead9d4',
     meta: '#ad8981',
   };
@@ -469,22 +466,11 @@ export function SessionList({
                           display: 'block',
                           width: '100%',
                           textAlign: 'left',
-                          boxShadow: active ? 'inset 0 0 0 1px rgba(255,255,255,0.04)' : 'none',
+                          boxShadow: active
+                            ? `inset 3px 0 0 ${tone.indicator}, inset 0 0 0 1px rgba(255,255,255,0.04)`
+                            : 'inset 3px 0 0 #2d2d2a',
                         }}
                       >
-                        <span
-                          aria-hidden="true"
-                          style={{
-                            position: 'absolute',
-                            top: '9px',
-                            bottom: '9px',
-                            left: 0,
-                            width: '3px',
-                            borderRadius: '0 3px 3px 0',
-                            background: active ? tone.rail : '#2d2d2a',
-                            opacity: active ? 1 : 0.85,
-                          }}
-                        />
                         <div
                           style={{
                             display: 'grid',
