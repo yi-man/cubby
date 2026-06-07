@@ -15,18 +15,26 @@ const ACTIVE_DRAFT_SESSION_BORDER = 'rgb(116, 80, 71)';
 
 async function createSession(
   page: Page,
-  input: { workspaceId: string; title: string },
+  input: { workspaceId: string; title: string; provider?: string },
 ): Promise<SessionFixture> {
   const response = await page.request.post('/api/sessions', {
-    data: { workspaceId: input.workspaceId, provider: 'claude-code', title: input.title },
+    data: {
+      workspaceId: input.workspaceId,
+      provider: input.provider ?? 'claude-code',
+      title: input.title,
+    },
   });
   expect(response.ok()).toBeTruthy();
   return (await response.json()) as SessionFixture;
 }
 
-async function startSession(page: Page, session: SessionFixture): Promise<void> {
+async function startSession(
+  page: Page,
+  session: SessionFixture,
+  size: { cols?: number; rows?: number } = {},
+): Promise<void> {
   const response = await page.request.post(`/api/sessions/${session.id}/start`, {
-    data: { cwd: session.workspaceId },
+    data: { cwd: session.workspaceId, ...size },
   });
   expect(response.ok()).toBeTruthy();
 }
@@ -71,6 +79,91 @@ async function terminalText(page: Page): Promise<string> {
   return activeTerminalRows(page).evaluate((element) => element.textContent ?? '');
 }
 
+async function activeTerminalLayoutMetrics(page: Page): Promise<{
+  frameHeight: number;
+  frameWidth: number;
+  terminalHeight: number;
+  terminalWidth: number;
+}> {
+  return activeSessionView(page).evaluate((view) => {
+    const frame = view.querySelector('[data-testid="terminal-frame"]');
+    const terminal = view.querySelector('.xterm');
+    if (!frame || !terminal) throw new Error('Active terminal layout missing');
+    const frameRect = frame.getBoundingClientRect();
+    const terminalRect = terminal.getBoundingClientRect();
+    return {
+      frameHeight: Math.round(frameRect.height),
+      frameWidth: Math.round(frameRect.width),
+      terminalHeight: Math.round(terminalRect.height),
+      terminalWidth: Math.round(terminalRect.width),
+    };
+  });
+}
+
+async function activeTerminalScrollMetrics(page: Page): Promise<{
+  bottomOffset: number;
+  clientHeight: number;
+  scrollHeight: number;
+  scrollTop: number;
+}> {
+  return activeSessionView(page).evaluate((view) => {
+    const viewport = view.querySelector('.xterm-viewport');
+    if (!(viewport instanceof HTMLElement)) throw new Error('Active terminal viewport missing');
+    return {
+      bottomOffset: Math.round(viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight),
+      clientHeight: Math.round(viewport.clientHeight),
+      scrollHeight: Math.round(viewport.scrollHeight),
+      scrollTop: Math.round(viewport.scrollTop),
+    };
+  });
+}
+
+async function activeTerminalHorizontalMetrics(page: Page): Promise<{
+  clientWidth: number;
+  frameWidth: number;
+  overflowX: string;
+  scrollLeft: number;
+  scrollWidth: number;
+  screenWidth: number;
+  terminalWidth: number;
+}> {
+  return activeSessionView(page).evaluate((view) => {
+    const frame = view.querySelector('[data-testid="terminal-frame"]');
+    const root = view.querySelector('[data-terminal-interactive]');
+    const terminal = view.querySelector('.xterm');
+    const screen = view.querySelector('.xterm-screen');
+    if (!frame || !(root instanceof HTMLElement) || !terminal || !screen) {
+      throw new Error('Active terminal horizontal layout missing');
+    }
+    return {
+      clientWidth: Math.round(root.clientWidth),
+      frameWidth: Math.round(frame.getBoundingClientRect().width),
+      overflowX: window.getComputedStyle(root).overflowX,
+      scrollLeft: Math.round(root.scrollLeft),
+      scrollWidth: Math.round(root.scrollWidth),
+      screenWidth: Math.round(screen.getBoundingClientRect().width),
+      terminalWidth: Math.round(terminal.getBoundingClientRect().width),
+    };
+  });
+}
+
+async function activeVisibleTerminalCursorCount(page: Page): Promise<number> {
+  return activeSessionView(page).evaluate((view) => {
+    return Array.from(view.querySelectorAll('.xterm-cursor')).filter((element) => {
+      if (!(element instanceof HTMLElement)) return false;
+      const style = window.getComputedStyle(element);
+      const rect = element.getBoundingClientRect();
+      return (
+        style.display !== 'none' &&
+        style.visibility !== 'hidden' &&
+        Number(style.opacity) > 0 &&
+        rect.width > 0 &&
+        rect.height > 0
+      );
+    }).length;
+  });
+}
+
 function countOccurrences(value: string, needle: string): number {
   return value.split(needle).length - 1;
 }
@@ -110,6 +203,13 @@ async function installWebSocketRecorder(page: Page): Promise<void> {
         return super.send(data);
       }
     };
+  });
+}
+
+async function clearSidebarStorageBeforeLoad(page: Page): Promise<void> {
+  await page.addInitScript(() => {
+    window.localStorage.removeItem('cubby.sidebarCollapsed');
+    window.localStorage.removeItem('cubby.sidebarWidth');
   });
 }
 
@@ -284,6 +384,26 @@ async function selectSessionTab(group: Locator, title: string): Promise<void> {
 
   await moreButton.click();
   await group.getByRole('button', { name: `Session ${title}`, exact: true }).click();
+}
+
+async function expectProviderBrandIcon(
+  tab: Locator,
+  ariaLabel: string,
+  iconTitle: string,
+): Promise<void> {
+  const icon = tab.getByLabel(ariaLabel);
+  const image = icon.locator('img');
+  await expect(icon).toBeVisible();
+  await expect(image).toHaveCount(1);
+  await expect(image).toHaveAttribute('data-icon-title', iconTitle);
+  await expect
+    .poll(() =>
+      image.evaluate(
+        (element) =>
+          element instanceof HTMLImageElement && element.complete && element.naturalWidth > 0,
+      ),
+    )
+    .toBe(true);
 }
 
 test.describe('Cubby MVP', () => {
@@ -490,6 +610,85 @@ test.describe('Cubby MVP', () => {
 
     await page.reload();
     await expect(sidebar).toHaveCSS('width', '320px');
+  });
+
+  test('desktop sidebar resize resizes the active live terminal', async ({ page }) => {
+    test.skip(
+      !MOCK_CLAUDE_PROVIDER_ENABLED,
+      'Requires CUBBY_MOCK_CLAUDE_PROVIDER=1 to start a deterministic running session',
+    );
+
+    await page.setViewportSize({ width: 1280, height: 720 });
+    await installWebSocketRecorder(page);
+    await clearSidebarStorageBeforeLoad(page);
+
+    const stamp = Date.now();
+    const workspaceId = `/tmp/cubby-sidebar-resize-${stamp}`;
+    const session = await createSession(page, {
+      workspaceId,
+      title: `Sidebar Resize ${stamp}`,
+    });
+
+    try {
+      await page.goto('/');
+      const group = page.getByTestId('workspace-group').filter({ hasText: workspaceId });
+      await selectSessionTab(group, session.title);
+      await assertActiveDetail(page, { title: session.title, status: 'draft', action: 'Start' });
+
+      await activeSessionView(page).getByRole('button', { name: 'Start', exact: true }).click();
+      await assertActiveDetail(page, { title: session.title, status: 'running', action: 'Stop' });
+      await expect
+        .poll(() => terminalText(page), { timeout: 10000 })
+        .toContain('Mock Claude Code ready');
+
+      const sessionId = await activeSessionView(page).evaluate((element) => {
+        const id = element.getAttribute('data-session-id');
+        if (!id) throw new Error('Active session id missing');
+        return id;
+      });
+      await page.evaluate(() => {
+        (window as typeof window & { __wsCommands?: unknown[] }).__wsCommands = [];
+      });
+
+      const resizeHandle = page.getByRole('separator', { name: 'Resize sidebar' });
+      const box = await resizeHandle.boundingBox();
+      expect(box).not.toBeNull();
+      if (!box) return;
+
+      await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+      await page.mouse.down();
+      await page.mouse.move(320, box.y + box.height / 2);
+
+      const duringDragLayout = await activeTerminalLayoutMetrics(page);
+      expect(duringDragLayout.terminalWidth).toBeLessThanOrEqual(duringDragLayout.frameWidth);
+      expect(duringDragLayout.terminalHeight).toBeGreaterThanOrEqual(
+        duringDragLayout.frameHeight - 48,
+      );
+
+      await page.mouse.up();
+
+      await expect
+        .poll(
+          () =>
+            page.evaluate((expectedSessionId) => {
+              const commands =
+                (
+                  window as typeof window & {
+                    __wsCommands?: Array<{ cmd?: string; args?: { sessionId?: string } }>;
+                  }
+                ).__wsCommands ?? [];
+              return commands.some(
+                (command) =>
+                  command.cmd === 'terminal.resize' &&
+                  command.args?.sessionId === expectedSessionId,
+              );
+            }, sessionId),
+          { timeout: 10000 },
+        )
+        .toBe(true);
+    } finally {
+      await stopSession(page, session);
+    }
   });
 
   test('sidebar is collapsed by default on mobile without stored browser state', async ({
@@ -870,6 +1069,180 @@ test.describe('Cubby MVP', () => {
     expect(resizeCommands).toEqual([]);
   });
 
+  test('rejoined running session can take over terminal resize control from the action row', async ({
+    page,
+  }) => {
+    test.skip(
+      !MOCK_CLAUDE_PROVIDER_ENABLED,
+      'Requires CUBBY_MOCK_CLAUDE_PROVIDER=1 to start a deterministic running session',
+    );
+
+    await page.setViewportSize({ width: 1280, height: 720 });
+    await installWebSocketRecorder(page);
+
+    const stamp = Date.now();
+    const workspaceId = `/tmp/cubby-running-take-size-${stamp}`;
+    const running = await createSession(page, {
+      workspaceId,
+      title: `Running Take Size ${stamp}`,
+    });
+    await startSession(page, running);
+
+    try {
+      await page.goto('/');
+      await assertActiveDetail(page, { title: running.title, status: 'running', action: 'Stop' });
+      await expect
+        .poll(() => terminalText(page), { timeout: 10000 })
+        .toContain('Mock Claude Code ready');
+      await expect
+        .poll(() => wsCommandCount(page, 'terminal.subscribe'), { timeout: 10000 })
+        .toBe(1);
+
+      await page.evaluate(() => {
+        (window as typeof window & { __wsCommands?: unknown[] }).__wsCommands = [];
+      });
+
+      const controlSizeButton = activeSessionView(page).getByRole('button', {
+        name: 'Control terminal size',
+      });
+      await expect(controlSizeButton).toBeVisible({ timeout: 5000 });
+      await controlSizeButton.click();
+
+      await expect
+        .poll(
+          () =>
+            page.evaluate((sessionId) => {
+              const commands =
+                (
+                  window as typeof window & {
+                    __wsCommands?: Array<{
+                      cmd?: string;
+                      args?: { sessionId?: string; cols?: number; rows?: number };
+                    }>;
+                  }
+                ).__wsCommands ?? [];
+              return commands.some(
+                (command) =>
+                  command.cmd === 'terminal.resize' &&
+                  command.args?.sessionId === sessionId &&
+                  Number(command.args.cols) > 0 &&
+                  Number(command.args.rows) > 0,
+              );
+            }, running.id),
+          { timeout: 10000 },
+        )
+        .toBe(true);
+
+      await expect(
+        activeSessionView(page).getByRole('button', { name: 'Control terminal size' }),
+      ).toHaveAttribute('aria-pressed', 'true');
+
+      await page.evaluate(() => {
+        (window as typeof window & { __wsCommands?: unknown[] }).__wsCommands = [];
+      });
+      const resizeHandle = page.getByRole('separator', { name: 'Resize sidebar' });
+      const box = await resizeHandle.boundingBox();
+      expect(box).not.toBeNull();
+      if (!box) return;
+
+      await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+      await page.mouse.down();
+      await page.mouse.move(360, box.y + box.height / 2);
+      await page.mouse.up();
+
+      await expect
+        .poll(
+          () =>
+            page.evaluate((sessionId) => {
+              const commands =
+                (
+                  window as typeof window & {
+                    __wsCommands?: Array<{ cmd?: string; args?: { sessionId?: string } }>;
+                  }
+                ).__wsCommands ?? [];
+              return commands.some(
+                (command) =>
+                  command.cmd === 'terminal.resize' && command.args?.sessionId === sessionId,
+              );
+            }, running.id),
+          { timeout: 10000 },
+        )
+        .toBe(true);
+    } finally {
+      await stopSession(page, running);
+    }
+  });
+
+  test('desktop sidebar resize keeps a rejoined live terminal horizontally scrollable while dragging', async ({
+    page,
+  }) => {
+    test.skip(
+      !MOCK_CLAUDE_PROVIDER_ENABLED,
+      'Requires CUBBY_MOCK_CLAUDE_PROVIDER=1 to start a deterministic running session',
+    );
+
+    await page.setViewportSize({ width: 1280, height: 720 });
+    await installWebSocketRecorder(page);
+    await clearSidebarStorageBeforeLoad(page);
+
+    const stamp = Date.now();
+    const workspaceId = `/tmp/cubby-rejoined-sidebar-fit-${stamp}`;
+    const running = await createSession(page, {
+      workspaceId,
+      title: `Rejoined Sidebar Fit ${stamp}`,
+    });
+    await startSession(page, running, { cols: 180, rows: 32 });
+
+    try {
+      await page.goto('/');
+      const group = page.getByTestId('workspace-group').filter({ hasText: workspaceId });
+      await selectSessionTab(group, running.title);
+      await assertActiveDetail(page, { title: running.title, status: 'running', action: 'Stop' });
+      await expect
+        .poll(() => terminalText(page), { timeout: 10000 })
+        .toContain('Mock Claude Code ready');
+      await expect
+        .poll(() => wsCommandCount(page, 'terminal.subscribe'), { timeout: 10000 })
+        .toBe(1);
+
+      await page.evaluate(() => {
+        (window as typeof window & { __wsCommands?: unknown[] }).__wsCommands = [];
+      });
+      const resizeHandle = page.getByRole('separator', { name: 'Resize sidebar' });
+      const box = await resizeHandle.boundingBox();
+      expect(box).not.toBeNull();
+      if (!box) return;
+
+      await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+      await page.mouse.down();
+      await page.mouse.move(420, box.y + box.height / 2);
+
+      const duringDragHorizontal = await activeTerminalHorizontalMetrics(page);
+      expect(duringDragHorizontal.overflowX).toBe('auto');
+      expect(duringDragHorizontal.scrollWidth).toBeGreaterThan(
+        duringDragHorizontal.clientWidth + 200,
+      );
+      expect(duringDragHorizontal.screenWidth).toBeGreaterThan(duringDragHorizontal.frameWidth);
+
+      await page.mouse.up();
+
+      const resizeCommands = await page.evaluate((sessionId) => {
+        const commands =
+          (
+            window as typeof window & {
+              __wsCommands?: Array<{ cmd?: string; args?: { sessionId?: string } }>;
+            }
+          ).__wsCommands ?? [];
+        return commands.filter(
+          (command) => command.cmd === 'terminal.resize' && command.args?.sessionId === sessionId,
+        );
+      }, running.id);
+      expect(resizeCommands).toEqual([]);
+    } finally {
+      await stopSession(page, running);
+    }
+  });
+
   test('mobile live viewers do not resize the shared terminal when the sidebar changes', async ({
     page,
   }) => {
@@ -1007,6 +1380,7 @@ test.describe('Cubby MVP', () => {
               const activeView = document.querySelector(
                 '[data-testid="session-view"][data-active="true"]',
               );
+              const terminalRoot = activeView?.querySelector('[data-terminal-interactive]');
               const terminalWidth = Math.round(
                 activeView?.querySelector('.xterm')?.getBoundingClientRect().width ?? 0,
               );
@@ -1021,7 +1395,11 @@ test.describe('Cubby MVP', () => {
                 sentLocalSnapshotSize:
                   command?.args?.cols !== undefined || command?.args?.rows !== undefined,
                 responseUsesCanonicalCols: responseCols > 90,
-                terminalFitsMobileViewport: terminalWidth > 0 && terminalWidth <= 390,
+                terminalRootScrollsHorizontally:
+                  terminalWidth > 0 &&
+                  terminalRoot instanceof HTMLElement &&
+                  window.getComputedStyle(terminalRoot).overflowX === 'auto' &&
+                  terminalRoot.scrollWidth > terminalRoot.clientWidth + 200,
                 canonicalCanvasOverflows: screenWidth > terminalWidth + 200,
               };
             }, running.id),
@@ -1032,7 +1410,7 @@ test.describe('Cubby MVP', () => {
           snapshotOk: true,
           sentLocalSnapshotSize: false,
           responseUsesCanonicalCols: true,
-          terminalFitsMobileViewport: true,
+          terminalRootScrollsHorizontally: true,
           canonicalCanvasOverflows: true,
         });
     } finally {
@@ -1113,6 +1491,43 @@ test.describe('Cubby MVP', () => {
 
     await expect(page.getByRole('dialog', { name: 'Open Workspace' })).toBeVisible();
     await expect(page.getByLabel('Workspace path')).toBeVisible();
+    await expect(page.getByRole('radio', { name: 'Claude Code' })).toBeChecked();
+    await expect(page.getByRole('radio', { name: 'Codex' })).toBeVisible();
+  });
+
+  test('workspace picker creates Codex sessions when Codex is selected', async ({ page }) => {
+    const workspacePath = mkdtempSync(join(tmpdir(), 'cubby-codex-picker-'));
+    await installWebSocketRecorder(page);
+
+    try {
+      await page.goto('/');
+      await page.getByRole('button', { name: 'New Session' }).click();
+
+      const dialog = page.getByRole('dialog', { name: 'Open Workspace' });
+      await dialog.getByRole('radio', { name: 'Codex' }).check();
+      await dialog.getByLabel('Workspace path').fill(workspacePath);
+      await dialog.getByRole('button', { name: 'Open', exact: true }).click();
+
+      await expect
+        .poll(
+          () =>
+            page.evaluate(() => {
+              const commands =
+                (
+                  window as typeof window & {
+                    __wsCommands?: Array<{ cmd?: string; args?: { provider?: string } }>;
+                  }
+                ).__wsCommands ?? [];
+              return commands.find((command) => command.cmd === 'session.create')?.args?.provider;
+            }),
+          { timeout: 10000 },
+        )
+        .toBe('codex');
+
+      await expect(activeSessionView(page).getByTestId('session-title')).toHaveText('codex');
+    } finally {
+      rmSync(workspacePath, { recursive: true, force: true });
+    }
   });
 
   test('workspace picker defaults to home and browses folders', async ({ page }) => {
@@ -1155,6 +1570,36 @@ test.describe('Cubby MVP', () => {
     await expect(page.getByTestId('session-item').filter({ hasText: title })).toHaveCount(1, {
       timeout: 5000,
     });
+  });
+
+  test('session tabs show brand provider icons for Claude Codex and OpenCode', async ({ page }) => {
+    const stamp = Date.now();
+    const workspaceId = `/tmp/cubby-provider-icons-${stamp}`;
+    const claude = await createSession(page, {
+      workspaceId,
+      provider: 'claude-code',
+      title: `Claude Icon ${stamp}`,
+    });
+    const codex = await createSession(page, {
+      workspaceId,
+      provider: 'codex',
+      title: `Codex Icon ${stamp}`,
+    });
+    const opencode = await createSession(page, {
+      workspaceId,
+      provider: 'opencode',
+      title: `OpenCode Icon ${stamp}`,
+    });
+
+    await page.goto('/');
+
+    const claudeTab = page.getByTestId('session-item').filter({ hasText: claude.title });
+    const codexTab = page.getByTestId('session-item').filter({ hasText: codex.title });
+    const opencodeTab = page.getByTestId('session-item').filter({ hasText: opencode.title });
+
+    await expectProviderBrandIcon(claudeTab, 'Claude Code provider', 'Claude');
+    await expectProviderBrandIcon(codexTab, 'Codex provider', 'OpenAI');
+    await expectProviderBrandIcon(opencodeTab, 'OpenCode provider', 'OpenCode');
   });
 
   test('session search matches provider text and workspace headers do not show counts', async ({
@@ -1837,8 +2282,136 @@ test.describe('Cubby MVP', () => {
 
     await page.getByRole('button', { name: 'Stop', exact: true }).click();
     await assertActiveDetail(page, { title: session.title, status: 'ended', action: 'Resume' });
+    await expect(
+      activeSessionView(page).getByRole('button', { name: 'Control terminal size' }),
+    ).toBeVisible();
     await expect(activeTerminal(page)).toBeVisible();
     await expect.poll(() => terminalText(page), { timeout: 10000 }).toContain(lastLine);
+  });
+
+  test('ended replay rerenders terminal history at the resized desktop sidebar width', async ({
+    page,
+  }) => {
+    test.skip(
+      !MOCK_CLAUDE_PROVIDER_ENABLED,
+      'Requires CUBBY_MOCK_CLAUDE_PROVIDER=1 for deterministic terminal output',
+    );
+
+    await page.setViewportSize({ width: 1280, height: 720 });
+    await installWebSocketRecorder(page);
+    await clearSidebarStorageBeforeLoad(page);
+
+    const stamp = Date.now();
+    const workspaceId = `/tmp/cubby-ended-resize-${stamp}`;
+    const session = await createSession(page, {
+      workspaceId,
+      title: `Ended Resize ${stamp}`,
+    });
+    const draft = await createSession(page, {
+      workspaceId,
+      title: `Ended Resize Draft ${stamp}`,
+    });
+    const lastLine = `ended-resize-bottom-${stamp}`;
+    const scrollback = [
+      `ended-resize-control-${stamp} ${'wrapped-ended-replay '.repeat(10)}`,
+      '\r\x1b[2K',
+      `ended-resize-repainted-${stamp}\r\n`,
+      `${lastLine}\r\n`,
+    ].join('');
+
+    await page.goto('/');
+
+    const group = page.getByTestId('workspace-group').filter({ hasText: workspaceId });
+    await selectSessionTab(group, session.title);
+    await page.getByRole('button', { name: 'Start', exact: true }).click();
+    await assertActiveDetail(page, { title: session.title, status: 'running', action: 'Stop' });
+    await expect
+      .poll(() => terminalText(page), { timeout: 10000 })
+      .toContain('Mock Claude Code ready');
+
+    await sendTerminalInput(page, session.id, scrollback);
+    await expect.poll(() => terminalText(page), { timeout: 10000 }).toContain(lastLine);
+
+    await page.getByRole('button', { name: 'Stop', exact: true }).click();
+    await assertActiveDetail(page, { title: session.title, status: 'ended', action: 'Resume' });
+    await expect(
+      activeSessionView(page).getByRole('button', { name: 'Control terminal size' }),
+    ).toBeVisible();
+    await expect(activeTerminal(page)).toBeVisible();
+    await expect.poll(() => terminalText(page), { timeout: 10000 }).toContain(lastLine);
+    const replayCountBeforeResize = await wsCommandCount(page, 'terminal.replay');
+
+    const resizeHandle = page.getByRole('separator', { name: 'Resize sidebar' });
+    const box = await resizeHandle.boundingBox();
+    expect(box).not.toBeNull();
+    if (!box) return;
+
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(420, box.y + box.height / 2);
+
+    const duringDragLayout = await activeTerminalLayoutMetrics(page);
+    expect(duringDragLayout.terminalHeight).toBeGreaterThanOrEqual(
+      duringDragLayout.frameHeight - 48,
+    );
+    const duringDragHorizontal = await activeTerminalHorizontalMetrics(page);
+    expect(duringDragHorizontal.overflowX).toBe('auto');
+    expect(duringDragHorizontal.scrollWidth).toBeGreaterThan(duringDragHorizontal.clientWidth);
+    expect(duringDragHorizontal.screenWidth).toBeGreaterThan(duringDragHorizontal.frameWidth);
+    expect((await activeTerminalScrollMetrics(page)).bottomOffset).toBeLessThanOrEqual(2);
+    expect(await activeVisibleTerminalCursorCount(page)).toBe(0);
+    await expect
+      .poll(() => wsCommandCount(page, 'terminal.replay'), { timeout: 10000 })
+      .toBeGreaterThan(replayCountBeforeResize);
+    await expect.poll(() => terminalText(page), { timeout: 10000 }).toContain(lastLine);
+
+    await page.mouse.up();
+
+    await selectSessionTab(group, draft.title);
+    await assertActiveDetail(page, { title: draft.title, status: 'draft', action: 'Start' });
+
+    await selectSessionTab(group, session.title);
+    await assertActiveDetail(page, { title: session.title, status: 'ended', action: 'Resume' });
+    const endedControlSizeButton = activeSessionView(page).getByRole('button', {
+      name: 'Control terminal size',
+    });
+    await expect(endedControlSizeButton).toBeVisible();
+    await expect(endedControlSizeButton).toHaveAttribute('aria-pressed', 'false');
+    await expect(activeTerminal(page)).toBeVisible();
+    await expect.poll(() => terminalText(page), { timeout: 10000 }).toContain(lastLine);
+    expect(await activeVisibleTerminalCursorCount(page)).toBe(0);
+    const restoredHorizontal = await activeTerminalHorizontalMetrics(page);
+    expect(restoredHorizontal.overflowX).toBe('auto');
+    expect(restoredHorizontal.scrollWidth).toBeGreaterThan(restoredHorizontal.clientWidth);
+
+    await page.evaluate(() => {
+      (window as typeof window & { __wsCommands?: unknown[] }).__wsCommands = [];
+    });
+    await endedControlSizeButton.click();
+    await expect(endedControlSizeButton).toHaveAttribute('aria-pressed', 'true');
+    expect(
+      await page.evaluate((sessionId) => {
+        const commands =
+          (
+            window as typeof window & {
+              __wsCommands?: Array<{ cmd?: string; args?: { sessionId?: string } }>;
+            }
+          ).__wsCommands ?? [];
+        return commands.some(
+          (command) => command.cmd === 'terminal.resize' && command.args?.sessionId === sessionId,
+        );
+      }, session.id),
+    ).toBe(false);
+    await expect
+      .poll(
+        () =>
+          activeTerminalHorizontalMetrics(page).then(
+            (metrics) =>
+              metrics.overflowX === 'hidden' && metrics.screenWidth <= metrics.clientWidth + 2,
+          ),
+        { timeout: 5000 },
+      )
+      .toBe(true);
   });
 
   test('resume starts from a clean live terminal after showing ended history', async ({ page }) => {

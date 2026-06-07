@@ -22,7 +22,7 @@ function activeTerminalRows(page: Page): Locator {
 async function createSessionFromUi(page: Page): Promise<void> {
   await page.getByRole('button', { name: 'New Session' }).click();
   await page.getByLabel('Workspace path').fill(WORKSPACE);
-  await page.getByRole('button', { name: 'Open' }).click();
+  await page.getByRole('button', { name: 'Open', exact: true }).click();
   await expect(activeSessionView(page).getByText(WORKSPACE, { exact: true })).toBeVisible({
     timeout: 20_000,
   });

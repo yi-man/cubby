@@ -11,7 +11,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { currentSessionIdAtom, sessionsAtom } from './atoms/session.js';
 import { SessionList } from './components/session/session-list.js';
 import { SessionView } from './components/session/session-view.js';
-import { DirPicker } from './components/workspace/dir-picker.js';
+import { DirPicker, type WorkspaceOpenSelection } from './components/workspace/dir-picker.js';
 import { useWebSocket } from './hooks/use-ws.js';
 
 const SIDEBAR_STATE_STORAGE_KEY = 'cubby.sidebarCollapsed';
@@ -247,6 +247,7 @@ export function App() {
     : mobileLayout
       ? `min(${MOBILE_SIDEBAR_WIDTH}px, calc(100vw - 48px))`
       : `${desktopSidebarWidth}px`;
+  const detailLayoutSignal = `${mobileLayout}:${sidebarCollapsed}:${desktopSidebarWidth}`;
 
   const sessionById = useMemo(() => {
     const byId = new Map<string, Session>();
@@ -666,13 +667,13 @@ export function App() {
   }, [resizingSidebar]);
 
   const handleDirConfirm = useCallback(
-    async (workspaceId: string) => {
+    async ({ path: workspaceId, provider }: WorkspaceOpenSelection) => {
       setShowPicker(false);
       // Create session
       const createRes = await request({
         id: `create-${Date.now()}`,
         cmd: 'session.create',
-        args: { workspaceId, provider: 'claude-code' },
+        args: { workspaceId, provider },
       });
       if (!createRes.ok || !createRes.data) return;
       if (!isSession(createRes.data)) return;
@@ -950,6 +951,7 @@ export function App() {
                   executing={executing}
                   autoStart={active && session.id === autoStartSessionId}
                   focusRequest={terminalFocusRequest}
+                  layoutSignal={detailLayoutSignal}
                   onAutoStartConsumed={() => setAutoStartSessionId(null)}
                   onPromptSubmitted={handlePromptSubmitted}
                   send={send}

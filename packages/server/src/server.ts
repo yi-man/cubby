@@ -8,7 +8,9 @@ import Fastify from 'fastify';
 import { Database } from './db/index.js';
 import { registerRoutes } from './http/routes.js';
 import { ClaudeCodeProvider } from './provider/claude-code.js';
+import { CodexProvider } from './provider/codex.js';
 import { MockClaudeCodeProvider } from './provider/mock-claude-code.js';
+import { MockCodexProvider } from './provider/mock-codex.js';
 import { SessionManager } from './session/manager.js';
 import { SessionStore } from './session/store.js';
 import { WSCommandHandler } from './ws/handler.js';
@@ -52,6 +54,7 @@ export async function createServer(port = 6300) {
   const sessionStore = new SessionStore(db);
   const sessionManager = new SessionManager(sessionStore);
   sessionManager.registerProvider(createClaudeCodeProvider());
+  sessionManager.registerProvider(createCodexProvider());
   sessionManager.reconcileDetachedLiveSessions();
 
   const hub = new WebSocketHub();
@@ -123,4 +126,11 @@ function createClaudeCodeProvider() {
     return new MockClaudeCodeProvider();
   }
   return new ClaudeCodeProvider();
+}
+
+function createCodexProvider() {
+  if (process.env.CUBBY_MOCK_CODEX_PROVIDER === '1') {
+    return new MockCodexProvider();
+  }
+  return new CodexProvider();
 }

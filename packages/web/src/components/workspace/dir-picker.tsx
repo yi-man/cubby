@@ -1,8 +1,15 @@
 import { ArrowUp, Folder, Loader2, RefreshCw } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
+export type AgentProviderId = 'claude-code' | 'codex';
+
+export interface WorkspaceOpenSelection {
+  path: string;
+  provider: AgentProviderId;
+}
+
 interface DirPickerProps {
-  onConfirm: (path: string) => void;
+  onConfirm: (selection: WorkspaceOpenSelection) => void;
   onCancel: () => void;
 }
 
@@ -18,6 +25,10 @@ interface BrowseResponse {
 }
 
 const ICON_PROPS = { size: 15, strokeWidth: 2.1, 'aria-hidden': true } as const;
+const PROVIDER_OPTIONS: Array<{ id: AgentProviderId; label: string }> = [
+  { id: 'claude-code', label: 'Claude Code' },
+  { id: 'codex', label: 'Codex' },
+];
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
@@ -53,6 +64,7 @@ function parentPath(value: string): string {
 
 export function DirPicker({ onConfirm, onCancel }: DirPickerProps) {
   const [path, setPath] = useState('');
+  const [provider, setProvider] = useState<AgentProviderId>('claude-code');
   const [currentPath, setCurrentPath] = useState('');
   const [entries, setEntries] = useState<BrowseEntry[]>([]);
   const [error, setError] = useState('');
@@ -113,11 +125,11 @@ export function DirPicker({ onConfirm, onCancel }: DirPickerProps) {
       }
 
       const data = await res.json();
-      onConfirm(isBrowseResponse(data) ? data.path : path.trim());
+      onConfirm({ path: isBrowseResponse(data) ? data.path : path.trim(), provider });
     } catch {
       setError('Failed to verify path');
     }
-  }, [path, onConfirm]);
+  }, [path, provider, onConfirm]);
 
   return (
     <div
@@ -153,6 +165,61 @@ export function DirPicker({ onConfirm, onCancel }: DirPickerProps) {
         <h3 id="workspace-picker-title" style={{ margin: '0 0 16px', fontSize: '16px' }}>
           Open Workspace
         </h3>
+        <div
+          role="radiogroup"
+          aria-label="Agent provider"
+          style={{
+            marginBottom: '12px',
+            display: 'grid',
+            gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
+            gap: '8px',
+          }}
+        >
+          {PROVIDER_OPTIONS.map((option) => {
+            const selected = provider === option.id;
+            return (
+              <label
+                key={option.id}
+                style={{
+                  minWidth: 0,
+                  height: '38px',
+                  border: `1px solid ${selected ? '#89b4fa' : '#3a3a52'}`,
+                  borderRadius: '6px',
+                  background: selected ? '#202a3f' : '#202033',
+                  color: selected ? '#f4f8ff' : '#b8bfd8',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '8px',
+                  padding: '0 10px',
+                  boxSizing: 'border-box',
+                }}
+              >
+                <input
+                  type="radio"
+                  name="agent-provider"
+                  aria-label={option.label}
+                  value={option.id}
+                  checked={selected}
+                  onChange={() => setProvider(option.id)}
+                  style={{ margin: 0, accentColor: '#89b4fa', flexShrink: 0 }}
+                />
+                <span
+                  style={{
+                    minWidth: 0,
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                    fontSize: '13px',
+                    fontWeight: 650,
+                  }}
+                >
+                  {option.label}
+                </span>
+              </label>
+            );
+          })}
+        </div>
         <div
           style={{
             marginBottom: '12px',

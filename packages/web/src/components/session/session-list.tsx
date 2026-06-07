@@ -12,6 +12,7 @@ import {
 } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 
+import { ProviderIcon } from './provider-icon.js';
 import {
   groupSessions,
   matchesSessionSearch,
@@ -622,13 +623,24 @@ export function SessionList({
                           ) : (
                             <span
                               style={{
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: '7px',
                                 minWidth: 0,
                                 overflow: 'hidden',
-                                textOverflow: 'ellipsis',
-                                whiteSpace: 'nowrap',
                               }}
                             >
-                              <SessionTitle session={session} fontSize="13px" />
+                              <ProviderIcon provider={session.provider} />
+                              <span
+                                style={{
+                                  minWidth: 0,
+                                  overflow: 'hidden',
+                                  textOverflow: 'ellipsis',
+                                  whiteSpace: 'nowrap',
+                                }}
+                              >
+                                <SessionTitle session={session} fontSize="13px" />
+                              </span>
                             </span>
                           )}
                           <span
@@ -810,13 +822,24 @@ export function SessionList({
                                 >
                                   <span
                                     style={{
+                                      display: 'inline-flex',
+                                      alignItems: 'center',
+                                      gap: '7px',
                                       minWidth: 0,
                                       overflow: 'hidden',
-                                      textOverflow: 'ellipsis',
-                                      whiteSpace: 'nowrap',
                                     }}
                                   >
-                                    <SessionTitle session={session} fontSize="12px" />
+                                    <ProviderIcon provider={session.provider} />
+                                    <span
+                                      style={{
+                                        minWidth: 0,
+                                        overflow: 'hidden',
+                                        textOverflow: 'ellipsis',
+                                        whiteSpace: 'nowrap',
+                                      }}
+                                    >
+                                      <SessionTitle session={session} fontSize="12px" />
+                                    </span>
                                   </span>
                                   <span
                                     className="session-status-dot"

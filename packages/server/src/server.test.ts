@@ -62,6 +62,7 @@ function waitForExit(
 describe('createServer', () => {
   const previousDataDir = process.env.CUBBY_DATA_DIR;
   const previousMockClaudeProvider = process.env.CUBBY_MOCK_CLAUDE_PROVIDER;
+  const previousMockCodexProvider = process.env.CUBBY_MOCK_CODEX_PROVIDER;
   const dataDirs: string[] = [];
 
   afterEach(() => {
@@ -74,6 +75,11 @@ describe('createServer', () => {
       delete process.env.CUBBY_MOCK_CLAUDE_PROVIDER;
     } else {
       process.env.CUBBY_MOCK_CLAUDE_PROVIDER = previousMockClaudeProvider;
+    }
+    if (previousMockCodexProvider === undefined) {
+      delete process.env.CUBBY_MOCK_CODEX_PROVIDER;
+    } else {
+      process.env.CUBBY_MOCK_CODEX_PROVIDER = previousMockCodexProvider;
     }
 
     for (const dataDir of dataDirs.splice(0)) {
@@ -136,6 +142,34 @@ describe('createServer', () => {
       method: 'POST',
       url: '/api/sessions',
       payload: { workspaceId: '/tmp', provider: 'claude-code', title: 'Mock Claude' },
+    });
+    const session = createResponse.json();
+
+    const startResponse = await app.inject({
+      method: 'POST',
+      url: `/api/sessions/${session.id}/start`,
+      payload: { cwd: '/tmp' },
+    });
+    const getResponse = await app.inject({ method: 'GET', url: `/api/sessions/${session.id}` });
+
+    await app.inject({ method: 'POST', url: `/api/sessions/${session.id}/kill` });
+    await app.close();
+
+    expect(startResponse.statusCode).toBe(200);
+    expect(getResponse.json()).toMatchObject({ id: session.id, status: 'running' });
+  });
+
+  it('can start sessions with the mock Codex provider for CI E2E', async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'cubby-server-'));
+    dataDirs.push(dataDir);
+    process.env.CUBBY_DATA_DIR = dataDir;
+    process.env.CUBBY_MOCK_CODEX_PROVIDER = '1';
+
+    const { app } = await createServer(0);
+    const createResponse = await app.inject({
+      method: 'POST',
+      url: '/api/sessions',
+      payload: { workspaceId: '/tmp', provider: 'codex', title: 'Mock Codex' },
     });
     const session = createResponse.json();
 

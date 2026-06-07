@@ -78,9 +78,15 @@ export class SessionManager {
   }
 
   listSessions(): Session[] {
-    return this.store
-      .list()
-      .filter((session) => isLiveSession(session.status) || this.hasConversation(session));
+    return this.store.list().filter((session) => {
+      const provider = this.providers.get(session.provider);
+      return (
+        isLiveSession(session.status) ||
+        (session.status === 'draft' && provider?.supportsResume === false) ||
+        this.hasConversation(session) ||
+        this.hasCapturedTerminalHistory(session.id)
+      );
+    });
   }
 
   reconcileDetachedLiveSessions(): Session[] {
@@ -114,6 +120,10 @@ export class SessionManager {
   ): Promise<void> {
     const session = this.store.get(sessionId);
     if (!session) throw new Error('Session not found');
+    const provider = this.providers.get(session.provider);
+    if (provider?.supportsResume === false) {
+      throw new Error('Session is not resumable: provider does not support resume');
+    }
     if (!this.hasConversation(session)) {
       throw new Error('Session is not resumable: provider conversation not found');
     }
@@ -122,7 +132,12 @@ export class SessionManager {
 
   private hasConversation(session: Session): boolean {
     const provider = this.providers.get(session.provider);
+    if (provider?.supportsResume === false) return false;
     return provider?.hasConversation?.(session.id, session.workspaceId) ?? true;
+  }
+
+  private hasCapturedTerminalHistory(sessionId: string): boolean {
+    return this.store.getTerminalOutputHistory(sessionId, 1).length > 0;
   }
 
   private async spawnSession(
@@ -169,7 +184,7 @@ export class SessionManager {
             this.store.updateStatus(sessionId, 'ended', { exitCode: code, pid: activeProcess.pid });
             this.notifyStatusChange(sessionId, 'ended');
             this.processes.delete(sessionId);
-            this.disposeSnapshotBuffer(sessionId);
+            void this.disposeSnapshotBuffer(sessionId);
           } else {
             earlyExitCode = code;
           }
@@ -180,7 +195,7 @@ export class SessionManager {
         this.store.updateStatus(sessionId, 'ended', { exitCode: earlyExitCode, pid: process.pid });
         this.notifyStatusChange(sessionId, 'ended');
         this.sessionsNeedingResumeInputReset.delete(sessionId);
-        this.disposeSnapshotBuffer(sessionId);
+        await this.disposeSnapshotBuffer(sessionId);
         return;
       }
 
@@ -195,7 +210,7 @@ export class SessionManager {
     } catch (err) {
       this.store.updateStatus(sessionId, 'ended', { exitCode: 1 });
       this.notifyStatusChange(sessionId, 'ended');
-      this.disposeSnapshotBuffer(sessionId);
+      await this.disposeSnapshotBuffer(sessionId);
       throw err;
     }
   }
@@ -212,7 +227,7 @@ export class SessionManager {
         this.processes.delete(sessionId);
       }
     }
-    this.disposeSnapshotBuffer(sessionId);
+    await this.disposeSnapshotBuffer(sessionId);
     this.store.updateStatus(sessionId, 'ended');
     this.notifyStatusChange(sessionId, 'ended');
     this.sessionsNeedingResumeInputReset.delete(sessionId);
@@ -288,7 +303,7 @@ export class SessionManager {
         snapshotBuffer.resize(cols, rows);
         this.scheduleSnapshotPersist(sessionId, snapshotBuffer);
       } catch {
-        this.disposeSnapshotBuffer(sessionId, snapshotBuffer);
+        void this.disposeSnapshotBuffer(sessionId, snapshotBuffer);
       }
     }
 
@@ -397,7 +412,7 @@ export class SessionManager {
         this.store.upsertTerminalSnapshot(sessionId, snapshot);
         return { status: 'ok', sessionId, ...snapshot };
       } catch {
-        this.disposeSnapshotBuffer(sessionId, snapshotBuffer);
+        void this.disposeSnapshotBuffer(sessionId, snapshotBuffer);
       }
     }
 
@@ -476,14 +491,14 @@ export class SessionManager {
   }
 
   private clearRuntimeState(sessionId: string): void {
-    this.disposeSnapshotBuffer(sessionId);
+    void this.disposeSnapshotBuffer(sessionId, undefined, { persist: false });
     this.outputBuffers.delete(sessionId);
     this.firstInputBuffers.delete(sessionId);
     this.sessionsNeedingResumeInputReset.delete(sessionId);
   }
 
   private replaceSnapshotBuffer(sessionId: string, cols: number, rows: number): void {
-    this.disposeSnapshotBuffer(sessionId);
+    void this.disposeSnapshotBuffer(sessionId, undefined, { persist: false });
     this.store.clearTerminalSnapshot(sessionId);
 
     try {
@@ -493,16 +508,33 @@ export class SessionManager {
     }
   }
 
-  private disposeSnapshotBuffer(sessionId: string, expected?: HeadlessSnapshotBuffer): void {
+  private async disposeSnapshotBuffer(
+    sessionId: string,
+    expected?: HeadlessSnapshotBuffer,
+    options: { persist?: boolean } = {},
+  ): Promise<void> {
     const snapshotBuffer = this.snapshotBuffers.get(sessionId);
     if (!snapshotBuffer) return;
     if (expected && snapshotBuffer !== expected) return;
+    const persist = options.persist ?? true;
 
     const timer = this.snapshotPersistTimers.get(sessionId);
     if (timer) clearTimeout(timer);
     this.snapshotPersistTimers.delete(sessionId);
-    snapshotBuffer.dispose();
     this.snapshotBuffers.delete(sessionId);
+
+    if (persist && !snapshotBuffer.disabled) {
+      try {
+        const snapshot = await snapshotBuffer.snapshot();
+        this.store.upsertTerminalSnapshot(sessionId, snapshot);
+      } catch {
+      } finally {
+        snapshotBuffer.dispose();
+      }
+      return;
+    }
+
+    snapshotBuffer.dispose();
   }
 
   private writeSnapshotChunk(sessionId: string, chunk: TerminalOutputChunk): void {
@@ -513,7 +545,7 @@ export class SessionManager {
       snapshotBuffer.write(chunk.data, chunk.seq);
       this.scheduleSnapshotPersist(sessionId, snapshotBuffer);
     } catch {
-      this.disposeSnapshotBuffer(sessionId, snapshotBuffer);
+      void this.disposeSnapshotBuffer(sessionId, snapshotBuffer);
     }
   }
 
@@ -533,7 +565,7 @@ export class SessionManager {
           }
         })
         .catch(() => {
-          this.disposeSnapshotBuffer(sessionId, snapshotBuffer);
+          void this.disposeSnapshotBuffer(sessionId, snapshotBuffer);
         });
     }, SNAPSHOT_PERSIST_DEBOUNCE_MS);
 

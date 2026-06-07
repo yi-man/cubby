@@ -542,6 +542,47 @@ describe('SessionManager', () => {
     expect(manager.listSessions().map((session) => session.id)).not.toContain(ended.id);
   });
 
+  it('lists ended sessions with captured terminal history even when resume is unsupported', () => {
+    const provider: AgentProvider = {
+      name: 'history-only',
+      supportsResume: false,
+      hasConversation: () => false,
+      async spawn() {
+        return {
+          pid: 30_014,
+          onData: (_callback) => {},
+          onExit: (_callback) => {},
+          write: () => {},
+          resize: () => {},
+          kill: () => {},
+        };
+      },
+      async kill() {},
+    };
+    manager.registerProvider(provider);
+    const session = manager.createSession({ workspaceId: '/tmp', provider: provider.name });
+    store.appendTerminalOutput(session.id, { data: 'codex output', seqStart: 0, seq: 12 });
+    store.updateStatus(session.id, 'ended');
+
+    expect(manager.listSessions().map((item) => item.id)).toContain(session.id);
+  });
+
+  it('lists draft sessions for providers that do not support resume', () => {
+    const provider: AgentProvider = {
+      name: 'new-only-draft',
+      supportsResume: false,
+      hasConversation: () => false,
+      async spawn() {
+        throw new Error('spawn should not be called');
+      },
+      async kill() {},
+    };
+    manager.registerProvider(provider);
+    const session = manager.createSession({ workspaceId: '/tmp', provider: provider.name });
+
+    expect(manager.listSessions().map((item) => item.id)).toContain(session.id);
+  });
+
   it('lists live sessions before the provider conversation exists', () => {
     const provider = {
       name: 'live-before-conversation',
@@ -618,6 +659,25 @@ describe('SessionManager', () => {
     ).rejects.toThrow('Session is not resumable');
     expect(spawnCount).toBe(0);
     expect(store.get(session.id)?.status).toBe('ended');
+  });
+
+  it('rejects resuming sessions when the provider does not support resume', async () => {
+    const provider: AgentProvider = {
+      name: 'new-only',
+      supportsResume: false,
+      hasConversation: () => true,
+      async spawn() {
+        throw new Error('spawn should not be called');
+      },
+      async kill() {},
+    };
+    manager.registerProvider(provider);
+    const session = manager.createSession({ workspaceId: '/tmp', provider: provider.name });
+    store.updateStatus(session.id, 'ended');
+
+    await expect(() =>
+      manager.resumeSession(session.id, { cwd: '/tmp', cols: 80, rows: 24 }),
+    ).rejects.toThrow('provider does not support resume');
   });
 
   it('rejects starting a non-draft session', async () => {

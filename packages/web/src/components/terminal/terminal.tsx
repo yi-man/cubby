@@ -24,6 +24,14 @@ interface TerminalViewProps {
   onReady?: () => void;
 }
 
+function applyTerminalInteractivity(term: Terminal, interactive: boolean): void {
+  term.options.disableStdin = !interactive;
+  term.options.cursorBlink = interactive;
+  term.options.cursorInactiveStyle = interactive ? 'outline' : 'none';
+  if (!interactive) term.blur();
+  term.refresh(0, Math.max(0, term.rows - 1));
+}
+
 export const TerminalView = forwardRef<TerminalHandle, TerminalViewProps>(function TerminalView(
   { fitToContainer = true, interactive = true, onData, onResize, onReady },
   ref,
@@ -46,8 +54,7 @@ export const TerminalView = forwardRef<TerminalHandle, TerminalViewProps>(functi
   useEffect(() => {
     const term = terminalRef.current;
     if (!term) return;
-    term.options.disableStdin = !interactive;
-    if (!interactive) term.blur();
+    applyTerminalInteractivity(term, interactive);
   }, [interactive]);
 
   useImperativeHandle(ref, () => ({
@@ -72,11 +79,10 @@ export const TerminalView = forwardRef<TerminalHandle, TerminalViewProps>(functi
       if (!term) return;
       term.reset();
       term.clear();
-      term.options.disableStdin = !interactiveRef.current;
+      applyTerminalInteractivity(term, interactiveRef.current);
       if (fitToContainerRef.current) fitAddonRef.current?.fit();
     },
     fit: () => {
-      if (!fitToContainerRef.current) return;
       fitAddonRef.current?.fit();
     },
     resize: (cols: number, rows: number) => {
@@ -108,7 +114,8 @@ export const TerminalView = forwardRef<TerminalHandle, TerminalViewProps>(functi
     };
 
     const term = new Terminal({
-      cursorBlink: true,
+      cursorBlink: interactiveRef.current,
+      cursorInactiveStyle: interactiveRef.current ? 'outline' : 'none',
       disableStdin: !interactiveRef.current,
       fontSize: 14,
       fontFamily: '"SFMono-Regular", "SF Mono", Menlo, Consolas, monospace',
@@ -172,6 +179,7 @@ export const TerminalView = forwardRef<TerminalHandle, TerminalViewProps>(functi
   return (
     <div
       ref={containerRef}
+      data-terminal-interactive={interactive ? 'true' : 'false'}
       style={{
         width: '100%',
         height: '100%',
