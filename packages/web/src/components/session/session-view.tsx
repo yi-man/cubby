@@ -34,7 +34,10 @@ function isLiveStatus(status: Session['status']): boolean {
 }
 
 function supportsResume(session: Session): boolean {
-  return session.provider !== 'codex' && session.provider !== 'opencode';
+  if (session.provider === 'codex' || session.provider === 'opencode') {
+    return Boolean(session.providerSessionId);
+  }
+  return true;
 }
 
 const VISUALLY_HIDDEN_STYLE = {

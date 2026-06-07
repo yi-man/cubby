@@ -31,6 +31,7 @@ export class SessionManager {
   private sessionsNeedingResumeInputReset = new Set<string>();
   private deletedSessionIds = new Set<string>();
   private statusListeners: ((sessionId: string, status: string) => void)[] = [];
+  private sessionUpdateListeners: ((session: Session) => void)[] = [];
   private readonly outputHistoryLimit: number;
 
   constructor(
@@ -44,9 +45,21 @@ export class SessionManager {
     this.statusListeners.push(listener);
   }
 
+  onSessionUpdate(listener: (session: Session) => void): void {
+    this.sessionUpdateListeners.push(listener);
+  }
+
   private notifyStatusChange(sessionId: string, status: string): void {
     for (const listener of this.statusListeners) {
       listener(sessionId, status);
+    }
+  }
+
+  private notifySessionUpdate(sessionId: string): void {
+    const session = this.store.get(sessionId);
+    if (!session) return;
+    for (const listener of this.sessionUpdateListeners) {
+      listener(session);
     }
   }
 
@@ -79,10 +92,9 @@ export class SessionManager {
 
   listSessions(): Session[] {
     return this.store.list().filter((session) => {
-      const provider = this.providers.get(session.provider);
       return (
+        session.status === 'draft' ||
         isLiveSession(session.status) ||
-        (session.status === 'draft' && provider?.supportsResume === false) ||
         this.hasConversation(session) ||
         this.hasCapturedTerminalHistory(session.id)
       );
@@ -133,7 +145,13 @@ export class SessionManager {
   private hasConversation(session: Session): boolean {
     const provider = this.providers.get(session.provider);
     if (provider?.supportsResume === false) return false;
-    return provider?.hasConversation?.(session.id, session.workspaceId) ?? true;
+    return (
+      provider?.hasConversation?.(
+        session.id,
+        session.workspaceId,
+        session.providerSessionId ?? undefined,
+      ) ?? true
+    );
   }
 
   private hasCapturedTerminalHistory(sessionId: string): boolean {
@@ -165,7 +183,12 @@ export class SessionManager {
       let earlyExitCode: number | null = null;
       const process = await provider.spawn(
         sessionId,
-        { ...options, model: session.model ?? undefined, resume },
+        {
+          ...options,
+          model: session.model ?? undefined,
+          resume,
+          providerSessionId: session.providerSessionId ?? undefined,
+        },
         (data) => {
           if (this.deletedSessionIds.has(sessionId)) return;
 
@@ -188,6 +211,12 @@ export class SessionManager {
           } else {
             earlyExitCode = code;
           }
+        },
+        (providerSessionId) => {
+          const trimmedProviderSessionId = providerSessionId.trim();
+          if (!trimmedProviderSessionId || this.deletedSessionIds.has(sessionId)) return;
+          this.store.updateProviderSessionId(sessionId, trimmedProviderSessionId);
+          this.notifySessionUpdate(sessionId);
         },
       );
 
@@ -438,7 +467,11 @@ export class SessionManager {
     const bufferedHistory = this.outputBuffers.get(sessionId)?.getAll() ?? [];
     if (bufferedHistory.length > 0) return bufferedHistory;
     const transcriptHistory = session
-      ? (provider?.getTranscriptHistory?.(sessionId, session.workspaceId) ?? [])
+      ? (provider?.getTranscriptHistory?.(
+          sessionId,
+          session.workspaceId,
+          session.providerSessionId ?? undefined,
+        ) ?? [])
       : [];
     if (transcriptHistory.length > 0) return transcriptHistory;
     return [];
@@ -454,7 +487,11 @@ export class SessionManager {
     if (bufferedHistory.length > 0) return bufferedHistory;
     const provider = this.providers.get(session.provider);
     return synthesizeOutputChunks(
-      provider?.getTranscriptHistory?.(session.id, session.workspaceId) ?? [],
+      provider?.getTranscriptHistory?.(
+        session.id,
+        session.workspaceId,
+        session.providerSessionId ?? undefined,
+      ) ?? [],
     ).chunks;
   }
 

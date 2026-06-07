@@ -2,12 +2,13 @@ import { describe, expect, it } from 'vitest';
 import { OpenCodeProvider } from './opencode.js';
 
 describe('OpenCodeProvider', () => {
-  it('has correct name and does not advertise resume support', () => {
+  it('has correct name and detects mapped conversations', () => {
     const provider = new OpenCodeProvider();
 
     expect(provider.name).toBe('opencode');
-    expect(provider.supportsResume).toBe(false);
+    expect(provider.supportsResume).toBe(true);
     expect(provider.hasConversation('session-1', '/tmp')).toBe(false);
+    expect(provider.hasConversation('session-1', '/tmp', 'opencode-session-1')).toBe(true);
     expect(provider.getTranscriptHistory('session-1', '/tmp')).toEqual([]);
   });
 
@@ -17,6 +18,25 @@ describe('OpenCodeProvider', () => {
     const args = provider.buildArgs({ cwd: '/tmp/project', model: 'anthropic/claude-sonnet-4' });
 
     expect(args).toEqual(['/tmp/project', '--model', 'anthropic/claude-sonnet-4']);
+  });
+
+  it('builds resume args with a mapped provider session id', () => {
+    const provider = new OpenCodeProvider();
+
+    const args = provider.buildArgs({
+      cwd: '/tmp/project',
+      model: 'anthropic/claude-sonnet-4',
+      resume: true,
+      providerSessionId: 'opencode-session-1',
+    });
+
+    expect(args).toEqual([
+      '--session',
+      'opencode-session-1',
+      '/tmp/project',
+      '--model',
+      'anthropic/claude-sonnet-4',
+    ]);
   });
 
   it('spawns opencode in a pty and forwards terminal io', async () => {
@@ -86,5 +106,35 @@ describe('OpenCodeProvider', () => {
     expect(resizes).toEqual([{ cols: 120, rows: 50 }]);
     expect(kills).toEqual(['SIGTERM']);
     expect(exits).toEqual([7]);
+  });
+
+  it('spawns opencode resume with the mapped provider session id', async () => {
+    const calls: unknown[] = [];
+    const provider = new OpenCodeProvider({
+      spawn: (file, args, options) => {
+        calls.push({ file, args, options });
+        return {
+          pid: 5433,
+          onData: () => ({ dispose: () => {} }),
+          onExit: () => ({ dispose: () => {} }),
+          write: () => {},
+          resize: () => {},
+          kill: () => {},
+        };
+      },
+    });
+
+    await provider.spawn('session-1', {
+      cwd: '/tmp/project',
+      cols: 100,
+      rows: 40,
+      resume: true,
+      providerSessionId: 'opencode-session-1',
+    });
+
+    expect(calls[0]).toMatchObject({
+      file: 'opencode',
+      args: ['--session', 'opencode-session-1', '/tmp/project'],
+    });
   });
 });

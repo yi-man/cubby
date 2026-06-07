@@ -1566,6 +1566,40 @@ test.describe('Cubby MVP', () => {
     }
   });
 
+  for (const providerCase of [
+    { id: 'codex', readyText: 'Mock Codex ready', title: 'Codex Resume' },
+    { id: 'opencode', readyText: 'Mock OpenCode ready', title: 'OpenCode Resume' },
+  ]) {
+    test(`mock ${providerCase.id} sessions can be resumed`, async ({ page }) => {
+      const stamp = Date.now();
+      const workspaceId = `/tmp/cubby-${providerCase.id}-resume-${stamp}`;
+      const session = await createSession(page, {
+        workspaceId,
+        provider: providerCase.id,
+        title: `${providerCase.title} ${stamp}`,
+      });
+
+      await page.goto('/');
+
+      const group = page.getByTestId('workspace-group').filter({ hasText: workspaceId });
+      await selectSessionTab(group, session.title);
+      await page.getByRole('button', { name: 'Start', exact: true }).click();
+      await assertActiveDetail(page, { title: session.title, status: 'running', action: 'Stop' });
+      await expect
+        .poll(() => terminalText(page), { timeout: 10000 })
+        .toContain(providerCase.readyText);
+
+      await page.getByRole('button', { name: 'Stop', exact: true }).click();
+      await assertActiveDetail(page, { title: session.title, status: 'ended', action: 'Resume' });
+
+      await page.getByRole('button', { name: 'Resume', exact: true }).click();
+      await assertActiveDetail(page, { title: session.title, status: 'running', action: 'Stop' });
+      await expect
+        .poll(() => terminalText(page), { timeout: 10000 })
+        .toContain(providerCase.readyText);
+    });
+  }
+
   test('workspace picker defaults to home and browses folders', async ({ page }) => {
     const pickerRoot = mkdtempSync(join(tmpdir(), 'cubby-picker-'));
     const workspacePath = join(pickerRoot, 'chosen-workspace');

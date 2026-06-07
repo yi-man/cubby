@@ -1,3 +1,4 @@
+import { execFile } from 'node:child_process';
 import type { AgentProcess, AgentProvider, SpawnOptions } from '@cubby/core';
 import { RingBuffer } from '../terminal/ring-buffer.js';
 
@@ -22,6 +23,11 @@ interface PtySpawner {
   ): PtyProcess;
 }
 
+type ProviderSessionIdResolver = (options: {
+  cwd: string;
+  startedAtMs: number;
+}) => Promise<string | null> | string | null;
+
 async function loadBunPty(): Promise<PtySpawner> {
   const { spawn } = await import('bun-pty');
   return { spawn };
@@ -29,12 +35,27 @@ async function loadBunPty(): Promise<PtySpawner> {
 
 export class OpenCodeProvider implements AgentProvider {
   readonly name = 'opencode';
-  readonly supportsResume = false;
+  readonly supportsResume = true;
 
-  constructor(private ptySpawner?: PtySpawner) {}
+  constructor(
+    private ptySpawner?: PtySpawner,
+    private providerSessionIdResolver?: ProviderSessionIdResolver,
+  ) {}
 
-  buildArgs(options: { cwd: string; model?: string }): string[] {
-    const args = [options.cwd];
+  buildArgs(options: {
+    cwd: string;
+    model?: string;
+    resume?: boolean;
+    providerSessionId?: string;
+  }): string[] {
+    const args = options.resume ? ['--session'] : [];
+    if (options.resume) {
+      if (!options.providerSessionId) {
+        throw new Error('OpenCode resume requires a provider session id');
+      }
+      args.push(options.providerSessionId);
+    }
+    args.push(options.cwd);
     if (options.model) {
       args.push('--model', options.model);
     }
@@ -46,14 +67,14 @@ export class OpenCodeProvider implements AgentProvider {
     options: SpawnOptions,
     onOutput: (data: string) => void = () => {},
     onExit: (code: number) => void = () => {},
+    onProviderSessionId: (providerSessionId: string) => void = () => {},
   ): Promise<AgentProcess & { ringBuffer: RingBuffer }> {
-    if (options.resume) {
-      throw new Error('OpenCode sessions cannot be resumed by Cubby yet');
-    }
-
+    const startedAtMs = Date.now();
     const args = this.buildArgs({
       cwd: options.cwd,
       model: options.model,
+      resume: options.resume,
+      providerSessionId: options.providerSessionId,
     });
     const ringBuffer = new RingBuffer(5000);
     const spawner = this.ptySpawner ?? (await loadBunPty());
@@ -82,6 +103,10 @@ export class OpenCodeProvider implements AgentProvider {
       onExit(event.exitCode ?? 1);
     });
 
+    if (!options.resume) {
+      void this.reportProviderSessionId(options.cwd, startedAtMs, onProviderSessionId);
+    }
+
     return {
       pid: pty.pid,
       onData: (cb) => {
@@ -103,8 +128,8 @@ export class OpenCodeProvider implements AgentProvider {
     };
   }
 
-  hasConversation(_sessionId: string, _cwd: string): boolean {
-    return false;
+  hasConversation(_sessionId: string, _cwd: string, providerSessionId?: string): boolean {
+    return Boolean(providerSessionId);
   }
 
   getTranscriptHistory(_sessionId: string, _cwd: string): string[] {
@@ -114,4 +139,99 @@ export class OpenCodeProvider implements AgentProvider {
   async kill(agentProcess: AgentProcess): Promise<void> {
     agentProcess.kill();
   }
+
+  private async reportProviderSessionId(
+    cwd: string,
+    startedAtMs: number,
+    onProviderSessionId: (providerSessionId: string) => void,
+  ): Promise<void> {
+    const resolver =
+      this.providerSessionIdResolver ??
+      ((options) => findLatestOpenCodeSessionId(options.cwd, options.startedAtMs));
+    for (let attempt = 0; attempt < 30; attempt++) {
+      const providerSessionId = await resolver({ cwd, startedAtMs });
+      if (providerSessionId) {
+        onProviderSessionId(providerSessionId);
+        return;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 200));
+    }
+  }
+}
+
+async function findLatestOpenCodeSessionId(
+  cwd: string,
+  startedAtMs: number,
+): Promise<string | null> {
+  const output = await readOpenCodeSessionList(cwd);
+  return extractOpenCodeSessionId(output, cwd, startedAtMs);
+}
+
+function readOpenCodeSessionList(cwd: string): Promise<unknown> {
+  return new Promise((resolve) => {
+    execFile(
+      'opencode',
+      ['session', 'list', '--format', 'json', '--max-count', '20'],
+      { cwd },
+      (_error, stdout) => {
+        if (!stdout.trim()) {
+          resolve([]);
+          return;
+        }
+        try {
+          resolve(JSON.parse(stdout) as unknown);
+        } catch {
+          resolve([]);
+        }
+      },
+    );
+  });
+}
+
+function extractOpenCodeSessionId(value: unknown, cwd: string, startedAtMs: number): string | null {
+  const sessions = Array.isArray(value)
+    ? value
+    : isRecord(value) && Array.isArray(value.sessions)
+      ? value.sessions
+      : [];
+  for (const item of sessions) {
+    if (!isRecord(item)) continue;
+    const id = firstString(item.id, item.sessionID, item.sessionId);
+    if (!id) continue;
+    const itemCwd = firstString(item.cwd, item.path, item.project, item.projectPath);
+    if (itemCwd && itemCwd !== cwd) continue;
+    const updatedAt = firstTimestamp(
+      item.updatedAt,
+      item.updated_at,
+      item.time,
+      item.createdAt,
+      item.created_at,
+    );
+    if (updatedAt !== null && updatedAt < startedAtMs - 5000) continue;
+    return id;
+  }
+  return null;
+}
+
+function firstString(...values: unknown[]): string | null {
+  for (const value of values) {
+    if (typeof value === 'string' && value.trim()) return value;
+  }
+  return null;
+}
+
+function firstTimestamp(...values: unknown[]): number | null {
+  for (const value of values) {
+    if (typeof value === 'number' && Number.isFinite(value))
+      return value < 10_000_000_000 ? value * 1000 : value;
+    if (typeof value === 'string') {
+      const parsed = Date.parse(value);
+      if (Number.isFinite(parsed)) return parsed;
+    }
+  }
+  return null;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
 }

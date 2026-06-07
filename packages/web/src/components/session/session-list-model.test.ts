@@ -15,6 +15,7 @@ function session(overrides: Partial<Session> & Pick<Session, 'id'>): Session {
     workspaceId: overrides.workspaceId ?? '/work/alpha',
     title: overrides.title ?? null,
     provider: overrides.provider ?? 'claude-code',
+    providerSessionId: overrides.providerSessionId ?? null,
     model: overrides.model ?? null,
     status: overrides.status ?? 'idle',
     pid: overrides.pid ?? null,

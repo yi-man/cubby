@@ -70,6 +70,9 @@ export async function createServer(port = 6300) {
       data: { sessionId, status },
     });
   });
+  sessionManager.onSessionUpdate((session) => {
+    hub.broadcastToAll({ evt: WS_EVENTS.SESSION_UPDATED, data: session });
+  });
 
   // HTTP routes
   registerRoutes(app, sessionManager, {

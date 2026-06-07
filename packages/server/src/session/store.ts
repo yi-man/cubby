@@ -37,6 +37,7 @@ export class SessionStore {
       workspaceId: input.workspaceId,
       title: input.title ?? null,
       provider: input.provider,
+      providerSessionId: null,
       model: input.model ?? null,
       status: 'draft',
       pid: null,
@@ -106,6 +107,13 @@ export class SessionStore {
     this.db
       .prepare('UPDATE sessions SET title = ?, updated_at = ? WHERE id = ?')
       .run(title, now, id);
+  }
+
+  updateProviderSessionId(id: string, providerSessionId: string): void {
+    const now = new Date().toISOString();
+    this.db
+      .prepare('UPDATE sessions SET provider_session_id = ?, updated_at = ? WHERE id = ?')
+      .run(providerSessionId, now, id);
   }
 
   delete(id: string): boolean {
@@ -230,6 +238,7 @@ export class SessionStore {
       workspaceId: row.workspace_id as string,
       title: row.title as string | null,
       provider: row.provider as string,
+      providerSessionId: (row.provider_session_id as string | null) ?? null,
       model: row.model as string | null,
       status: row.status as SessionStatus,
       pid: row.pid as number | null,

@@ -2,12 +2,13 @@ import { describe, expect, it } from 'vitest';
 import { CodexProvider } from './codex.js';
 
 describe('CodexProvider', () => {
-  it('has correct name and does not advertise resume support', () => {
+  it('has correct name and detects mapped conversations', () => {
     const provider = new CodexProvider();
 
     expect(provider.name).toBe('codex');
-    expect(provider.supportsResume).toBe(false);
+    expect(provider.supportsResume).toBe(true);
     expect(provider.hasConversation('session-1', '/tmp')).toBe(false);
+    expect(provider.hasConversation('session-1', '/tmp', 'codex-session-1')).toBe(true);
     expect(provider.getTranscriptHistory('session-1', '/tmp')).toEqual([]);
   });
 
@@ -17,6 +18,19 @@ describe('CodexProvider', () => {
     const args = provider.buildArgs({ cwd: '/tmp/project', model: 'gpt-5' });
 
     expect(args).toEqual(['--cd', '/tmp/project', '--model', 'gpt-5']);
+  });
+
+  it('builds resume args with a mapped provider session id', () => {
+    const provider = new CodexProvider();
+
+    const args = provider.buildArgs({
+      cwd: '/tmp/project',
+      model: 'gpt-5',
+      resume: true,
+      providerSessionId: 'codex-session-1',
+    });
+
+    expect(args).toEqual(['resume', '--cd', '/tmp/project', '--model', 'gpt-5', 'codex-session-1']);
   });
 
   it('spawns codex in a pty and forwards terminal io', async () => {
@@ -86,5 +100,35 @@ describe('CodexProvider', () => {
     expect(resizes).toEqual([{ cols: 120, rows: 50 }]);
     expect(kills).toEqual(['SIGTERM']);
     expect(exits).toEqual([7]);
+  });
+
+  it('spawns codex resume with the mapped provider session id', async () => {
+    const calls: unknown[] = [];
+    const provider = new CodexProvider({
+      spawn: (file, args, options) => {
+        calls.push({ file, args, options });
+        return {
+          pid: 4322,
+          onData: () => ({ dispose: () => {} }),
+          onExit: () => ({ dispose: () => {} }),
+          write: () => {},
+          resize: () => {},
+          kill: () => {},
+        };
+      },
+    });
+
+    await provider.spawn('session-1', {
+      cwd: '/tmp/project',
+      cols: 100,
+      rows: 40,
+      resume: true,
+      providerSessionId: 'codex-session-1',
+    });
+
+    expect(calls[0]).toMatchObject({
+      file: 'codex',
+      args: ['resume', '--cd', '/tmp/project', 'codex-session-1'],
+    });
   });
 });

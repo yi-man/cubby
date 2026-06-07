@@ -5,7 +5,7 @@ type ExitListener = (code: number) => void;
 
 export class MockOpenCodeProvider implements AgentProvider {
   readonly name = 'opencode';
-  readonly supportsResume = false;
+  readonly supportsResume = true;
   private nextPid = 70_000;
 
   async spawn(
@@ -13,10 +13,12 @@ export class MockOpenCodeProvider implements AgentProvider {
     options: SpawnOptions,
     onOutput: DataListener = () => {},
     onExit: ExitListener = () => {},
+    onProviderSessionId: (providerSessionId: string) => void = () => {},
   ): Promise<AgentProcess> {
-    if (options.resume) {
-      throw new Error('Mock OpenCode sessions cannot be resumed');
+    if (options.resume && !options.providerSessionId) {
+      throw new Error('Mock OpenCode resume requires a provider session id');
     }
+    if (!options.resume) onProviderSessionId(`mock-opencode-${sessionId}`);
 
     const dataListeners: DataListener[] = [];
     const exitListeners: ExitListener[] = [];
@@ -66,8 +68,8 @@ export class MockOpenCodeProvider implements AgentProvider {
     };
   }
 
-  hasConversation(_sessionId: string, _cwd: string): boolean {
-    return false;
+  hasConversation(_sessionId: string, _cwd: string, providerSessionId?: string): boolean {
+    return Boolean(providerSessionId);
   }
 
   getTranscriptHistory(_sessionId: string, _cwd: string): string[] {
