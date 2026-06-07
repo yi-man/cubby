@@ -31,6 +31,7 @@ export class SessionManager {
   private sessionsNeedingResumeInputReset = new Set<string>();
   private deletedSessionIds = new Set<string>();
   private statusListeners: ((sessionId: string, status: string) => void)[] = [];
+  private sessionUpdateListeners: ((session: Session) => void)[] = [];
   private readonly outputHistoryLimit: number;
 
   constructor(
@@ -44,9 +45,21 @@ export class SessionManager {
     this.statusListeners.push(listener);
   }
 
+  onSessionUpdate(listener: (session: Session) => void): void {
+    this.sessionUpdateListeners.push(listener);
+  }
+
   private notifyStatusChange(sessionId: string, status: string): void {
     for (const listener of this.statusListeners) {
       listener(sessionId, status);
+    }
+  }
+
+  private notifySessionUpdate(sessionId: string): void {
+    const session = this.store.get(sessionId);
+    if (!session) return;
+    for (const listener of this.sessionUpdateListeners) {
+      listener(session);
     }
   }
 
@@ -78,9 +91,14 @@ export class SessionManager {
   }
 
   listSessions(): Session[] {
-    return this.store
-      .list()
-      .filter((session) => isLiveSession(session.status) || this.hasConversation(session));
+    return this.store.list().filter((session) => {
+      return (
+        session.status === 'draft' ||
+        isLiveSession(session.status) ||
+        this.hasConversation(session) ||
+        this.hasCapturedTerminalHistory(session.id)
+      );
+    });
   }
 
   reconcileDetachedLiveSessions(): Session[] {
@@ -114,6 +132,10 @@ export class SessionManager {
   ): Promise<void> {
     const session = this.store.get(sessionId);
     if (!session) throw new Error('Session not found');
+    const provider = this.providers.get(session.provider);
+    if (provider?.supportsResume === false) {
+      throw new Error('Session is not resumable: provider does not support resume');
+    }
     if (!this.hasConversation(session)) {
       throw new Error('Session is not resumable: provider conversation not found');
     }
@@ -122,7 +144,18 @@ export class SessionManager {
 
   private hasConversation(session: Session): boolean {
     const provider = this.providers.get(session.provider);
-    return provider?.hasConversation?.(session.id, session.workspaceId) ?? true;
+    if (provider?.supportsResume === false) return false;
+    return (
+      provider?.hasConversation?.(
+        session.id,
+        session.workspaceId,
+        session.providerSessionId ?? undefined,
+      ) ?? true
+    );
+  }
+
+  private hasCapturedTerminalHistory(sessionId: string): boolean {
+    return this.store.getTerminalOutputHistory(sessionId, 1).length > 0;
   }
 
   private async spawnSession(
@@ -150,7 +183,12 @@ export class SessionManager {
       let earlyExitCode: number | null = null;
       const process = await provider.spawn(
         sessionId,
-        { ...options, model: session.model ?? undefined, resume },
+        {
+          ...options,
+          model: session.model ?? undefined,
+          resume,
+          providerSessionId: session.providerSessionId ?? undefined,
+        },
         (data) => {
           if (this.deletedSessionIds.has(sessionId)) return;
 
@@ -169,10 +207,16 @@ export class SessionManager {
             this.store.updateStatus(sessionId, 'ended', { exitCode: code, pid: activeProcess.pid });
             this.notifyStatusChange(sessionId, 'ended');
             this.processes.delete(sessionId);
-            this.disposeSnapshotBuffer(sessionId);
+            void this.disposeSnapshotBuffer(sessionId);
           } else {
             earlyExitCode = code;
           }
+        },
+        (providerSessionId) => {
+          const trimmedProviderSessionId = providerSessionId.trim();
+          if (!trimmedProviderSessionId || this.deletedSessionIds.has(sessionId)) return;
+          this.store.updateProviderSessionId(sessionId, trimmedProviderSessionId);
+          this.notifySessionUpdate(sessionId);
         },
       );
 
@@ -180,7 +224,7 @@ export class SessionManager {
         this.store.updateStatus(sessionId, 'ended', { exitCode: earlyExitCode, pid: process.pid });
         this.notifyStatusChange(sessionId, 'ended');
         this.sessionsNeedingResumeInputReset.delete(sessionId);
-        this.disposeSnapshotBuffer(sessionId);
+        await this.disposeSnapshotBuffer(sessionId);
         return;
       }
 
@@ -195,7 +239,7 @@ export class SessionManager {
     } catch (err) {
       this.store.updateStatus(sessionId, 'ended', { exitCode: 1 });
       this.notifyStatusChange(sessionId, 'ended');
-      this.disposeSnapshotBuffer(sessionId);
+      await this.disposeSnapshotBuffer(sessionId);
       throw err;
     }
   }
@@ -212,7 +256,7 @@ export class SessionManager {
         this.processes.delete(sessionId);
       }
     }
-    this.disposeSnapshotBuffer(sessionId);
+    await this.disposeSnapshotBuffer(sessionId);
     this.store.updateStatus(sessionId, 'ended');
     this.notifyStatusChange(sessionId, 'ended');
     this.sessionsNeedingResumeInputReset.delete(sessionId);
@@ -288,7 +332,7 @@ export class SessionManager {
         snapshotBuffer.resize(cols, rows);
         this.scheduleSnapshotPersist(sessionId, snapshotBuffer);
       } catch {
-        this.disposeSnapshotBuffer(sessionId, snapshotBuffer);
+        void this.disposeSnapshotBuffer(sessionId, snapshotBuffer);
       }
     }
 
@@ -397,7 +441,7 @@ export class SessionManager {
         this.store.upsertTerminalSnapshot(sessionId, snapshot);
         return { status: 'ok', sessionId, ...snapshot };
       } catch {
-        this.disposeSnapshotBuffer(sessionId, snapshotBuffer);
+        void this.disposeSnapshotBuffer(sessionId, snapshotBuffer);
       }
     }
 
@@ -423,7 +467,11 @@ export class SessionManager {
     const bufferedHistory = this.outputBuffers.get(sessionId)?.getAll() ?? [];
     if (bufferedHistory.length > 0) return bufferedHistory;
     const transcriptHistory = session
-      ? (provider?.getTranscriptHistory?.(sessionId, session.workspaceId) ?? [])
+      ? (provider?.getTranscriptHistory?.(
+          sessionId,
+          session.workspaceId,
+          session.providerSessionId ?? undefined,
+        ) ?? [])
       : [];
     if (transcriptHistory.length > 0) return transcriptHistory;
     return [];
@@ -439,7 +487,11 @@ export class SessionManager {
     if (bufferedHistory.length > 0) return bufferedHistory;
     const provider = this.providers.get(session.provider);
     return synthesizeOutputChunks(
-      provider?.getTranscriptHistory?.(session.id, session.workspaceId) ?? [],
+      provider?.getTranscriptHistory?.(
+        session.id,
+        session.workspaceId,
+        session.providerSessionId ?? undefined,
+      ) ?? [],
     ).chunks;
   }
 
@@ -476,14 +528,14 @@ export class SessionManager {
   }
 
   private clearRuntimeState(sessionId: string): void {
-    this.disposeSnapshotBuffer(sessionId);
+    void this.disposeSnapshotBuffer(sessionId, undefined, { persist: false });
     this.outputBuffers.delete(sessionId);
     this.firstInputBuffers.delete(sessionId);
     this.sessionsNeedingResumeInputReset.delete(sessionId);
   }
 
   private replaceSnapshotBuffer(sessionId: string, cols: number, rows: number): void {
-    this.disposeSnapshotBuffer(sessionId);
+    void this.disposeSnapshotBuffer(sessionId, undefined, { persist: false });
     this.store.clearTerminalSnapshot(sessionId);
 
     try {
@@ -493,16 +545,33 @@ export class SessionManager {
     }
   }
 
-  private disposeSnapshotBuffer(sessionId: string, expected?: HeadlessSnapshotBuffer): void {
+  private async disposeSnapshotBuffer(
+    sessionId: string,
+    expected?: HeadlessSnapshotBuffer,
+    options: { persist?: boolean } = {},
+  ): Promise<void> {
     const snapshotBuffer = this.snapshotBuffers.get(sessionId);
     if (!snapshotBuffer) return;
     if (expected && snapshotBuffer !== expected) return;
+    const persist = options.persist ?? true;
 
     const timer = this.snapshotPersistTimers.get(sessionId);
     if (timer) clearTimeout(timer);
     this.snapshotPersistTimers.delete(sessionId);
-    snapshotBuffer.dispose();
     this.snapshotBuffers.delete(sessionId);
+
+    if (persist && !snapshotBuffer.disabled) {
+      try {
+        const snapshot = await snapshotBuffer.snapshot();
+        this.store.upsertTerminalSnapshot(sessionId, snapshot);
+      } catch {
+      } finally {
+        snapshotBuffer.dispose();
+      }
+      return;
+    }
+
+    snapshotBuffer.dispose();
   }
 
   private writeSnapshotChunk(sessionId: string, chunk: TerminalOutputChunk): void {
@@ -513,7 +582,7 @@ export class SessionManager {
       snapshotBuffer.write(chunk.data, chunk.seq);
       this.scheduleSnapshotPersist(sessionId, snapshotBuffer);
     } catch {
-      this.disposeSnapshotBuffer(sessionId, snapshotBuffer);
+      void this.disposeSnapshotBuffer(sessionId, snapshotBuffer);
     }
   }
 
@@ -533,7 +602,7 @@ export class SessionManager {
           }
         })
         .catch(() => {
-          this.disposeSnapshotBuffer(sessionId, snapshotBuffer);
+          void this.disposeSnapshotBuffer(sessionId, snapshotBuffer);
         });
     }, SNAPSHOT_PERSIST_DEBOUNCE_MS);
 

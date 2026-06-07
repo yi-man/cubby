@@ -67,6 +67,15 @@ describe('SessionStore', () => {
     expect(updated?.title).toBe('Build pinyin drills');
   });
 
+  it('updates provider session id', () => {
+    const session = store.create({ workspaceId: '/tmp/test', provider: 'codex' });
+
+    store.updateProviderSessionId(session.id, 'provider-session-1');
+
+    const updated = store.get(session.id);
+    expect(updated?.providerSessionId).toBe('provider-session-1');
+  });
+
   it('returns null for non-existent session', () => {
     expect(store.get('nonexistent')).toBeNull();
   });

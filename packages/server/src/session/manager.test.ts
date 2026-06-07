@@ -517,7 +517,7 @@ describe('SessionManager', () => {
     expect(manager.getOutputHistory(session.id)).toEqual(['> clean transcript\r\n']);
   });
 
-  it('filters sessions when the provider conversation does not exist', () => {
+  it('filters ended sessions when the provider conversation does not exist', () => {
     const provider = {
       name: 'conversation-aware',
       hasConversation: () => false,
@@ -535,11 +535,50 @@ describe('SessionManager', () => {
     };
     manager.registerProvider(provider);
     const ended = manager.createSession({ workspaceId: '/tmp', provider: provider.name });
-    const draft = manager.createSession({ workspaceId: '/tmp', provider: provider.name });
     store.updateStatus(ended.id, 'ended');
 
-    expect(manager.listSessions().map((session) => session.id)).not.toContain(draft.id);
     expect(manager.listSessions().map((session) => session.id)).not.toContain(ended.id);
+  });
+
+  it('lists ended sessions with captured terminal history even when resume is unsupported', () => {
+    const provider: AgentProvider = {
+      name: 'history-only',
+      supportsResume: false,
+      hasConversation: () => false,
+      async spawn() {
+        return {
+          pid: 30_014,
+          onData: (_callback) => {},
+          onExit: (_callback) => {},
+          write: () => {},
+          resize: () => {},
+          kill: () => {},
+        };
+      },
+      async kill() {},
+    };
+    manager.registerProvider(provider);
+    const session = manager.createSession({ workspaceId: '/tmp', provider: provider.name });
+    store.appendTerminalOutput(session.id, { data: 'codex output', seqStart: 0, seq: 12 });
+    store.updateStatus(session.id, 'ended');
+
+    expect(manager.listSessions().map((item) => item.id)).toContain(session.id);
+  });
+
+  it('lists draft sessions before the provider conversation exists', () => {
+    const provider: AgentProvider = {
+      name: 'new-only-draft',
+      supportsResume: true,
+      hasConversation: () => false,
+      async spawn() {
+        throw new Error('spawn should not be called');
+      },
+      async kill() {},
+    };
+    manager.registerProvider(provider);
+    const session = manager.createSession({ workspaceId: '/tmp', provider: provider.name });
+
+    expect(manager.listSessions().map((item) => item.id)).toContain(session.id);
   });
 
   it('lists live sessions before the provider conversation exists', () => {
@@ -618,6 +657,109 @@ describe('SessionManager', () => {
     ).rejects.toThrow('Session is not resumable');
     expect(spawnCount).toBe(0);
     expect(store.get(session.id)?.status).toBe('ended');
+  });
+
+  it('rejects resuming sessions when the provider does not support resume', async () => {
+    const provider: AgentProvider = {
+      name: 'new-only',
+      supportsResume: false,
+      hasConversation: () => true,
+      async spawn() {
+        throw new Error('spawn should not be called');
+      },
+      async kill() {},
+    };
+    manager.registerProvider(provider);
+    const session = manager.createSession({ workspaceId: '/tmp', provider: provider.name });
+    store.updateStatus(session.id, 'ended');
+
+    await expect(() =>
+      manager.resumeSession(session.id, { cwd: '/tmp', cols: 80, rows: 24 }),
+    ).rejects.toThrow('provider does not support resume');
+  });
+
+  it('persists provider session ids and passes them back when resuming', async () => {
+    const spawnOptions: SpawnOptions[] = [];
+    const providerSessionIds: Array<string | undefined> = [];
+    const provider: AgentProvider = {
+      name: 'resumable-provider-id',
+      supportsResume: true,
+      hasConversation: (_sessionId, _cwd, providerSessionId) => providerSessionId === 'provider-1',
+      async spawn(
+        _sessionId,
+        opts,
+        _onOutput = () => {},
+        _onExit = () => {},
+        onProviderSessionId = () => {},
+      ) {
+        spawnOptions.push(opts);
+        providerSessionIds.push(opts.providerSessionId);
+        if (!opts.resume) onProviderSessionId('provider-1');
+        return {
+          pid: opts.resume ? 33_002 : 33_001,
+          onData: (_callback) => {},
+          onExit: (_callback) => {},
+          write: () => {},
+          resize: () => {},
+          kill: () => {},
+        };
+      },
+      async kill() {},
+    };
+    manager.registerProvider(provider);
+    const session = manager.createSession({ workspaceId: '/tmp', provider: provider.name });
+
+    await manager.startSession(session.id, { cwd: '/tmp', cols: 80, rows: 24 });
+    await manager.killSession(session.id);
+    await manager.resumeSession(session.id, { cwd: '/tmp', cols: 100, rows: 30 });
+
+    expect(store.get(session.id)?.providerSessionId).toBe('provider-1');
+    expect(spawnOptions).toHaveLength(2);
+    expect(spawnOptions[1]).toMatchObject({
+      resume: true,
+      providerSessionId: 'provider-1',
+      cols: 100,
+      rows: 30,
+    });
+    expect(providerSessionIds).toEqual([undefined, 'provider-1']);
+  });
+
+  it('notifies listeners when a provider session id is captured', async () => {
+    const updates: string[] = [];
+    const provider: AgentProvider = {
+      name: 'provider-id-update',
+      supportsResume: true,
+      hasConversation: (_sessionId, _cwd, providerSessionId) => providerSessionId === 'provider-2',
+      async spawn(
+        _sessionId,
+        _opts,
+        _onOutput = () => {},
+        _onExit = () => {},
+        onProviderSessionId = () => {},
+      ) {
+        onProviderSessionId('provider-2');
+        return {
+          pid: 33_003,
+          onData: (_callback) => {},
+          onExit: (_callback) => {},
+          write: () => {},
+          resize: () => {},
+          kill: () => {},
+        };
+      },
+      async kill() {},
+    };
+    manager.registerProvider(provider);
+    const session = manager.createSession({ workspaceId: '/tmp', provider: provider.name });
+    manager.onSessionUpdate((updated) => {
+      if (updated.id === session.id && updated.providerSessionId) {
+        updates.push(updated.providerSessionId);
+      }
+    });
+
+    await manager.startSession(session.id, { cwd: '/tmp', cols: 80, rows: 24 });
+
+    expect(updates).toEqual(['provider-2']);
   });
 
   it('rejects starting a non-draft session', async () => {

@@ -40,12 +40,24 @@ function ensureTerminalOutputSequenceColumns(db: SqliteDb): void {
   }
 }
 
+function ensureSessionProviderSessionIdColumn(db: SqliteDb): void {
+  const columns = db.prepare('PRAGMA table_info(sessions)').all() as Array<{
+    name?: unknown;
+  }>;
+  const names = new Set(columns.map((column) => String(column.name)));
+
+  if (!names.has('provider_session_id')) {
+    db.exec('ALTER TABLE sessions ADD COLUMN provider_session_id TEXT');
+  }
+}
+
 export class Database {
   private db: SqliteDb;
 
   constructor(path: string) {
     this.db = new NativeDb(path);
     this.db.exec(SCHEMA_SQL);
+    ensureSessionProviderSessionIdColumn(this.db);
     ensureTerminalOutputSequenceColumns(this.db);
   }
 

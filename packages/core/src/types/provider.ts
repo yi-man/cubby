@@ -5,17 +5,20 @@ export interface SpawnOptions {
   rows: number;
   model?: string;
   resume?: boolean;
+  providerSessionId?: string;
 }
 
 export interface AgentProvider {
   name: string;
-  hasConversation?(sessionId: string, cwd: string): boolean;
-  getTranscriptHistory?(sessionId: string, cwd: string): string[];
+  supportsResume?: boolean;
+  hasConversation?(sessionId: string, cwd: string, providerSessionId?: string): boolean;
+  getTranscriptHistory?(sessionId: string, cwd: string, providerSessionId?: string): string[];
   spawn(
     sessionId: string,
     options: SpawnOptions,
     onOutput?: (data: string) => void,
     onExit?: (code: number) => void,
+    onProviderSessionId?: (providerSessionId: string) => void,
   ): Promise<AgentProcess>;
   kill(process: AgentProcess): Promise<void>;
 }

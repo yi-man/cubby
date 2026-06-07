@@ -4,6 +4,7 @@ CREATE TABLE IF NOT EXISTS sessions (
   workspace_id TEXT NOT NULL,
   title TEXT,
   provider TEXT NOT NULL,
+  provider_session_id TEXT,
   model TEXT,
   status TEXT NOT NULL DEFAULT 'draft',
   pid INTEGER,

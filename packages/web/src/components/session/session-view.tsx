@@ -1,5 +1,6 @@
 import type { Session, TerminalOutputChunk, WSEvent, WSResponse } from '@cubby/core';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { MonitorUp } from 'lucide-react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { type TerminalHandle, TerminalView } from '../terminal/terminal.js';
 import {
   filterRenderableLiveChunks,
@@ -16,6 +17,7 @@ interface SessionViewProps {
   executing?: boolean;
   autoStart?: boolean;
   focusRequest?: number;
+  layoutSignal?: string;
   onAutoStartConsumed?: () => void;
   onPromptSubmitted?: (sessionId: string) => void;
   send: (req: { id: string; cmd: string; args?: Record<string, unknown> }) => void;
@@ -29,6 +31,13 @@ interface SessionViewProps {
 
 function isLiveStatus(status: Session['status']): boolean {
   return status === 'starting' || status === 'running';
+}
+
+function supportsResume(session: Session): boolean {
+  if (session.provider === 'codex' || session.provider === 'opencode') {
+    return Boolean(session.providerSessionId);
+  }
+  return true;
 }
 
 const VISUALLY_HIDDEN_STYLE = {
@@ -115,6 +124,9 @@ interface ReplayState {
   hasHistory: boolean;
 }
 
+const ENDED_REPLAY_RESIZE_DEBOUNCE_MS = 120;
+const ACTION_ICON_PROPS = { size: 14, strokeWidth: 2.1, 'aria-hidden': true } as const;
+
 function emptyReplayState(): ReplayState {
   return { loaded: false, hasHistory: false };
 }
@@ -152,6 +164,7 @@ export function SessionView({
   executing = false,
   autoStart = false,
   focusRequest = 0,
+  layoutSignal = '',
   onAutoStartConsumed,
   onPromptSubmitted,
   send,
@@ -166,18 +179,35 @@ export function SessionView({
   const recoveringRef = useRef(false);
   const initialRecoveryDoneRef = useRef(false);
   const recoveryBlockedRef = useRef(false);
-  // Recovered viewers fit locally, but must not mutate shared PTY geometry.
+  // Recovered viewers may fit locally, but must not mutate shared PTY geometry.
   const resizeAuthorityRef = useRef(false);
+  const endedReplayFitToContainerRef = useRef(false);
   const writeChainRef = useRef<Promise<void>>(Promise.resolve());
+  const lastSessionIdRef = useRef(session.id);
   const lastFocusRequestRef = useRef(focusRequest);
+  const lastEndedReplayLayoutSignalRef = useRef(layoutSignal);
   const pendingInputRef = useRef('');
   const [terminalReady, setTerminalReady] = useState(false);
   const [replayState, setReplayState] = useState<ReplayState>(() => emptyReplayState());
   const [recoveryError, setRecoveryError] = useState<string | null>(null);
   const [recoveryRequest, setRecoveryRequest] = useState(0);
+  const [endedReplayLayoutRevision, setEndedReplayLayoutRevision] = useState(0);
+  const [endedReplayFitToContainer, setEndedReplayFitToContainer] = useState(false);
+  const [resizeAuthority, setResizeAuthority] = useState(false);
   const live = isLiveStatus(session.status);
   const canReplayHistory = terminalReady && (live || session.status === 'ended');
-  const fitTerminalToContainer = !live || resizeAuthorityRef.current;
+  const fitTerminalToContainer =
+    session.status === 'ended' ? endedReplayFitToContainer : !live || resizeAuthority;
+
+  const setResizeAuthorityState = useCallback((nextAuthority: boolean) => {
+    resizeAuthorityRef.current = nextAuthority;
+    setResizeAuthority(nextAuthority);
+  }, []);
+
+  const setEndedReplayFitToContainerState = useCallback((nextFit: boolean) => {
+    endedReplayFitToContainerRef.current = nextFit;
+    setEndedReplayFitToContainer(nextFit);
+  }, []);
 
   const writeChunkForGeneration = useCallback(
     async (chunk: TerminalOutputChunk, generation: number) => {
@@ -243,6 +273,9 @@ export function SessionView({
     termRef.current?.scrollToBottom();
     window.requestAnimationFrame(() => {
       termRef.current?.scrollToBottom();
+      window.requestAnimationFrame(() => {
+        termRef.current?.scrollToBottom();
+      });
     });
   }, []);
 
@@ -467,7 +500,7 @@ export function SessionView({
     setReplayState(emptyReplayState());
 
     request({
-      id: `replay-${session.id}-${session.status}-${Date.now()}`,
+      id: `replay-${session.id}-${session.status}-${endedReplayLayoutRevision}-${Date.now()}`,
       cmd: 'terminal.replay',
       args: { sessionId: session.id },
     })
@@ -478,6 +511,26 @@ export function SessionView({
           return;
         }
         if (!(await resetDone)) return;
+        const snapshotRes = await request({
+          id: `ended-snapshot-${session.id}-${endedReplayLayoutRevision}-${Date.now()}`,
+          cmd: 'terminal.snapshot',
+          args: { sessionId: session.id },
+        });
+        if (cancelled || replayGenerationRef.current !== replayGeneration) return;
+        let snapshotSize: { cols: number; rows: number } | null = null;
+        if (snapshotRes.ok && isTerminalSnapshotData(snapshotRes.data, session.id)) {
+          if (snapshotRes.data.status === 'ok') {
+            snapshotSize = { cols: snapshotRes.data.cols, rows: snapshotRes.data.rows };
+          }
+        }
+        if (endedReplayFitToContainerRef.current) {
+          termRef.current?.fit();
+          const term = termRef.current?.getTerminal();
+          if (term) terminalSizeRef.current = { cols: term.cols, rows: term.rows };
+        } else if (snapshotSize) {
+          termRef.current?.resize(snapshotSize.cols, snapshotSize.rows);
+          terminalSizeRef.current = snapshotSize;
+        }
         const replayChunks = sanitizeEndedReplayChunks(res.data.chunks.map((chunk) => chunk.data));
         for (const chunk of replayChunks) {
           if (cancelled || replayGenerationRef.current !== replayGeneration) return;
@@ -507,6 +560,7 @@ export function SessionView({
     canReplayHistory,
     live,
     recoveryRequest,
+    endedReplayLayoutRevision,
     flushPendingLiveChunks,
     enqueueWriteChunkForGeneration,
     enqueueWriteStringForGeneration,
@@ -534,8 +588,18 @@ export function SessionView({
   }, [send, session.id, live]);
 
   useEffect(() => {
-    if (!live) resizeAuthorityRef.current = false;
-  }, [live]);
+    if (!live) setResizeAuthorityState(false);
+  }, [live, setResizeAuthorityState]);
+
+  useEffect(() => {
+    if (lastSessionIdRef.current === session.id) return;
+    lastSessionIdRef.current = session.id;
+    setEndedReplayFitToContainerState(false);
+  }, [session.id, setEndedReplayFitToContainerState]);
+
+  useEffect(() => {
+    if (session.status !== 'ended') setEndedReplayFitToContainerState(false);
+  }, [session.status, setEndedReplayFitToContainerState]);
 
   useEffect(() => {
     const focusRequested = focusRequest !== lastFocusRequestRef.current;
@@ -551,6 +615,39 @@ export function SessionView({
     if (live) termRef.current?.focus();
   }, [active, live, terminalReady, fitTerminalToContainer]);
 
+  useLayoutEffect(() => {
+    const currentLayoutSignal = layoutSignal;
+    if (!active || !terminalReady || currentLayoutSignal === undefined) return;
+    if (fitTerminalToContainer) termRef.current?.fit();
+    if (session.status === 'ended') scrollTerminalToBottomAfterLayout();
+  }, [
+    active,
+    terminalReady,
+    layoutSignal,
+    session.status,
+    fitTerminalToContainer,
+    scrollTerminalToBottomAfterLayout,
+  ]);
+
+  useEffect(() => {
+    if (session.status !== 'ended') {
+      lastEndedReplayLayoutSignalRef.current = layoutSignal;
+      return;
+    }
+    if (!active || !terminalReady) {
+      lastEndedReplayLayoutSignalRef.current = layoutSignal;
+      return;
+    }
+    if (lastEndedReplayLayoutSignalRef.current === layoutSignal) return;
+
+    lastEndedReplayLayoutSignalRef.current = layoutSignal;
+    const timeout = window.setTimeout(() => {
+      setEndedReplayLayoutRevision((revision) => revision + 1);
+    }, ENDED_REPLAY_RESIZE_DEBOUNCE_MS);
+
+    return () => window.clearTimeout(timeout);
+  }, [active, terminalReady, session.status, layoutSignal]);
+
   const startSession = useCallback(async () => {
     if (!active) return;
     replayGenerationRef.current += 1;
@@ -560,19 +657,23 @@ export function SessionView({
     initialRecoveryDoneRef.current = false;
     recoveryBlockedRef.current = false;
     setRecoveryError(null);
-    const { cols, rows } = terminalSizeRef.current;
-    resizeAuthorityRef.current = true;
+    termRef.current?.fit();
+    const term = termRef.current?.getTerminal();
+    const cols = term?.cols ?? terminalSizeRef.current.cols;
+    const rows = term?.rows ?? terminalSizeRef.current.rows;
+    terminalSizeRef.current = { cols, rows };
+    setResizeAuthorityState(true);
     const res = await request({
       id: `start-${Date.now()}`,
       cmd: 'session.start',
       args: { sessionId: session.id, cwd: session.workspaceId, cols, rows },
     });
     if (!res.ok) {
-      resizeAuthorityRef.current = false;
+      setResizeAuthorityState(false);
       return;
     }
     termRef.current?.focus();
-  }, [session.id, session.workspaceId, active, request]);
+  }, [session.id, session.workspaceId, active, request, setResizeAuthorityState]);
 
   useEffect(() => {
     if (!active || !autoStart || !terminalReady || session.status !== 'draft') return;
@@ -593,23 +694,69 @@ export function SessionView({
     initialRecoveryDoneRef.current = false;
     recoveryBlockedRef.current = false;
     setRecoveryError(null);
-    const { cols, rows } = terminalSizeRef.current;
+    termRef.current?.fit();
+    const term = termRef.current?.getTerminal();
+    const cols = term?.cols ?? terminalSizeRef.current.cols;
+    const rows = term?.rows ?? terminalSizeRef.current.rows;
+    terminalSizeRef.current = { cols, rows };
     const resetDone = enqueueResetForGeneration(replayGenerationRef.current);
     setReplayState({ loaded: true, hasHistory: false });
     const resetOk = await resetDone;
     if (!resetOk) return;
-    resizeAuthorityRef.current = true;
+    setResizeAuthorityState(true);
     const res = await request({
       id: `resume-${Date.now()}`,
       cmd: 'session.resume',
       args: { sessionId: session.id, cwd: session.workspaceId, cols, rows },
     });
     if (!res.ok) {
-      resizeAuthorityRef.current = false;
+      setResizeAuthorityState(false);
       return;
     }
     termRef.current?.focus();
-  }, [session.id, session.workspaceId, active, request, enqueueResetForGeneration]);
+  }, [
+    session.id,
+    session.workspaceId,
+    active,
+    request,
+    enqueueResetForGeneration,
+    setResizeAuthorityState,
+  ]);
+
+  const handleControlTerminalSize = useCallback(() => {
+    if (!active || !terminalReady) return;
+    if (session.status === 'ended') {
+      setEndedReplayFitToContainerState(true);
+      termRef.current?.fit();
+      const term = termRef.current?.getTerminal();
+      if (term) terminalSizeRef.current = { cols: term.cols, rows: term.rows };
+      scrollTerminalToBottomAfterLayout();
+      return;
+    }
+    if (!live) return;
+    termRef.current?.fit();
+    const term = termRef.current?.getTerminal();
+    const cols = term?.cols ?? terminalSizeRef.current.cols;
+    const rows = term?.rows ?? terminalSizeRef.current.rows;
+    terminalSizeRef.current = { cols, rows };
+    setResizeAuthorityState(true);
+    send({
+      id: `resize-control-${Date.now()}`,
+      cmd: 'terminal.resize',
+      args: { sessionId: session.id, cols, rows },
+    });
+    termRef.current?.focus();
+  }, [
+    session.id,
+    session.status,
+    active,
+    terminalReady,
+    live,
+    send,
+    setResizeAuthorityState,
+    setEndedReplayFitToContainerState,
+    scrollTerminalToBottomAfterLayout,
+  ]);
 
   const handleData = useCallback(
     (data: string) => {
@@ -650,10 +797,22 @@ export function SessionView({
         background: '#071a1f',
       }
     : statusTone(session.status);
+  const showTerminalSizeControl = live || session.status === 'ended';
+  const terminalSizeControlActive =
+    session.status === 'ended' ? endedReplayFitToContainer : resizeAuthority;
+  const terminalSizeControlTitle =
+    session.status === 'ended'
+      ? endedReplayFitToContainer
+        ? 'Replay fits this pane width'
+        : 'Fit replay to this pane width'
+      : resizeAuthority
+        ? 'This view controls terminal size'
+        : 'Use this view to control terminal size';
 
   return (
     <div
       data-testid="session-view"
+      data-session-id={session.id}
       data-active={active ? 'true' : 'false'}
       aria-hidden={!active}
       style={{
@@ -744,6 +903,31 @@ export function SessionView({
           {session.workspaceId}
         </span>
         <div style={{ marginLeft: 'auto', display: 'flex', gap: '4px' }}>
+          {showTerminalSizeControl && (
+            <button
+              type="button"
+              aria-label="Control terminal size"
+              aria-pressed={terminalSizeControlActive}
+              title={terminalSizeControlTitle}
+              onClick={handleControlTerminalSize}
+              disabled={!active || !terminalReady}
+              style={{
+                width: '28px',
+                height: '28px',
+                border: terminalSizeControlActive ? '1px solid #245564' : '1px solid #303030',
+                borderRadius: '6px',
+                background: terminalSizeControlActive ? '#071a1f' : '#171717',
+                color: terminalSizeControlActive ? '#78e4ff' : '#a9a9a3',
+                cursor: active && terminalReady ? 'pointer' : 'not-allowed',
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                padding: 0,
+              }}
+            >
+              <MonitorUp {...ACTION_ICON_PROPS} />
+            </button>
+          )}
           {session.status === 'draft' && (
             <button
               type="button"
@@ -778,7 +962,7 @@ export function SessionView({
               Stop
             </button>
           )}
-          {session.status === 'ended' && (
+          {session.status === 'ended' && supportsResume(session) && (
             <button
               type="button"
               onClick={handleResume}

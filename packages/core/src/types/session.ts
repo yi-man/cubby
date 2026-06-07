@@ -6,6 +6,7 @@ export interface Session {
   workspaceId: string;
   title: string | null;
   provider: string;
+  providerSessionId: string | null;
   model: string | null;
   status: SessionStatus;
   pid: number | null;
