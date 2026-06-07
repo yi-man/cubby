@@ -11,6 +11,8 @@ import { ClaudeCodeProvider } from './provider/claude-code.js';
 import { CodexProvider } from './provider/codex.js';
 import { MockClaudeCodeProvider } from './provider/mock-claude-code.js';
 import { MockCodexProvider } from './provider/mock-codex.js';
+import { MockOpenCodeProvider } from './provider/mock-opencode.js';
+import { OpenCodeProvider } from './provider/opencode.js';
 import { SessionManager } from './session/manager.js';
 import { SessionStore } from './session/store.js';
 import { WSCommandHandler } from './ws/handler.js';
@@ -55,6 +57,7 @@ export async function createServer(port = 6300) {
   const sessionManager = new SessionManager(sessionStore);
   sessionManager.registerProvider(createClaudeCodeProvider());
   sessionManager.registerProvider(createCodexProvider());
+  sessionManager.registerProvider(createOpenCodeProvider());
   sessionManager.reconcileDetachedLiveSessions();
 
   const hub = new WebSocketHub();
@@ -133,4 +136,11 @@ function createCodexProvider() {
     return new MockCodexProvider();
   }
   return new CodexProvider();
+}
+
+function createOpenCodeProvider() {
+  if (process.env.CUBBY_MOCK_OPENCODE_PROVIDER === '1') {
+    return new MockOpenCodeProvider();
+  }
+  return new OpenCodeProvider();
 }

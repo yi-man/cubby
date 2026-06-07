@@ -1,7 +1,7 @@
 import { ArrowUp, Folder, Loader2, RefreshCw } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
-export type AgentProviderId = 'claude-code' | 'codex';
+export type AgentProviderId = 'claude-code' | 'codex' | 'opencode';
 
 export interface WorkspaceOpenSelection {
   path: string;
@@ -28,6 +28,7 @@ const ICON_PROPS = { size: 15, strokeWidth: 2.1, 'aria-hidden': true } as const;
 const PROVIDER_OPTIONS: Array<{ id: AgentProviderId; label: string }> = [
   { id: 'claude-code', label: 'Claude Code' },
   { id: 'codex', label: 'Codex' },
+  { id: 'opencode', label: 'OpenCode' },
 ];
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -171,7 +172,7 @@ export function DirPicker({ onConfirm, onCancel }: DirPickerProps) {
           style={{
             marginBottom: '12px',
             display: 'grid',
-            gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
+            gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
             gap: '8px',
           }}
         >

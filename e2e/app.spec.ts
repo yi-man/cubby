@@ -1493,6 +1493,7 @@ test.describe('Cubby MVP', () => {
     await expect(page.getByLabel('Workspace path')).toBeVisible();
     await expect(page.getByRole('radio', { name: 'Claude Code' })).toBeChecked();
     await expect(page.getByRole('radio', { name: 'Codex' })).toBeVisible();
+    await expect(page.getByRole('radio', { name: 'OpenCode' })).toBeVisible();
   });
 
   test('workspace picker creates Codex sessions when Codex is selected', async ({ page }) => {
@@ -1525,6 +1526,41 @@ test.describe('Cubby MVP', () => {
         .toBe('codex');
 
       await expect(activeSessionView(page).getByTestId('session-title')).toHaveText('codex');
+    } finally {
+      rmSync(workspacePath, { recursive: true, force: true });
+    }
+  });
+
+  test('workspace picker creates OpenCode sessions when OpenCode is selected', async ({ page }) => {
+    const workspacePath = mkdtempSync(join(tmpdir(), 'cubby-opencode-picker-'));
+    await installWebSocketRecorder(page);
+
+    try {
+      await page.goto('/');
+      await page.getByRole('button', { name: 'New Session' }).click();
+
+      const dialog = page.getByRole('dialog', { name: 'Open Workspace' });
+      await dialog.getByRole('radio', { name: 'OpenCode' }).check();
+      await dialog.getByLabel('Workspace path').fill(workspacePath);
+      await dialog.getByRole('button', { name: 'Open', exact: true }).click();
+
+      await expect
+        .poll(
+          () =>
+            page.evaluate(() => {
+              const commands =
+                (
+                  window as typeof window & {
+                    __wsCommands?: Array<{ cmd?: string; args?: { provider?: string } }>;
+                  }
+                ).__wsCommands ?? [];
+              return commands.find((command) => command.cmd === 'session.create')?.args?.provider;
+            }),
+          { timeout: 10000 },
+        )
+        .toBe('opencode');
+
+      await expect(activeSessionView(page).getByTestId('session-title')).toHaveText('opencode');
     } finally {
       rmSync(workspacePath, { recursive: true, force: true });
     }

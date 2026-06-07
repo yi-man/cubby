@@ -19,7 +19,7 @@ export default defineConfig({
     screenshot: 'only-on-failure',
   },
   webServer: {
-    command: `CUBBY_HOST=127.0.0.1 CUBBY_PORT=${e2ePort} CUBBY_DATA_DIR=${JSON.stringify(e2eDataDir)} CUBBY_MOCK_CODEX_PROVIDER=1 bun packages/server/src/index.ts`,
+    command: `CUBBY_HOST=127.0.0.1 CUBBY_PORT=${e2ePort} CUBBY_DATA_DIR=${JSON.stringify(e2eDataDir)} CUBBY_MOCK_CODEX_PROVIDER=1 CUBBY_MOCK_OPENCODE_PROVIDER=1 bun packages/server/src/index.ts`,
     port: e2ePort,
     reuseExistingServer: false,
     timeout: 30000,

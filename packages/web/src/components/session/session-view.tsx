@@ -34,7 +34,7 @@ function isLiveStatus(status: Session['status']): boolean {
 }
 
 function supportsResume(session: Session): boolean {
-  return session.provider !== 'codex';
+  return session.provider !== 'codex' && session.provider !== 'opencode';
 }
 
 const VISUALLY_HIDDEN_STYLE = {
