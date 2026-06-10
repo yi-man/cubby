@@ -3,6 +3,7 @@ import { homedir } from 'node:os';
 import { isAbsolute, join, relative, resolve } from 'node:path';
 import type { Session } from '@cubby/core';
 import type { FastifyInstance, FastifyReply } from 'fastify';
+import { readGitDiff, readGitStatus } from '../git/git-service.js';
 import type { SessionManager } from '../session/manager.js';
 
 export interface SessionRouteCallbacks {
@@ -77,6 +78,39 @@ export function registerRoutes(
       return sendFileSystemError(reply, err);
     }
   });
+
+  app.get('/api/git/status', async (request, reply) => {
+    const { root } = request.query as { root?: string };
+    if (!root) {
+      return reply.code(400).send({ error: 'Workspace root is required' });
+    }
+
+    try {
+      const target = await resolveWorkspacePath(undefined, root);
+      return await readGitStatus(target.root ?? target.path);
+    } catch (err) {
+      return sendFileSystemError(reply, err);
+    }
+  });
+
+  app.get('/api/git/diff', async (request, reply) => {
+    const { path, root } = request.query as { path?: string; root?: string };
+    if (!root) {
+      return reply.code(400).send({ error: 'Workspace root is required' });
+    }
+    if (!path) {
+      return reply.code(400).send({ error: 'File path is required' });
+    }
+
+    try {
+      const target = await resolveWorkspacePath(path, root);
+      const workspaceRoot = target.root ?? root;
+      return await readGitDiff(workspaceRoot, relative(workspaceRoot, target.path));
+    } catch (err) {
+      return sendFileSystemError(reply, err);
+    }
+  });
+
   app.get('/api/sessions', async () => {
     return sessionManager.listSessions();
   });

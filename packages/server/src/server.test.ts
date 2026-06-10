@@ -39,6 +39,24 @@ async function postJson<T>(port: number, path: string, payload?: unknown): Promi
   return (await response.json()) as T;
 }
 
+async function runGit(cwd: string, args: string[]): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    const child = spawn('git', args, { cwd });
+    let stderr = '';
+    child.stderr?.on('data', (chunk) => {
+      stderr += String(chunk);
+    });
+    child.once('error', reject);
+    child.once('exit', (code) => {
+      if (code === 0) {
+        resolve();
+        return;
+      }
+      reject(new Error(`git ${args.join(' ')} failed: ${stderr}`));
+    });
+  });
+}
+
 function waitForExit(
   child: ChildProcess,
   timeoutMs = 5000,
@@ -201,6 +219,125 @@ describe('createServer', () => {
 
     expect(response.statusCode).toBe(415);
     expect(response.json()).toEqual({ error: 'File is not previewable' });
+  });
+
+  it('returns git status for a workspace repository', async () => {
+    const workspaceDir = mkdtempSync(join(tmpdir(), 'cubby-git-workspace-'));
+    dataDirs.push(workspaceDir);
+    mkdirSync(join(workspaceDir, 'src'));
+    writeFileSync(join(workspaceDir, 'src/app.ts'), 'export const value = 1;\n');
+    await runGit(workspaceDir, ['init']);
+    await runGit(workspaceDir, ['config', 'user.email', 'cubby@example.test']);
+    await runGit(workspaceDir, ['config', 'user.name', 'Cubby Test']);
+    await runGit(workspaceDir, ['add', '.']);
+    await runGit(workspaceDir, ['commit', '-m', 'initial']);
+    writeFileSync(join(workspaceDir, 'src/app.ts'), 'export const value = 2;\n');
+    writeFileSync(join(workspaceDir, 'src/new.ts'), 'export const fresh = true;\n');
+    const { app } = await createServer(0);
+
+    const response = await app.inject({
+      method: 'GET',
+      url: `/api/git/status?root=${encodeURIComponent(workspaceDir)}`,
+    });
+    const body = response.json();
+    await app.close();
+
+    expect(response.statusCode).toBe(200);
+    expect(body.isRepo).toBe(true);
+    expect(body.branch).toBeTruthy();
+    expect(body.entries).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ path: 'src/app.ts', status: 'M' }),
+        expect.objectContaining({ path: 'src/new.ts', status: '??' }),
+      ]),
+    );
+  });
+
+  it('returns a git diff for tracked workspace changes', async () => {
+    const workspaceDir = mkdtempSync(join(tmpdir(), 'cubby-git-diff-'));
+    dataDirs.push(workspaceDir);
+    writeFileSync(join(workspaceDir, 'app.ts'), 'export const value = 1;\n');
+    await runGit(workspaceDir, ['init']);
+    await runGit(workspaceDir, ['config', 'user.email', 'cubby@example.test']);
+    await runGit(workspaceDir, ['config', 'user.name', 'Cubby Test']);
+    await runGit(workspaceDir, ['add', '.']);
+    await runGit(workspaceDir, ['commit', '-m', 'initial']);
+    writeFileSync(join(workspaceDir, 'app.ts'), 'export const value = 2;\n');
+    const { app } = await createServer(0);
+
+    const response = await app.inject({
+      method: 'GET',
+      url: `/api/git/diff?root=${encodeURIComponent(workspaceDir)}&path=${encodeURIComponent(
+        'app.ts',
+      )}`,
+    });
+    const body = response.json();
+    await app.close();
+
+    expect(response.statusCode).toBe(200);
+    expect(body).toMatchObject({ path: 'app.ts', mode: 'diff', language: 'diff' });
+    expect(body.content).toContain('-export const value = 1;');
+    expect(body.content).toContain('+export const value = 2;');
+  });
+
+  it('returns content for untracked git files', async () => {
+    const workspaceDir = mkdtempSync(join(tmpdir(), 'cubby-git-untracked-'));
+    dataDirs.push(workspaceDir);
+    await runGit(workspaceDir, ['init']);
+    writeFileSync(join(workspaceDir, 'notes.txt'), 'untracked notes\n');
+    const { app } = await createServer(0);
+
+    const response = await app.inject({
+      method: 'GET',
+      url: `/api/git/diff?root=${encodeURIComponent(workspaceDir)}&path=${encodeURIComponent(
+        'notes.txt',
+      )}`,
+    });
+    await app.close();
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({
+      path: 'notes.txt',
+      mode: 'content',
+      content: 'untracked notes\n',
+      language: 'plaintext',
+    });
+  });
+
+  it('returns a non-repo git status for ordinary directories', async () => {
+    const workspaceDir = mkdtempSync(join(tmpdir(), 'cubby-non-git-'));
+    dataDirs.push(workspaceDir);
+    const { app } = await createServer(0);
+
+    const response = await app.inject({
+      method: 'GET',
+      url: `/api/git/status?root=${encodeURIComponent(workspaceDir)}`,
+    });
+    await app.close();
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ isRepo: false, branch: null, entries: [] });
+  });
+
+  it('rejects git diff paths outside the workspace root', async () => {
+    const workspaceDir = mkdtempSync(join(tmpdir(), 'cubby-git-safe-'));
+    dataDirs.push(workspaceDir);
+    const outsideDir = mkdtempSync(join(tmpdir(), 'cubby-git-outside-'));
+    dataDirs.push(outsideDir);
+    writeFileSync(join(outsideDir, 'outside.txt'), 'outside\n');
+    await runGit(workspaceDir, ['init']);
+    const { app } = await createServer(0);
+
+    const response = await app.inject({
+      method: 'GET',
+      url: `/api/git/diff?root=${encodeURIComponent(workspaceDir)}&path=${encodeURIComponent(
+        join(outsideDir, 'outside.txt'),
+      )}`,
+    });
+    await app.close();
+
+    expect(response.statusCode).toBe(403);
+    expect(response.json()).toEqual({ error: 'Path is outside workspace root' });
   });
 
   it('marks persisted live sessions as ended on startup', async () => {
