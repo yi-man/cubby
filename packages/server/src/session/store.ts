@@ -39,6 +39,7 @@ export class SessionStore {
       provider: input.provider,
       providerSessionId: null,
       model: input.model ?? null,
+      yolo: input.yolo ?? true,
       status: 'draft',
       pid: null,
       exitCode: null,
@@ -49,7 +50,7 @@ export class SessionStore {
 
     this.db
       .prepare(
-        'INSERT INTO sessions (id, workspace_id, title, provider, model, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+        'INSERT INTO sessions (id, workspace_id, title, provider, model, yolo, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
       )
       .run(
         id,
@@ -57,6 +58,7 @@ export class SessionStore {
         session.title,
         session.provider,
         session.model,
+        session.yolo ? 1 : 0,
         session.status,
         session.createdAt,
         session.updatedAt,
@@ -240,6 +242,7 @@ export class SessionStore {
       provider: row.provider as string,
       providerSessionId: (row.provider_session_id as string | null) ?? null,
       model: row.model as string | null,
+      yolo: row.yolo !== 0,
       status: row.status as SessionStatus,
       pid: row.pid as number | null,
       exitCode: row.exit_code as number | null,

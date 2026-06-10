@@ -23,6 +23,30 @@ describe('ClaudeCodeProvider', () => {
     expect(args).toEqual([]);
   });
 
+  it('builds yolo args for a new Claude Code session', () => {
+    const provider = new ClaudeCodeProvider();
+    const args = provider.buildArgs({
+      sessionId: '00000000-0000-4000-8000-000000000001',
+      yolo: true,
+    });
+
+    expect(args).toEqual([
+      '--session-id',
+      '00000000-0000-4000-8000-000000000001',
+      '--dangerously-skip-permissions',
+    ]);
+  });
+
+  it('does not add Claude Code permission bypass args when yolo is false', () => {
+    const provider = new ClaudeCodeProvider();
+    const args = provider.buildArgs({
+      sessionId: '00000000-0000-4000-8000-000000000001',
+      yolo: false,
+    });
+
+    expect(args).toEqual(['--session-id', '00000000-0000-4000-8000-000000000001']);
+  });
+
   it('binds a new Claude conversation to the Cubby session id', () => {
     const provider = new ClaudeCodeProvider();
     const args = provider.buildArgs({ sessionId: '00000000-0000-4000-8000-000000000001' });
@@ -166,5 +190,34 @@ describe('ClaudeCodeProvider', () => {
     expect(resizes).toEqual([{ cols: 120, rows: 50 }]);
     expect(kills).toEqual(['SIGTERM']);
     expect(exits).toEqual([7]);
+  });
+
+  it('spawns claude with yolo args', async () => {
+    const calls: unknown[] = [];
+    const provider = new ClaudeCodeProvider({
+      spawn: (file, args, options) => {
+        calls.push({ file, args, options });
+        return {
+          pid: 1235,
+          onData: () => ({ dispose: () => {} }),
+          onExit: () => ({ dispose: () => {} }),
+          write: () => {},
+          resize: () => {},
+          kill: () => {},
+        };
+      },
+    });
+
+    await provider.spawn('session-1', {
+      cwd: '/tmp',
+      cols: 100,
+      rows: 40,
+      yolo: true,
+    });
+
+    expect(calls[0]).toMatchObject({
+      file: 'claude',
+      args: ['--session-id', 'session-1', '--dangerously-skip-permissions'],
+    });
   });
 });

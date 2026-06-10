@@ -667,13 +667,13 @@ export function App() {
   }, [resizingSidebar]);
 
   const handleDirConfirm = useCallback(
-    async ({ path: workspaceId, provider }: WorkspaceOpenSelection) => {
+    async ({ path: workspaceId, provider, yolo }: WorkspaceOpenSelection) => {
       setShowPicker(false);
       // Create session
       const createRes = await request({
         id: `create-${Date.now()}`,
         cmd: 'session.create',
-        args: { workspaceId, provider },
+        args: { workspaceId, provider, yolo },
       });
       if (!createRes.ok || !createRes.data) return;
       if (!isSession(createRes.data)) return;

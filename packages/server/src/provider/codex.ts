@@ -50,10 +50,14 @@ export class CodexProvider implements AgentProvider {
     model?: string;
     resume?: boolean;
     providerSessionId?: string;
+    yolo?: boolean;
   }): string[] {
     const args = options.resume ? ['resume', '--cd', options.cwd] : ['--cd', options.cwd];
     if (options.model) {
       args.push('--model', options.model);
+    }
+    if (options.yolo) {
+      args.push('--dangerously-bypass-approvals-and-sandbox');
     }
     if (options.resume) {
       if (!options.providerSessionId) {
@@ -77,6 +81,7 @@ export class CodexProvider implements AgentProvider {
       model: options.model,
       resume: options.resume,
       providerSessionId: options.providerSessionId,
+      yolo: options.yolo,
     });
     const ringBuffer = new RingBuffer(5000);
     const spawner = this.ptySpawner ?? (await loadBunPty());

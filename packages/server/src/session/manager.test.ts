@@ -218,6 +218,34 @@ describe('SessionManager', () => {
     expect(outputs.length).toBeGreaterThan(0);
   });
 
+  it('passes persisted yolo mode into provider spawn options when starting', async () => {
+    const session = manager.createSession({
+      workspaceId: '/tmp',
+      provider: 'mock',
+      yolo: false,
+    });
+
+    await manager.startSession(session.id, { cwd: '/tmp', cols: 80, rows: 24 });
+
+    expect(mockProvider.spawnOptions[0]).toMatchObject({ yolo: false });
+  });
+
+  it('passes persisted yolo mode into provider spawn options when resuming', async () => {
+    const session = manager.createSession({
+      workspaceId: '/tmp',
+      provider: 'mock',
+      yolo: false,
+    });
+    store.updateStatus(session.id, 'ended', { exitCode: 0 });
+
+    await manager.resumeSession(session.id, { cwd: '/tmp', cols: 80, rows: 24 });
+
+    expect(mockProvider.spawnOptions[0]).toMatchObject({
+      resume: true,
+      yolo: false,
+    });
+  });
+
   it('returns sequenced live replay chunks after a rendered seq', async () => {
     const session = manager.createSession({ workspaceId: '/tmp', provider: 'mock' });
     await manager.startSession(session.id, { cwd: '/tmp', cols: 80, rows: 24 });

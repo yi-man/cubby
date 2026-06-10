@@ -58,13 +58,20 @@ export class WSCommandHandler {
   }
 
   private sessionCreate(req: WSRequest): WSResponse {
-    const { workspaceId, provider, model, title } = req.args as {
+    const { workspaceId, provider, model, title, yolo } = req.args as {
       workspaceId: string;
       provider: string;
       model?: string;
       title?: string;
+      yolo?: unknown;
     };
-    const session = this.sessionManager.createSession({ workspaceId, provider, model, title });
+    const session = this.sessionManager.createSession({
+      workspaceId,
+      provider,
+      model,
+      title,
+      yolo: typeof yolo === 'boolean' ? yolo : undefined,
+    });
     return { id: req.id, ok: true, data: session };
   }
 

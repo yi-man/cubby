@@ -6,6 +6,7 @@ export interface SpawnOptions {
   model?: string;
   resume?: boolean;
   providerSessionId?: string;
+  yolo?: boolean;
 }
 
 export interface AgentProvider {

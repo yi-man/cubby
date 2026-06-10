@@ -40,6 +40,78 @@ describe('SessionStore', () => {
     expect(session.provider).toBe('claude-code');
   });
 
+  it('defaults new sessions to yolo mode', () => {
+    const session = store.create({ workspaceId: '/tmp/test', provider: 'claude-code' });
+
+    expect(session.yolo).toBe(true);
+    expect(store.get(session.id)?.yolo).toBe(true);
+  });
+
+  it('persists explicit non-yolo sessions', () => {
+    const session = store.create({
+      workspaceId: '/tmp/test',
+      provider: 'claude-code',
+      yolo: false,
+    });
+
+    expect(session.yolo).toBe(false);
+    expect(store.get(session.id)?.yolo).toBe(false);
+  });
+
+  it('migrates existing session rows to yolo mode by default', async () => {
+    db.close();
+    try {
+      unlinkSync(dbPath);
+    } catch {}
+
+    const { default: BetterSqlite3 } = await import('better-sqlite3');
+    const legacyDb = new BetterSqlite3(dbPath);
+    legacyDb.exec(`
+      CREATE TABLE sessions (
+        id TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL,
+        title TEXT,
+        provider TEXT NOT NULL,
+        provider_session_id TEXT,
+        model TEXT,
+        status TEXT NOT NULL DEFAULT 'draft',
+        pid INTEGER,
+        exit_code INTEGER,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        ended_at TEXT
+      );
+      INSERT INTO sessions (
+        id,
+        workspace_id,
+        title,
+        provider,
+        model,
+        status,
+        created_at,
+        updated_at
+      ) VALUES (
+        'legacy-session',
+        '/tmp/legacy',
+        'Legacy session',
+        'claude-code',
+        NULL,
+        'draft',
+        '2026-06-10T00:00:00.000Z',
+        '2026-06-10T00:00:00.000Z'
+      );
+    `);
+    legacyDb.close();
+
+    db = new Database(dbPath);
+    store = new SessionStore(db);
+
+    expect(store.get('legacy-session')).toMatchObject({
+      id: 'legacy-session',
+      yolo: true,
+    });
+  });
+
   it('gets a session by id', () => {
     const created = store.create({ workspaceId: '/tmp/test', provider: 'claude-code' });
     const found = store.get(created.id);

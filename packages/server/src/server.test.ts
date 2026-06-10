@@ -221,6 +221,32 @@ describe('createServer', () => {
     expect(getResponse.json()).toMatchObject({ id: session.id, status: 'running' });
   });
 
+  it('creates HTTP sessions with default and explicit yolo modes', async () => {
+    const { app } = await createServer(0);
+
+    const defaultResponse = await app.inject({
+      method: 'POST',
+      url: '/api/sessions',
+      payload: { workspaceId: '/tmp', provider: 'claude-code', title: 'Default yolo' },
+    });
+    const explicitResponse = await app.inject({
+      method: 'POST',
+      url: '/api/sessions',
+      payload: {
+        workspaceId: '/tmp',
+        provider: 'claude-code',
+        title: 'No yolo',
+        yolo: false,
+      },
+    });
+    await app.close();
+
+    expect(defaultResponse.statusCode).toBe(200);
+    expect(defaultResponse.json()).toMatchObject({ title: 'Default yolo', yolo: true });
+    expect(explicitResponse.statusCode).toBe(200);
+    expect(explicitResponse.json()).toMatchObject({ title: 'No yolo', yolo: false });
+  });
+
   it('renames a session through the HTTP API', async () => {
     const { app } = await createServer(0);
     const createResponse = await app.inject({

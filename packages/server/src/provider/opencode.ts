@@ -47,7 +47,22 @@ export class OpenCodeProvider implements AgentProvider {
     model?: string;
     resume?: boolean;
     providerSessionId?: string;
+    yolo?: boolean;
   }): string[] {
+    if (options.yolo) {
+      const args = ['run', '--interactive', '--dangerously-skip-permissions', '--dir', options.cwd];
+      if (options.resume) {
+        if (!options.providerSessionId) {
+          throw new Error('OpenCode resume requires a provider session id');
+        }
+        args.push('--session', options.providerSessionId);
+      }
+      if (options.model) {
+        args.push('--model', options.model);
+      }
+      return args;
+    }
+
     const args = options.resume ? ['--session'] : [];
     if (options.resume) {
       if (!options.providerSessionId) {
@@ -75,6 +90,7 @@ export class OpenCodeProvider implements AgentProvider {
       model: options.model,
       resume: options.resume,
       providerSessionId: options.providerSessionId,
+      yolo: options.yolo,
     });
     const ringBuffer = new RingBuffer(5000);
     const spawner = this.ptySpawner ?? (await loadBunPty());

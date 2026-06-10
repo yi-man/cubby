@@ -51,6 +51,17 @@ function ensureSessionProviderSessionIdColumn(db: SqliteDb): void {
   }
 }
 
+function ensureSessionYoloColumn(db: SqliteDb): void {
+  const columns = db.prepare('PRAGMA table_info(sessions)').all() as Array<{
+    name?: unknown;
+  }>;
+  const names = new Set(columns.map((column) => String(column.name)));
+
+  if (!names.has('yolo')) {
+    db.exec('ALTER TABLE sessions ADD COLUMN yolo INTEGER NOT NULL DEFAULT 1');
+  }
+}
+
 export class Database {
   private db: SqliteDb;
 
@@ -58,6 +69,7 @@ export class Database {
     this.db = new NativeDb(path);
     this.db.exec(SCHEMA_SQL);
     ensureSessionProviderSessionIdColumn(this.db);
+    ensureSessionYoloColumn(this.db);
     ensureTerminalOutputSequenceColumns(this.db);
   }
 

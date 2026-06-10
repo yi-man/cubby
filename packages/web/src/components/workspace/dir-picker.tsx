@@ -6,6 +6,7 @@ export type AgentProviderId = 'claude-code' | 'codex' | 'opencode';
 export interface WorkspaceOpenSelection {
   path: string;
   provider: AgentProviderId;
+  yolo: boolean;
 }
 
 interface DirPickerProps {
@@ -66,6 +67,7 @@ function parentPath(value: string): string {
 export function DirPicker({ onConfirm, onCancel }: DirPickerProps) {
   const [path, setPath] = useState('');
   const [provider, setProvider] = useState<AgentProviderId>('claude-code');
+  const [yolo, setYolo] = useState(true);
   const [currentPath, setCurrentPath] = useState('');
   const [entries, setEntries] = useState<BrowseEntry[]>([]);
   const [error, setError] = useState('');
@@ -126,11 +128,11 @@ export function DirPicker({ onConfirm, onCancel }: DirPickerProps) {
       }
 
       const data = await res.json();
-      onConfirm({ path: isBrowseResponse(data) ? data.path : path.trim(), provider });
+      onConfirm({ path: isBrowseResponse(data) ? data.path : path.trim(), provider, yolo });
     } catch {
       setError('Failed to verify path');
     }
-  }, [path, provider, onConfirm]);
+  }, [path, provider, yolo, onConfirm]);
 
   return (
     <div
@@ -221,6 +223,43 @@ export function DirPicker({ onConfirm, onCancel }: DirPickerProps) {
             );
           })}
         </div>
+        <label
+          style={{
+            marginBottom: '12px',
+            minHeight: '34px',
+            border: '1px solid #3a3a52',
+            borderRadius: '6px',
+            background: '#202033',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: '12px',
+            padding: '0 10px',
+            boxSizing: 'border-box',
+            cursor: 'pointer',
+          }}
+        >
+          <span
+            style={{
+              minWidth: 0,
+              color: '#dce3ff',
+              fontSize: '13px',
+              fontWeight: 650,
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            Yolo mode
+          </span>
+          <input
+            type="checkbox"
+            aria-label="Yolo mode"
+            checked={yolo}
+            onChange={(event) => setYolo(event.target.checked)}
+            style={{ margin: 0, accentColor: '#89b4fa', flexShrink: 0 }}
+          />
+        </label>
         <div
           style={{
             marginBottom: '12px',

@@ -35,6 +35,30 @@ describe('WSCommandHandler', () => {
     } catch {}
   });
 
+  it('creates a session through websocket command with explicit yolo mode', async () => {
+    const response = await handler.handle({} as WebSocket, {
+      id: 'create-1',
+      cmd: WS_COMMANDS.SESSION_CREATE,
+      args: {
+        workspaceId: '/tmp',
+        provider: 'mock',
+        title: 'No yolo',
+        yolo: false,
+      },
+    });
+
+    expect(response).toMatchObject({
+      id: 'create-1',
+      ok: true,
+      data: {
+        workspaceId: '/tmp',
+        provider: 'mock',
+        title: 'No yolo',
+        yolo: false,
+      },
+    });
+  });
+
   it('renames a session through websocket command and broadcasts the update', async () => {
     const session = manager.createSession({
       workspaceId: '/tmp',

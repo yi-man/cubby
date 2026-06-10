@@ -1494,6 +1494,7 @@ test.describe('Cubby MVP', () => {
     await expect(page.getByRole('radio', { name: 'Claude Code' })).toBeChecked();
     await expect(page.getByRole('radio', { name: 'Codex' })).toBeVisible();
     await expect(page.getByRole('radio', { name: 'OpenCode' })).toBeVisible();
+    await expect(page.getByRole('checkbox', { name: 'Yolo mode' })).toBeChecked();
   });
 
   test('workspace picker creates Codex sessions when Codex is selected', async ({ page }) => {
@@ -1563,6 +1564,83 @@ test.describe('Cubby MVP', () => {
       await expect(activeSessionView(page).getByTestId('session-title')).toHaveText('opencode');
     } finally {
       rmSync(workspacePath, { recursive: true, force: true });
+    }
+  });
+
+  test('workspace picker sends default and disabled yolo selections', async ({ page }) => {
+    const defaultPath = mkdtempSync(join(tmpdir(), 'cubby-yolo-default-'));
+    const disabledPath = mkdtempSync(join(tmpdir(), 'cubby-yolo-disabled-'));
+    await installWebSocketRecorder(page);
+
+    try {
+      await page.goto('/');
+      await page.getByRole('button', { name: 'New Session' }).click();
+
+      const defaultDialog = page.getByRole('dialog', { name: 'Open Workspace' });
+      await expect(defaultDialog.getByRole('checkbox', { name: 'Yolo mode' })).toBeChecked();
+      await defaultDialog.getByLabel('Workspace path').fill(defaultPath);
+      await defaultDialog.getByRole('button', { name: 'Open', exact: true }).click();
+
+      await expect
+        .poll(
+          () =>
+            page.evaluate((expectedPath) => {
+              const commands =
+                (
+                  window as typeof window & {
+                    __wsCommands?: Array<{
+                      cmd?: string;
+                      args?: { workspaceId?: string; yolo?: boolean };
+                    }>;
+                  }
+                ).__wsCommands ?? [];
+              return commands.some(
+                (command) =>
+                  command.cmd === 'session.create' &&
+                  command.args?.workspaceId === expectedPath &&
+                  command.args?.yolo === true,
+              );
+            }, defaultPath),
+          { timeout: 10000 },
+        )
+        .toBe(true);
+
+      await page.evaluate(() => {
+        (window as typeof window & { __wsCommands?: unknown[] }).__wsCommands = [];
+      });
+
+      await page.getByRole('button', { name: 'New Session' }).click();
+      const disabledDialog = page.getByRole('dialog', { name: 'Open Workspace' });
+      await disabledDialog.getByRole('checkbox', { name: 'Yolo mode' }).uncheck();
+      await disabledDialog.getByLabel('Workspace path').fill(disabledPath);
+      await disabledDialog.getByRole('button', { name: 'Open', exact: true }).click();
+
+      await expect
+        .poll(
+          () =>
+            page.evaluate((expectedPath) => {
+              const commands =
+                (
+                  window as typeof window & {
+                    __wsCommands?: Array<{
+                      cmd?: string;
+                      args?: { workspaceId?: string; yolo?: boolean };
+                    }>;
+                  }
+                ).__wsCommands ?? [];
+              return commands.some(
+                (command) =>
+                  command.cmd === 'session.create' &&
+                  command.args?.workspaceId === expectedPath &&
+                  command.args?.yolo === false,
+              );
+            }, disabledPath),
+          { timeout: 10000 },
+        )
+        .toBe(true);
+    } finally {
+      rmSync(defaultPath, { recursive: true, force: true });
+      rmSync(disabledPath, { recursive: true, force: true });
     }
   });
 
