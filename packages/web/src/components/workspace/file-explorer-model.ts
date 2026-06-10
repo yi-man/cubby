@@ -17,9 +17,17 @@ export interface FilePreviewResponse {
   truncated: boolean;
 }
 
+export interface ImportTarget {
+  candidates: string[];
+  importPath: string;
+  targetSymbol: string;
+}
+
 export type FileExplorerLayoutMode = 'compact' | 'split';
 
 export const FILE_EXPLORER_COMPACT_BREAKPOINT = 720;
+const IMPORT_EXTENSION_CANDIDATES = ['.ts', '.tsx', '.js', '.jsx', '.json', '.css'] as const;
+const INDEX_EXTENSION_CANDIDATES = ['.ts', '.tsx', '.js', '.jsx'] as const;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
@@ -69,6 +77,55 @@ export function fileExplorerLayoutMode(viewportWidth: number): FileExplorerLayou
   return viewportWidth < FILE_EXPLORER_COMPACT_BREAKPOINT ? 'compact' : 'split';
 }
 
+export function relativePathFromRoot(pathValue: string, rootPath: string): string {
+  const path = normalizePath(pathValue);
+  const root = normalizePath(rootPath);
+  if (path === root) return '.';
+  if (!isPathInsideRoot(path, root)) return pathValue;
+  return path.slice(root.length + 1) || '.';
+}
+
+export function importTargetForSymbol(
+  sourceContent: string,
+  sourcePath: string,
+  rootPath: string,
+  symbolName: string,
+): ImportTarget | null {
+  const importPattern = /\bimport\s+(?:type\s+)?([\s\S]*?)\s+from\s*['"]([^'"]+)['"]/g;
+  for (const match of sourceContent.matchAll(importPattern)) {
+    const importBindings = match[1]?.trim();
+    const importPath = match[2]?.trim();
+    if (!importBindings || !importPath || !isRelativeImportPath(importPath)) continue;
+
+    const targetSymbol = targetSymbolForImportBinding(importBindings, symbolName);
+    if (!targetSymbol) continue;
+
+    const targetBasePath = resolveImportBasePath(sourcePath, importPath);
+    const candidates = importPathCandidates(targetBasePath).filter((candidate) =>
+      isPathInsideRoot(candidate, normalizePath(rootPath)),
+    );
+    if (candidates.length === 0) return null;
+
+    return { candidates, importPath, targetSymbol };
+  }
+
+  return null;
+}
+
+export function definitionLineForSymbol(content: string, symbolName: string): number {
+  const escapedSymbol = escapeRegExp(symbolName);
+  const patterns = [
+    new RegExp(`^\\s*(?:export\\s+)?(?:default\\s+)?function\\s+${escapedSymbol}\\b`),
+    new RegExp(`^\\s*(?:export\\s+)?class\\s+${escapedSymbol}\\b`),
+    new RegExp(`^\\s*(?:export\\s+)?(?:const|let|var)\\s+${escapedSymbol}\\b`),
+    new RegExp(`^\\s*export\\s+default\\s+${escapedSymbol}\\b`),
+    /^\s*export\s+default\s+(?:function|class)\b/,
+  ];
+  const lines = content.split(/\r?\n/);
+  const index = lines.findIndex((line) => patterns.some((pattern) => pattern.test(line)));
+  return index >= 0 ? index + 1 : 1;
+}
+
 export function fileLanguageFromPath(path: string): string {
   const fileName = path.split(/[\\/]/).pop()?.toLowerCase() ?? '';
   if (!fileName) return 'plaintext';
@@ -107,10 +164,110 @@ export function fileLanguageFromPath(path: string): string {
 }
 
 function normalizePath(value: string): string {
-  const trimmed = value.trim().replace(/\/+$/, '');
+  const trimmed = value.trim().replace(/\\/g, '/').replace(/\/+$/, '');
   return trimmed || '/';
 }
 
 function isPathInsideRoot(path: string, root: string): boolean {
   return path === root || path.startsWith(`${root}/`);
+}
+
+function isRelativeImportPath(importPath: string): boolean {
+  return importPath.startsWith('./') || importPath.startsWith('../');
+}
+
+function targetSymbolForImportBinding(importBindings: string, symbolName: string): string | null {
+  const namedBlock = /\{([\s\S]*?)\}/.exec(importBindings);
+  const leadingBinding = namedBlock
+    ? importBindings.slice(0, namedBlock.index).replace(/,$/, '').trim()
+    : importBindings.trim();
+
+  if (leadingBinding) {
+    const namespaceMatch = /^\*\s+as\s+([A-Za-z_$][\w$]*)$/.exec(leadingBinding);
+    if (namespaceMatch?.[1] === symbolName) return symbolName;
+
+    const defaultBinding = leadingBinding.replace(/^type\s+/, '').trim();
+    if (/^[A-Za-z_$][\w$]*$/.test(defaultBinding) && defaultBinding === symbolName) {
+      return symbolName;
+    }
+  }
+
+  if (!namedBlock) return null;
+
+  for (const binding of namedBlock[1].split(',')) {
+    const cleanedBinding = binding.trim().replace(/^type\s+/, '');
+    const bindingMatch = /^([A-Za-z_$][\w$]*)(?:\s+as\s+([A-Za-z_$][\w$]*))?$/.exec(cleanedBinding);
+    if (!bindingMatch) continue;
+
+    const importedName = bindingMatch[1];
+    const localName = bindingMatch[2] ?? importedName;
+    if (localName === symbolName) return importedName;
+  }
+
+  return null;
+}
+
+function resolveImportBasePath(sourcePath: string, importPath: string): string {
+  const sourceDirectory = directoryPath(sourcePath);
+  return resolveWorkspaceRelativePath(sourceDirectory, importPath);
+}
+
+function directoryPath(pathValue: string): string {
+  const path = normalizePath(pathValue);
+  const slashIndex = path.lastIndexOf('/');
+  if (slashIndex <= 0) return '/';
+  return path.slice(0, slashIndex);
+}
+
+function resolveWorkspaceRelativePath(basePath: string, relativePath: string): string {
+  const combinedPath = relativePath.startsWith('/')
+    ? relativePath
+    : `${normalizePath(basePath)}/${relativePath}`;
+  const absolute = combinedPath.startsWith('/');
+  const parts: string[] = [];
+
+  for (const part of combinedPath.replace(/\\/g, '/').split('/')) {
+    if (!part || part === '.') continue;
+    if (part === '..') {
+      parts.pop();
+      continue;
+    }
+    parts.push(part);
+  }
+
+  return `${absolute ? '/' : ''}${parts.join('/')}`;
+}
+
+function importPathCandidates(targetBasePath: string): string[] {
+  const normalizedPath = normalizePath(targetBasePath);
+  if (hasFileExtension(normalizedPath))
+    return importPathCandidatesForExplicitExtension(normalizedPath);
+
+  return [
+    ...IMPORT_EXTENSION_CANDIDATES.map((extension) => `${normalizedPath}${extension}`),
+    ...INDEX_EXTENSION_CANDIDATES.map((extension) => `${normalizedPath}/index${extension}`),
+  ];
+}
+
+function importPathCandidatesForExplicitExtension(pathValue: string): string[] {
+  if (pathValue.endsWith('.js')) {
+    const basePath = pathValue.slice(0, -'.js'.length);
+    return [pathValue, `${basePath}.ts`, `${basePath}.tsx`, `${basePath}.jsx`];
+  }
+
+  if (pathValue.endsWith('.jsx')) {
+    const basePath = pathValue.slice(0, -'.jsx'.length);
+    return [pathValue, `${basePath}.tsx`, `${basePath}.ts`];
+  }
+
+  return [pathValue];
+}
+
+function hasFileExtension(pathValue: string): boolean {
+  const fileName = pathValue.split('/').pop() ?? '';
+  return /\.[^/.]+$/.test(fileName);
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }

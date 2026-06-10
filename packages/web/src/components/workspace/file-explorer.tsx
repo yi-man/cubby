@@ -1,13 +1,18 @@
 import Editor from '@monaco-editor/react';
 import { ArrowLeft, ArrowUp, FileText, Folder, Loader2, RefreshCw, X } from 'lucide-react';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { type ComponentProps, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  definitionLineForSymbol,
   type FileExplorerEntry,
+  type FilePreviewResponse,
   fileExplorerLayoutMode,
   fileLanguageFromPath,
+  type ImportTarget,
+  importTargetForSymbol,
   isFileBrowseResponse,
   isFilePreviewResponse,
   parentPathWithinRoot,
+  relativePathFromRoot,
 } from './file-explorer-model.js';
 
 interface FileExplorerProps {
@@ -23,12 +28,28 @@ interface SelectedFile {
 }
 
 type CompactPanel = 'files' | 'preview';
+type EditorMount = NonNullable<ComponentProps<typeof Editor>['onMount']>;
+type MonacoEditorInstance = Parameters<EditorMount>[0];
+
+interface PendingReveal {
+  path: string;
+  line: number;
+}
+
+type FilePreviewLoadResult =
+  | { kind: 'ok'; preview: FilePreviewResponse }
+  | { kind: 'not-previewable' }
+  | { kind: 'error' };
 
 const ICON_PROPS = { size: 15, strokeWidth: 2.1, 'aria-hidden': true } as const;
 const FILE_EXPLORER_Z_INDEX = 1000;
 
 export function FileExplorer({ rootPath, onClose }: FileExplorerProps) {
   const viewportWidth = useViewportWidth();
+  const editorRef = useRef<MonacoEditorInstance | null>(null);
+  const rootRef = useRef(rootPath);
+  const selectedFileRef = useRef<SelectedFile | null>(null);
+  const openImportTargetRef = useRef<(target: ImportTarget) => void>(() => undefined);
   const [root, setRoot] = useState(rootPath);
   const [currentPath, setCurrentPath] = useState(rootPath);
   const [entries, setEntries] = useState<FileExplorerEntry[]>([]);
@@ -40,15 +61,28 @@ export function FileExplorer({ rootPath, onClose }: FileExplorerProps) {
   const [previewError, setPreviewError] = useState('');
   const [wordWrap, setWordWrap] = useState(true);
   const [compactPanel, setCompactPanel] = useState<CompactPanel>('files');
+  const [pendingReveal, setPendingReveal] = useState<PendingReveal | null>(null);
+  const [editorReady, setEditorReady] = useState(false);
   const parent = useMemo(() => parentPathWithinRoot(currentPath, root), [currentPath, root]);
   const canGoParent = currentPath !== parent;
   const compact = fileExplorerLayoutMode(viewportWidth) === 'compact';
   const showFilesPanel = !compact || compactPanel === 'files';
   const showPreviewPanel = !compact || compactPanel === 'preview';
+  const rootDisplayPath = relativePathFromRoot(root, root);
+  const currentDisplayPath = relativePathFromRoot(currentPath, root);
+  const selectedDisplayPath = selectedFile ? relativePathFromRoot(selectedFile.path, root) : '';
   const selectedLanguage = useMemo(
     () => (selectedFile ? fileLanguageFromPath(selectedFile.path) : 'plaintext'),
     [selectedFile],
   );
+
+  useEffect(() => {
+    rootRef.current = root;
+  }, [root]);
+
+  useEffect(() => {
+    selectedFileRef.current = selectedFile;
+  }, [selectedFile]);
 
   const loadDirectory = useCallback(
     async (targetPath: string) => {
@@ -89,6 +123,7 @@ export function FileExplorer({ rootPath, onClose }: FileExplorerProps) {
   const openDirectory = useCallback(
     (path: string) => {
       setSelectedFile(null);
+      setPendingReveal(null);
       setCompactPanel('files');
       setNavigatingPath(path);
       void loadDirectory(path);
@@ -96,39 +131,47 @@ export function FileExplorer({ rootPath, onClose }: FileExplorerProps) {
     [loadDirectory],
   );
 
-  const openFile = useCallback(
-    async (entry: FileExplorerEntry) => {
-      setPreviewLoadingPath(entry.path);
+  const loadFilePreview = useCallback(
+    async (path: string): Promise<FilePreviewLoadResult> => {
+      const query = new URLSearchParams({ root: rootPath, path });
+      const res = await fetch(`/api/file?${query.toString()}`);
+      if (res.status === 415) return { kind: 'not-previewable' };
+      if (!res.ok) return { kind: 'error' };
+
+      const data = await res.json();
+      if (!isFilePreviewResponse(data)) return { kind: 'error' };
+
+      return { kind: 'ok', preview: data };
+    },
+    [rootPath],
+  );
+
+  const openFilePath = useCallback(
+    async (path: string, name: string) => {
+      setPreviewLoadingPath(path);
       setPreviewError('');
+      setPendingReveal(null);
       try {
-        const query = new URLSearchParams({ root: rootPath, path: entry.path });
-        const res = await fetch(`/api/file?${query.toString()}`);
-        if (res.status === 415) {
+        const result = await loadFilePreview(path);
+        if (result.kind === 'not-previewable') {
           setSelectedFile(null);
           setPreviewError('This file is not previewable');
           setCompactPanel('preview');
           return;
         }
-        if (!res.ok) {
+        if (result.kind === 'error') {
           setSelectedFile(null);
           setPreviewError('Failed to open file');
           setCompactPanel('preview');
           return;
         }
 
-        const data = await res.json();
-        if (!isFilePreviewResponse(data)) {
-          setSelectedFile(null);
-          setPreviewError('Failed to read file');
-          setCompactPanel('preview');
-          return;
-        }
-
+        const { preview } = result;
         setSelectedFile({
-          name: entry.name,
-          path: data.path,
-          content: data.content,
-          truncated: data.truncated,
+          name,
+          path: preview.path,
+          content: preview.content,
+          truncated: preview.truncated,
         });
         setCompactPanel('preview');
       } catch {
@@ -139,8 +182,113 @@ export function FileExplorer({ rootPath, onClose }: FileExplorerProps) {
         setPreviewLoadingPath(null);
       }
     },
-    [rootPath],
+    [loadFilePreview],
   );
+
+  const openFile = useCallback(
+    async (entry: FileExplorerEntry) => {
+      await openFilePath(entry.path, entry.name);
+    },
+    [openFilePath],
+  );
+
+  const openImportTarget = useCallback(
+    async (target: ImportTarget) => {
+      setPreviewError('');
+      setPendingReveal(null);
+
+      for (const candidate of target.candidates) {
+        setPreviewLoadingPath(candidate);
+        try {
+          const result = await loadFilePreview(candidate);
+          if (result.kind !== 'ok') continue;
+
+          const { preview } = result;
+          setSelectedFile({
+            name: fileNameFromPath(preview.path),
+            path: preview.path,
+            content: preview.content,
+            truncated: preview.truncated,
+          });
+          setPendingReveal({
+            path: preview.path,
+            line: definitionLineForSymbol(preview.content, target.targetSymbol),
+          });
+          setCompactPanel('preview');
+          setPreviewLoadingPath(null);
+          return;
+        } catch {}
+      }
+
+      setSelectedFile(null);
+      setPreviewError('Definition file unavailable');
+      setCompactPanel('preview');
+      setPreviewLoadingPath(null);
+    },
+    [loadFilePreview],
+  );
+
+  useEffect(() => {
+    openImportTargetRef.current = (target) => {
+      void openImportTarget(target);
+    };
+  }, [openImportTarget]);
+
+  const handleEditorMount: EditorMount = useCallback((editor) => {
+    editorRef.current = editor;
+    setEditorReady(true);
+
+    const resolveTargetAtPosition = (position?: { lineNumber: number; column: number } | null) => {
+      const selected = selectedFileRef.current;
+      const model = editor.getModel();
+      if (!selected || !model || !position) return null;
+
+      const word = model.getWordAtPosition(position);
+      if (!word?.word) return null;
+
+      return importTargetForSymbol(model.getValue(), selected.path, rootRef.current, word.word);
+    };
+
+    const mouseMoveDisposable = editor.onMouseMove((event) => {
+      const target = resolveTargetAtPosition(event.target.position);
+      const editorNode = editor.getDomNode();
+      if (editorNode) editorNode.style.cursor = target ? 'pointer' : '';
+    });
+
+    const mouseDownDisposable = editor.onMouseDown((event) => {
+      const target = resolveTargetAtPosition(event.target.position);
+      if (target) openImportTargetRef.current(target);
+    });
+
+    editor.onDidDispose(() => {
+      mouseMoveDisposable.dispose();
+      mouseDownDisposable.dispose();
+      editorRef.current = null;
+      setEditorReady(false);
+    });
+  }, []);
+
+  useEffect(() => {
+    if (
+      !editorReady ||
+      !pendingReveal ||
+      !selectedFile ||
+      selectedFile.path !== pendingReveal.path
+    ) {
+      return;
+    }
+    const editor = editorRef.current;
+    if (!editor) return;
+
+    const animationFrame = window.requestAnimationFrame(() => {
+      editor.setPosition({ lineNumber: pendingReveal.line, column: 1 });
+      editor.revealLineInCenter(pendingReveal.line);
+      editor.focus();
+      setPendingReveal(null);
+    });
+
+    return () => window.cancelAnimationFrame(animationFrame);
+  }, [editorReady, pendingReveal, selectedFile]);
 
   return (
     <div
@@ -205,7 +353,7 @@ export function FileExplorer({ rootPath, onClose }: FileExplorerProps) {
                 fontSize: '11px',
               }}
             >
-              {root}
+              {rootDisplayPath}
             </div>
           </div>
           <button
@@ -285,7 +433,7 @@ export function FileExplorer({ rootPath, onClose }: FileExplorerProps) {
                   fontSize: '12px',
                 }}
               >
-                {currentPath}
+                {currentDisplayPath}
               </div>
             </div>
             <div style={{ minHeight: 0, flex: 1, overflowY: 'auto', padding: '8px' }}>
@@ -298,6 +446,7 @@ export function FileExplorer({ rootPath, onClose }: FileExplorerProps) {
                   const entryLoading =
                     navigatingPath === entry.path || previewLoadingPath === entry.path;
                   const selected = selectedFile?.path === entry.path;
+                  const entryDisplayPath = relativePathFromRoot(entry.path, root);
                   return (
                     <button
                       key={entry.path}
@@ -371,7 +520,7 @@ export function FileExplorer({ rootPath, onClose }: FileExplorerProps) {
                             fontSize: '11px',
                           }}
                         >
-                          {entry.isDir ? 'folder' : 'file'}
+                          {entryDisplayPath}
                         </span>
                       </span>
                     </button>
@@ -446,7 +595,7 @@ export function FileExplorer({ rootPath, onClose }: FileExplorerProps) {
                   fontWeight: selectedFile ? 500 : 650,
                 }}
               >
-                {selectedFile?.path ?? 'Select a file'}
+                {selectedDisplayPath || 'Select a file'}
               </div>
               {selectedFile && (
                 <>
@@ -522,6 +671,7 @@ export function FileExplorer({ rootPath, onClose }: FileExplorerProps) {
                     language={selectedLanguage}
                     value={selectedFile.content}
                     theme="vs-dark"
+                    onMount={handleEditorMount}
                     options={{
                       readOnly: true,
                       domReadOnly: true,
@@ -609,6 +759,10 @@ function iconButtonStyle(enabled: boolean) {
     padding: 0,
     flexShrink: 0,
   } as const;
+}
+
+function fileNameFromPath(path: string): string {
+  return path.split(/[\\/]/).pop() || path;
 }
 
 function useViewportWidth(): number {
