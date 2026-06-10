@@ -295,6 +295,7 @@ export function GitChanges({ rootPath, status, onClose, onRefresh }: GitChangesP
                   language={preview.language}
                   value={preview.content}
                   theme="vs-dark"
+                  loading={<PlainTextPreview content={preview.content} />}
                   options={{
                     readOnly: true,
                     domReadOnly: true,
@@ -421,6 +422,27 @@ function EmptyState({ label }: { label: string }) {
     >
       {label}
     </div>
+  );
+}
+
+function PlainTextPreview({ content }: { content: string }) {
+  return (
+    <pre
+      style={{
+        height: '100%',
+        margin: 0,
+        overflow: 'auto',
+        padding: '12px',
+        background: '#050606',
+        color: '#f5f4ec',
+        fontFamily: 'monospace',
+        fontSize: '12px',
+        lineHeight: '20px',
+        whiteSpace: 'pre',
+      }}
+    >
+      {content}
+    </pre>
   );
 }
 

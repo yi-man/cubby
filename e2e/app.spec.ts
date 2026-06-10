@@ -1,4 +1,5 @@
-import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { spawn } from 'node:child_process';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, type Locator, type Page, test } from '@playwright/test';
@@ -166,6 +167,24 @@ async function activeVisibleTerminalCursorCount(page: Page): Promise<number> {
 
 function countOccurrences(value: string, needle: string): number {
   return value.split(needle).length - 1;
+}
+
+async function runGit(cwd: string, args: string[]): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    const child = spawn('git', args, { cwd });
+    let stderr = '';
+    child.stderr?.on('data', (chunk) => {
+      stderr += String(chunk);
+    });
+    child.once('error', reject);
+    child.once('exit', (code) => {
+      if (code === 0) {
+        resolve();
+        return;
+      }
+      reject(new Error(`git ${args.join(' ')} failed: ${stderr}`));
+    });
+  });
 }
 
 async function installWebSocketRecorder(page: Page): Promise<void> {
@@ -547,6 +566,48 @@ test.describe('Cubby MVP', () => {
 
     await page.getByRole('button', { name: 'Stop', exact: true }).click();
     await assertActiveDetail(page, { title: session.title, status: 'ended', action: 'Resume' });
+  });
+
+  test('terminal toolbar opens git changes grouped by directory with diff preview', async ({
+    page,
+  }) => {
+    const workspaceDir = mkdtempSync(join(tmpdir(), 'cubby-git-toolbar-'));
+    mkdirSync(join(workspaceDir, 'src'));
+    try {
+      writeFileSync(join(workspaceDir, 'src/app.ts'), 'export const value = 1;\n');
+      await runGit(workspaceDir, ['init']);
+      await runGit(workspaceDir, ['config', 'user.email', 'cubby@example.test']);
+      await runGit(workspaceDir, ['config', 'user.name', 'Cubby Test']);
+      await runGit(workspaceDir, ['add', '.']);
+      await runGit(workspaceDir, ['commit', '-m', 'initial']);
+      writeFileSync(join(workspaceDir, 'src/app.ts'), 'export const value = 2;\n');
+
+      const session = await createSession(page, {
+        workspaceId: workspaceDir,
+        title: `Git Toolbar ${Date.now()}`,
+      });
+
+      await page.goto('/');
+      const group = page.getByTestId('workspace-group').filter({ hasText: workspaceDir });
+      await selectSessionTab(group, session.title);
+
+      const gitButton = page.getByRole('button', { name: 'Open git changes' });
+      await expect(gitButton).toContainText('1 change');
+      await gitButton.click();
+      const dialog = page.getByTestId('git-changes-dialog');
+      await expect(dialog).toBeVisible();
+      await expect(dialog.getByRole('button', { name: 'Expand folder src' })).toBeVisible();
+      await dialog.getByRole('button', { name: 'Expand folder src' }).click();
+      await dialog.getByRole('button', { name: 'Open git change src/app.ts' }).click();
+      await expect(dialog.getByTestId('git-diff-preview')).toContainText(
+        '-export const value = 1;',
+      );
+      await expect(dialog.getByTestId('git-diff-preview')).toContainText(
+        '+export const value = 2;',
+      );
+    } finally {
+      rmSync(workspaceDir, { recursive: true, force: true });
+    }
   });
 
   test('sidebar is expanded by default on desktop and remembers user collapse state', async ({
