@@ -1,8 +1,14 @@
 import type { Session, TerminalOutputChunk, WSEvent, WSResponse } from '@cubby/core';
-import { Folder, MonitorUp } from 'lucide-react';
+import { Folder, GitBranch, MonitorUp } from 'lucide-react';
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { type TerminalHandle, TerminalView } from '../terminal/terminal.js';
 import { FileExplorer } from '../workspace/file-explorer.js';
+import { GitChanges } from '../workspace/git-changes.js';
+import {
+  type GitStatusResponse,
+  gitStatusSummaryLabel,
+  isGitStatusResponse,
+} from '../workspace/git-status-model.js';
 import { resumeActionState, resumeErrorMessage } from './session-view-model.js';
 import {
   filterRenderableLiveChunks,
@@ -191,6 +197,9 @@ export function SessionView({
   const [endedReplayFitToContainer, setEndedReplayFitToContainer] = useState(false);
   const [resizeAuthority, setResizeAuthority] = useState(false);
   const [showFileExplorer, setShowFileExplorer] = useState(false);
+  const [showGitChanges, setShowGitChanges] = useState(false);
+  const [gitStatus, setGitStatus] = useState<GitStatusResponse | null>(null);
+  const [gitStatusError, setGitStatusError] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const live = isLiveStatus(session.status);
   const canReplayHistory = terminalReady && (live || session.status === 'ended');
@@ -802,6 +811,33 @@ export function SessionView({
     [session.id, active, live, send],
   );
 
+  const loadGitStatus = useCallback(async () => {
+    setGitStatusError(false);
+    try {
+      const query = new URLSearchParams({ root: session.workspaceId });
+      const response = await fetch(`/api/git/status?${query.toString()}`);
+      if (!response.ok) {
+        setGitStatusError(true);
+        return;
+      }
+
+      const data = await response.json();
+      if (!isGitStatusResponse(data)) {
+        setGitStatusError(true);
+        return;
+      }
+
+      setGitStatus(data);
+    } catch {
+      setGitStatusError(true);
+    }
+  }, [session.workspaceId]);
+
+  useEffect(() => {
+    if (!active) return;
+    void loadGitStatus();
+  }, [active, loadGitStatus]);
+
   const showEmptyEndedHistory =
     session.status === 'ended' && replayState.loaded && !replayState.hasHistory;
   const showRecoveryError = live && recoveryError !== null;
@@ -825,6 +861,8 @@ export function SessionView({
         ? 'This view controls terminal size'
         : 'Use this view to control terminal size';
   const resumeAction = resumeActionState(session);
+  const gitSummaryLabel = gitStatusError ? 'Git unavailable' : gitStatusSummaryLabel(gitStatus);
+  const gitButtonEnabled = Boolean(gitStatus?.isRepo);
 
   return (
     <div
@@ -1103,6 +1141,7 @@ export function SessionView({
           alignItems: 'center',
           gap: '8px',
           padding: '0 14px',
+          overflow: 'hidden',
         }}
       >
         <button
@@ -1128,9 +1167,58 @@ export function SessionView({
           <Folder {...ACTION_ICON_PROPS} />
           <span>File Explorer</span>
         </button>
+        <button
+          type="button"
+          aria-label="Open git changes"
+          title={gitSummaryLabel}
+          onClick={() => {
+            if (!gitButtonEnabled) return;
+            setShowGitChanges(true);
+            void loadGitStatus();
+          }}
+          disabled={!gitButtonEnabled}
+          style={{
+            minWidth: 0,
+            maxWidth: 'min(360px, 45vw)',
+            height: '30px',
+            border: `1px solid ${gitButtonEnabled ? '#2a2d2a' : '#202220'}`,
+            borderRadius: '6px',
+            background: gitButtonEnabled
+              ? 'linear-gradient(180deg, #161918 0%, #0d0f0e 100%)'
+              : '#0d0f0e',
+            color: gitButtonEnabled ? '#d7d5ca' : '#5f645e',
+            cursor: gitButtonEnabled ? 'pointer' : 'default',
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: '8px',
+            padding: '0 10px',
+            fontSize: '12px',
+            fontWeight: 650,
+          }}
+        >
+          <GitBranch {...ACTION_ICON_PROPS} />
+          <span
+            style={{
+              minWidth: 0,
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            {gitSummaryLabel}
+          </span>
+        </button>
       </div>
       {showFileExplorer && (
         <FileExplorer rootPath={session.workspaceId} onClose={() => setShowFileExplorer(false)} />
+      )}
+      {showGitChanges && gitStatus?.isRepo && (
+        <GitChanges
+          rootPath={session.workspaceId}
+          status={gitStatus}
+          onClose={() => setShowGitChanges(false)}
+          onRefresh={loadGitStatus}
+        />
       )}
     </div>
   );
