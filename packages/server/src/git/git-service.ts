@@ -1,9 +1,10 @@
 import { execFile } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { extname, join } from 'node:path';
 import { promisify } from 'node:util';
 
 const execFileAsync = promisify(execFile);
+const MAX_BINARY_PREVIEW_BYTES = 2 * 1024 * 1024;
 
 export type GitDiffMode = 'worktree' | 'cached' | 'both' | 'content';
 
@@ -23,9 +24,11 @@ export interface GitStatusResponse {
 
 export interface GitDiffResponse {
   path: string;
-  mode: 'diff' | 'content';
+  mode: 'diff' | 'content' | 'binary';
   content: string;
   language: 'diff' | 'plaintext';
+  mimeType?: string;
+  dataUrl?: string;
 }
 
 interface RunGitResult {
@@ -51,12 +54,12 @@ export async function readGitDiff(
   const currentEntry = entry ?? (await findStatusEntry(root, relativePath));
   const mode = diffModeForEntry(currentEntry);
   if (mode === 'content') {
-    return {
-      path: relativePath,
-      mode: 'content',
-      content: await readFile(join(root, relativePath), 'utf8'),
-      language: 'plaintext',
-    };
+    return await readContentPreview(root, relativePath);
+  }
+
+  const binaryPreview = await readBinaryPreview(root, relativePath);
+  if (binaryPreview) {
+    return binaryPreview;
   }
 
   const chunks: string[] = [];
@@ -138,6 +141,78 @@ async function runGitOrThrow(root: string, args: string[]): Promise<RunGitResult
   const result = await runGit(root, args);
   if (!result.ok) throw result.error;
   return result.value;
+}
+
+async function readContentPreview(root: string, relativePath: string): Promise<GitDiffResponse> {
+  const buffer = await readFile(join(root, relativePath));
+  if (isBinaryBuffer(buffer)) {
+    return binaryResponse(relativePath, buffer);
+  }
+
+  const content = buffer.toString('utf8');
+  if (content.includes('\uFFFD')) {
+    return binaryResponse(relativePath, buffer);
+  }
+
+  return {
+    path: relativePath,
+    mode: 'content',
+    content,
+    language: 'plaintext',
+  };
+}
+
+async function readBinaryPreview(
+  root: string,
+  relativePath: string,
+): Promise<GitDiffResponse | null> {
+  try {
+    const buffer = await readFile(join(root, relativePath));
+    if (!isBinaryBuffer(buffer) && !buffer.toString('utf8').includes('\uFFFD')) {
+      return null;
+    }
+    return binaryResponse(relativePath, buffer);
+  } catch {
+    return null;
+  }
+}
+
+function binaryResponse(relativePath: string, buffer: Buffer): GitDiffResponse {
+  const mimeType = mimeTypeForPath(relativePath);
+  return {
+    path: relativePath,
+    mode: 'binary',
+    content: '',
+    language: 'plaintext',
+    ...(mimeType ? { mimeType } : {}),
+    ...(mimeType?.startsWith('image/') && buffer.byteLength <= MAX_BINARY_PREVIEW_BYTES
+      ? { dataUrl: `data:${mimeType};base64,${buffer.toString('base64')}` }
+      : {}),
+  };
+}
+
+function isBinaryBuffer(buffer: Buffer): boolean {
+  return buffer.includes(0);
+}
+
+function mimeTypeForPath(path: string): string | undefined {
+  switch (extname(path).toLowerCase()) {
+    case '.png':
+      return 'image/png';
+    case '.jpg':
+    case '.jpeg':
+      return 'image/jpeg';
+    case '.gif':
+      return 'image/gif';
+    case '.webp':
+      return 'image/webp';
+    case '.bmp':
+      return 'image/bmp';
+    case '.ico':
+      return 'image/x-icon';
+    default:
+      return undefined;
+  }
 }
 
 async function runGit(

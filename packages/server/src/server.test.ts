@@ -310,6 +310,39 @@ describe('createServer', () => {
     });
   });
 
+  it('returns binary metadata for untracked git images', async () => {
+    const workspaceDir = mkdtempSync(join(tmpdir(), 'cubby-git-image-'));
+    dataDirs.push(workspaceDir);
+    await runGit(workspaceDir, ['init']);
+    writeFileSync(
+      join(workspaceDir, 'logo.png'),
+      Buffer.from(
+        'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=',
+        'base64',
+      ),
+    );
+    const { app } = await createServer(0);
+
+    const response = await app.inject({
+      method: 'GET',
+      url: `/api/git/diff?root=${encodeURIComponent(workspaceDir)}&path=${encodeURIComponent(
+        'logo.png',
+      )}`,
+    });
+    const body = response.json();
+    await app.close();
+
+    expect(response.statusCode).toBe(200);
+    expect(body).toMatchObject({
+      path: 'logo.png',
+      mode: 'binary',
+      content: '',
+      language: 'plaintext',
+      mimeType: 'image/png',
+    });
+    expect(body.dataUrl).toMatch(/^data:image\/png;base64,/);
+  });
+
   it('returns a non-repo git status for ordinary directories', async () => {
     const workspaceDir = mkdtempSync(join(tmpdir(), 'cubby-non-git-'));
     dataDirs.push(workspaceDir);

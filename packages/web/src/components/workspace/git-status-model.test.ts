@@ -1,8 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  buildGitChangeDirectoryTree,
   buildGitChangeTree,
-  entriesForGitDirectory,
   gitChangeCountLabel,
   gitStatusSummaryLabel,
   isGitDiffResponse,
@@ -33,6 +31,16 @@ describe('git status model', () => {
         language: 'diff',
       }),
     ).toBe(true);
+    expect(
+      isGitDiffResponse({
+        path: 'assets/logo.png',
+        mode: 'binary',
+        content: '',
+        language: 'plaintext',
+        mimeType: 'image/png',
+        dataUrl: 'data:image/png;base64,abc',
+      }),
+    ).toBe(true);
 
     expect(isGitDiffResponse({ path: 'src/app.ts', mode: 'diff', content: 1 })).toBe(false);
   });
@@ -60,22 +68,10 @@ describe('git status model', () => {
       ]),
     ).toEqual([
       {
-        type: 'file',
-        name: 'README.md',
-        path: 'README.md',
-        entry: { path: 'README.md', staged: '?', worktree: '?', status: '??' },
-      },
-      {
         type: 'directory',
         name: 'src',
         path: 'src',
         children: [
-          {
-            type: 'file',
-            name: 'app.ts',
-            path: 'src/app.ts',
-            entry: { path: 'src/app.ts', staged: ' ', worktree: 'M', status: 'M' },
-          },
           {
             type: 'directory',
             name: 'components',
@@ -94,73 +90,20 @@ describe('git status model', () => {
               },
             ],
           },
-        ],
-      },
-    ]);
-  });
-
-  it('builds a changed-directory tree without file nodes', () => {
-    expect(
-      buildGitChangeDirectoryTree([
-        { path: 'src/app.ts', staged: ' ', worktree: 'M', status: 'M' },
-        { path: 'src/components/button.tsx', staged: 'A', worktree: ' ', status: 'A' },
-        { path: 'README.md', staged: '?', worktree: '?', status: '??' },
-      ]),
-    ).toEqual([
-      {
-        type: 'directory',
-        name: 'Root',
-        path: '',
-        changeCount: 1,
-        entries: [{ path: 'README.md', staged: '?', worktree: '?', status: '??' }],
-        children: [],
-      },
-      {
-        type: 'directory',
-        name: 'src',
-        path: 'src',
-        changeCount: 2,
-        entries: [{ path: 'src/app.ts', staged: ' ', worktree: 'M', status: 'M' }],
-        children: [
           {
-            type: 'directory',
-            name: 'components',
-            path: 'src/components',
-            changeCount: 1,
-            entries: [
-              {
-                path: 'src/components/button.tsx',
-                staged: 'A',
-                status: 'A',
-                worktree: ' ',
-              },
-            ],
-            children: [],
+            type: 'file',
+            name: 'app.ts',
+            path: 'src/app.ts',
+            entry: { path: 'src/app.ts', staged: ' ', worktree: 'M', status: 'M' },
           },
         ],
       },
-    ]);
-  });
-
-  it('lists changed files for a directory including nested files', () => {
-    const entries = [
-      { path: 'src/app.ts', staged: ' ', worktree: 'M', status: 'M' },
-      { path: 'src/components/button.tsx', staged: 'A', worktree: ' ', status: 'A' },
-      { path: 'README.md', staged: '?', worktree: '?', status: '??' },
-    ];
-
-    expect(entriesForGitDirectory(entries, null).map((entry) => entry.path)).toEqual([
-      'src/app.ts',
-      'src/components/button.tsx',
-      'README.md',
-    ]);
-    expect(entriesForGitDirectory(entries, '').map((entry) => entry.path)).toEqual(['README.md']);
-    expect(entriesForGitDirectory(entries, 'src').map((entry) => entry.path)).toEqual([
-      'src/app.ts',
-      'src/components/button.tsx',
-    ]);
-    expect(entriesForGitDirectory(entries, 'src/components').map((entry) => entry.path)).toEqual([
-      'src/components/button.tsx',
+      {
+        type: 'file',
+        name: 'README.md',
+        path: 'README.md',
+        entry: { path: 'README.md', staged: '?', worktree: '?', status: '??' },
+      },
     ]);
   });
 });

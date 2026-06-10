@@ -572,6 +572,7 @@ test.describe('Cubby MVP', () => {
     page,
   }) => {
     const workspaceDir = mkdtempSync(join(tmpdir(), 'cubby-git-toolbar-'));
+    mkdirSync(join(workspaceDir, 'assets'));
     mkdirSync(join(workspaceDir, 'docs'));
     mkdirSync(join(workspaceDir, 'src'));
     try {
@@ -586,6 +587,13 @@ test.describe('Cubby MVP', () => {
       writeFileSync(join(workspaceDir, 'src/app.ts'), 'export const value = 2;\n');
       mkdirSync(join(workspaceDir, 'notes'));
       writeFileSync(join(workspaceDir, 'notes/todo.txt'), 'write release notes\n');
+      writeFileSync(
+        join(workspaceDir, 'assets/logo.png'),
+        Buffer.from(
+          'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=',
+          'base64',
+        ),
+      );
 
       const session = await createSession(page, {
         workspaceId: workspaceDir,
@@ -597,23 +605,31 @@ test.describe('Cubby MVP', () => {
       await selectSessionTab(group, session.title);
 
       const gitButton = page.getByRole('button', { name: 'Open git changes' });
-      await expect(gitButton).toContainText('3 changes');
+      await expect(gitButton).toContainText('4 changes');
       await gitButton.click();
       const dialog = page.getByTestId('git-changes-dialog');
       await expect(dialog).toBeVisible();
-      const directories = dialog.getByLabel('Changed directories');
-      await expect(directories.getByRole('button', { name: 'Show changes in docs' })).toBeVisible();
+      const fileTree = dialog.getByLabel('Changed files');
       await expect(
-        directories.getByRole('button', { name: 'Show changes in notes' }),
+        fileTree.getByRole('button', { name: 'Open git change docs/guide.md' }),
       ).toBeVisible();
-      await expect(directories.getByRole('button', { name: 'Show changes in src' })).toBeVisible();
       await expect(
-        directories.getByRole('button', { name: 'Open git change src/app.ts' }),
-      ).toHaveCount(0);
+        fileTree.getByRole('button', { name: 'Open git change notes/todo.txt' }),
+      ).toBeVisible();
+      await expect(
+        fileTree.getByRole('button', { name: 'Open git change src/app.ts' }),
+      ).toBeVisible();
+      await expect(
+        fileTree.getByRole('button', { name: 'Open git change assets/logo.png' }),
+      ).toBeVisible();
+      await expect(fileTree.getByText('Root')).toHaveCount(0);
 
       const preview = dialog.getByTestId('git-diff-preview');
       await expect(preview).toContainText('-initial docs');
       await expect(preview).toContainText('+updated docs');
+      await expect(preview).toContainText('assets/logo.png');
+      await expect(preview.getByText('Binary image')).toBeVisible();
+      await expect(preview.getByRole('img', { name: 'Preview assets/logo.png' })).toBeVisible();
       await expect(preview).toContainText('notes/todo.txt');
       await expect(preview).toContainText('write release notes');
       await expect(preview).toContainText('-export const value = 1;');
@@ -625,7 +641,7 @@ test.describe('Cubby MVP', () => {
         preview.getByRole('button', { name: 'Open git change notes/', exact: true }),
       ).toHaveCount(0);
 
-      await preview.getByRole('button', { name: 'Open git change src/app.ts' }).click();
+      await fileTree.getByRole('button', { name: 'Open git change src/app.ts' }).click();
       await expect(preview).toContainText('+export const value = 2;');
       await expect(preview).not.toContainText('+updated docs');
     } finally {

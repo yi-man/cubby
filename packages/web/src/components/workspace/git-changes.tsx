@@ -1,10 +1,20 @@
-import { ArrowLeft, FileCode2, Folder, GitBranch, Loader2, RefreshCw, X } from 'lucide-react';
+import {
+  ArrowLeft,
+  ChevronDown,
+  ChevronRight,
+  FileCode2,
+  Folder,
+  GitBranch,
+  Image as ImageIcon,
+  Loader2,
+  RefreshCw,
+  X,
+} from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { fileExplorerLayoutMode } from './file-explorer-model.js';
 import {
-  buildGitChangeDirectoryTree,
-  entriesForGitDirectory,
-  type GitChangeDirectoryOnlyNode,
+  buildGitChangeTree,
+  type GitChangeTreeNode,
   type GitDiffResponse,
   type GitStatusEntry,
   type GitStatusResponse,
@@ -31,10 +41,8 @@ const GIT_CHANGES_Z_INDEX = 1000;
 export function GitChanges({ rootPath, status, onClose, onRefresh }: GitChangesProps) {
   const viewportWidth = useViewportWidth();
   const compact = fileExplorerLayoutMode(viewportWidth) === 'compact';
-  const directoryTree = useMemo(
-    () => buildGitChangeDirectoryTree(status.entries),
-    [status.entries],
-  );
+  const tree = useMemo(() => buildGitChangeTree(status.entries), [status.entries]);
+  const directoryPaths = useMemo(() => collectDirectoryPaths(tree), [tree]);
   const statusKey = useMemo(
     () =>
       status.entries
@@ -45,7 +53,7 @@ export function GitChanges({ rootPath, status, onClose, onRefresh }: GitChangesP
   const resetKey = `${rootPath}\0${statusKey}`;
   const requestedDiffPaths = useRef<Set<string>>(new Set());
   const lastResetKey = useRef(resetKey);
-  const [selectedDirectoryPath, setSelectedDirectoryPath] = useState<string | null>(null);
+  const [expandedPaths, setExpandedPaths] = useState<Set<string>>(() => new Set(directoryPaths));
   const [selectedEntry, setSelectedEntry] = useState<GitStatusEntry | null>(null);
   const [diffsByPath, setDiffsByPath] = useState<Record<string, DiffLoadState>>({});
   const [refreshing, setRefreshing] = useState(false);
@@ -54,8 +62,8 @@ export function GitChanges({ rootPath, status, onClose, onRefresh }: GitChangesP
   const showPreviewPanel = !compact || compactPanel === 'preview';
   const visibleEntries = useMemo(() => {
     if (selectedEntry) return [selectedEntry];
-    return entriesForGitDirectory(status.entries, selectedDirectoryPath);
-  }, [selectedDirectoryPath, selectedEntry, status.entries]);
+    return status.entries;
+  }, [selectedEntry, status.entries]);
 
   const loadDiff = useCallback(
     async (entry: GitStatusEntry) => {
@@ -99,15 +107,20 @@ export function GitChanges({ rootPath, status, onClose, onRefresh }: GitChangesP
   );
 
   const showAllChanges = useCallback(() => {
-    setSelectedDirectoryPath(null);
     setSelectedEntry(null);
     setCompactPanel('preview');
   }, []);
 
-  const openDirectory = useCallback((path: string) => {
-    setSelectedDirectoryPath(path);
-    setSelectedEntry(null);
-    setCompactPanel('preview');
+  const toggleDirectory = useCallback((path: string) => {
+    setExpandedPaths((current) => {
+      const next = new Set(current);
+      if (next.has(path)) {
+        next.delete(path);
+      } else {
+        next.add(path);
+      }
+      return next;
+    });
   }, []);
 
   const openEntry = useCallback((entry: GitStatusEntry) => {
@@ -128,7 +141,7 @@ export function GitChanges({ rootPath, status, onClose, onRefresh }: GitChangesP
     if (lastResetKey.current === resetKey) return;
 
     lastResetKey.current = resetKey;
-    setSelectedDirectoryPath(null);
+    setExpandedPaths(new Set(directoryPaths));
     setSelectedEntry(null);
     setDiffsByPath({});
     requestedDiffPaths.current.clear();
@@ -230,7 +243,7 @@ export function GitChanges({ rootPath, status, onClose, onRefresh }: GitChangesP
 
         <div style={{ minHeight: 0, flex: 1, display: 'flex', overflow: 'hidden' }}>
           <section
-            aria-label="Changed directories"
+            aria-label="Changed files"
             style={{
               minWidth: compact ? 0 : '260px',
               width: compact ? '100%' : undefined,
@@ -247,13 +260,15 @@ export function GitChanges({ rootPath, status, onClose, onRefresh }: GitChangesP
               {status.entries.length === 0 ? (
                 <EmptyState label="No Git changes" />
               ) : (
-                directoryTree.map((node) => (
-                  <GitDirectoryNodeView
-                    key={node.path || 'root'}
+                tree.map((node) => (
+                  <GitTreeNodeView
+                    key={node.path}
                     node={node}
                     depth={0}
-                    selectedDirectoryPath={selectedEntry ? null : selectedDirectoryPath}
-                    onOpenDirectory={openDirectory}
+                    expandedPaths={expandedPaths}
+                    selectedPath={selectedEntry?.path ?? null}
+                    onToggleDirectory={toggleDirectory}
+                    onOpenEntry={openEntry}
                   />
                 ))
               )}
@@ -297,7 +312,7 @@ export function GitChanges({ rootPath, status, onClose, onRefresh }: GitChangesP
                 </button>
               )}
               <div
-                title={previewTitle(selectedEntry, selectedDirectoryPath)}
+                title={previewTitle(selectedEntry)}
                 style={{
                   minWidth: 0,
                   flex: 1,
@@ -310,9 +325,9 @@ export function GitChanges({ rootPath, status, onClose, onRefresh }: GitChangesP
                   fontWeight: selectedEntry ? 500 : 700,
                 }}
               >
-                {previewTitle(selectedEntry, selectedDirectoryPath)}
+                {previewTitle(selectedEntry)}
               </div>
-              {(selectedEntry || selectedDirectoryPath !== null) && (
+              {selectedEntry && (
                 <button
                   type="button"
                   aria-label="Show all git changes"
@@ -342,38 +357,63 @@ export function GitChanges({ rootPath, status, onClose, onRefresh }: GitChangesP
   );
 }
 
-function GitDirectoryNodeView({
+function GitTreeNodeView({
   node,
   depth,
-  selectedDirectoryPath,
-  onOpenDirectory,
+  expandedPaths,
+  selectedPath,
+  onToggleDirectory,
+  onOpenEntry,
 }: {
-  node: GitChangeDirectoryOnlyNode;
+  node: GitChangeTreeNode;
   depth: number;
-  selectedDirectoryPath: string | null;
-  onOpenDirectory: (path: string) => void;
+  expandedPaths: Set<string>;
+  selectedPath: string | null;
+  onToggleDirectory: (path: string) => void;
+  onOpenEntry: (entry: GitStatusEntry) => void;
 }) {
+  if (node.type === 'file') {
+    const selected = selectedPath === node.entry.path;
+    return (
+      <button
+        type="button"
+        aria-label={`Open git change ${node.entry.path}`}
+        onClick={() => onOpenEntry(node.entry)}
+        style={fileTreeButtonStyle(depth, selected)}
+      >
+        <FileCode2 {...ICON_PROPS} />
+        <span style={treeLabelStyle}>{node.name}</span>
+        <StatusChip status={node.entry.status} />
+      </button>
+    );
+  }
+
+  const expanded = expandedPaths.has(node.path);
   return (
     <div>
       <button
         type="button"
-        aria-label={`Show changes in ${node.name}`}
-        onClick={() => onOpenDirectory(node.path)}
-        style={directoryButtonStyle(depth, selectedDirectoryPath === node.path)}
+        aria-label={`${expanded ? 'Collapse' : 'Expand'} folder ${node.name}`}
+        onClick={() => onToggleDirectory(node.path)}
+        style={directoryButtonStyle(depth, false)}
       >
+        {expanded ? <ChevronDown {...ICON_PROPS} /> : <ChevronRight {...ICON_PROPS} />}
         <Folder {...ICON_PROPS} />
         <span style={treeLabelStyle}>{node.name}</span>
-        <CountChip count={node.changeCount} />
+        <CountChip count={countGitTreeFiles(node)} />
       </button>
-      {node.children.map((child) => (
-        <GitDirectoryNodeView
-          key={child.path}
-          node={child}
-          depth={depth + 1}
-          selectedDirectoryPath={selectedDirectoryPath}
-          onOpenDirectory={onOpenDirectory}
-        />
-      ))}
+      {expanded &&
+        node.children.map((child) => (
+          <GitTreeNodeView
+            key={child.path}
+            node={child}
+            depth={depth + 1}
+            expandedPaths={expandedPaths}
+            selectedPath={selectedPath}
+            onToggleDirectory={onToggleDirectory}
+            onOpenEntry={onOpenEntry}
+          />
+        ))}
     </div>
   );
 }
@@ -450,13 +490,73 @@ function GitDiffSection({
         <StatusChip status={entry.status} />
       </button>
       {diffState?.state === 'loaded' ? (
-        <DiffTextPreview content={diffState.preview.content} />
+        diffState.preview.mode === 'binary' ? (
+          <BinaryPreview preview={diffState.preview} />
+        ) : (
+          <DiffTextPreview content={diffState.preview.content} />
+        )
       ) : diffState?.state === 'error' ? (
         <InlineDiffState label={diffState.message} />
       ) : (
         <InlineDiffState label="Loading diff" />
       )}
     </article>
+  );
+}
+
+function BinaryPreview({ preview }: { preview: GitDiffResponse }) {
+  const isImage = preview.mimeType?.startsWith('image/') && preview.dataUrl;
+
+  return (
+    <div
+      style={{
+        borderTop: '1px solid #1b201d',
+        padding: '14px',
+        background: '#050606',
+      }}
+    >
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: '8px',
+          color: '#cbc8b8',
+          fontSize: '12px',
+          fontWeight: 750,
+        }}
+      >
+        <ImageIcon {...ICON_PROPS} />
+        {isImage ? 'Binary image' : 'Binary file'}
+      </div>
+      {isImage ? (
+        <div
+          style={{
+            marginTop: '12px',
+            width: 'fit-content',
+            maxWidth: '100%',
+            border: '1px solid #252b27',
+            borderRadius: '6px',
+            background: '#101310',
+            padding: '10px',
+          }}
+        >
+          <img
+            alt={`Preview ${preview.path}`}
+            src={preview.dataUrl}
+            style={{
+              display: 'block',
+              maxWidth: 'min(100%, 520px)',
+              maxHeight: '300px',
+              imageRendering: 'auto',
+            }}
+          />
+        </div>
+      ) : (
+        <div style={{ marginTop: '8px', color: '#777c76', fontSize: '12px' }}>
+          No textual diff available.
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -566,11 +666,9 @@ function DiffTextPreview({ content }: { content: string }) {
   );
 }
 
-function previewTitle(entry: GitStatusEntry | null, directoryPath: string | null): string {
+function previewTitle(entry: GitStatusEntry | null): string {
   if (entry) return entry.path;
-  if (directoryPath === null) return 'All changes';
-  if (directoryPath === '') return 'Root changes';
-  return directoryPath;
+  return 'All changes';
 }
 
 function diffPreviewLines(content: string): Array<{ key: string; line: string }> {
@@ -622,6 +720,23 @@ function directoryButtonStyle(depth: number, selected: boolean) {
   } as const;
 }
 
+function fileTreeButtonStyle(depth: number, selected: boolean) {
+  return {
+    width: '100%',
+    minHeight: '34px',
+    border: `1px solid ${selected ? '#315f6b' : 'transparent'}`,
+    borderRadius: '6px',
+    background: selected ? '#071a1f' : 'transparent',
+    color: '#f3f1e7',
+    cursor: 'pointer',
+    display: 'flex',
+    alignItems: 'center',
+    gap: '7px',
+    padding: `6px 8px 6px ${29 + depth * 14}px`,
+    textAlign: 'left',
+  } as const;
+}
+
 function fileHeaderButtonStyle(selected: boolean) {
   return {
     width: '100%',
@@ -653,6 +768,18 @@ function diffLineStyle(line: string) {
     return { color: '#cbc8b8', fontWeight: 800 } as const;
   }
   return {} as const;
+}
+
+function collectDirectoryPaths(nodes: GitChangeTreeNode[]): string[] {
+  return nodes.flatMap((node) => {
+    if (node.type === 'file') return [];
+    return [node.path, ...collectDirectoryPaths(node.children)];
+  });
+}
+
+function countGitTreeFiles(node: GitChangeTreeNode): number {
+  if (node.type === 'file') return 1;
+  return node.children.reduce((count, child) => count + countGitTreeFiles(child), 0);
 }
 
 function iconButtonStyle(enabled: boolean) {
