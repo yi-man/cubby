@@ -608,6 +608,26 @@ describe('SessionManager', () => {
     );
   });
 
+  it('keeps failed starts visible with error output', async () => {
+    const provider: AgentProvider = {
+      name: 'failing-start',
+      hasConversation: () => false,
+      async spawn() {
+        throw new Error('provider command not found');
+      },
+      async kill() {},
+    };
+    manager.registerProvider(provider);
+    const session = manager.createSession({ workspaceId: '/tmp', provider: provider.name });
+
+    await expect(() =>
+      manager.startSession(session.id, { cwd: '/tmp', cols: 80, rows: 24 }),
+    ).rejects.toThrow('provider command not found');
+
+    expect(manager.listSessions().map((item) => item.id)).toContain(session.id);
+    expect(manager.getOutputHistory(session.id).join('')).toContain('provider command not found');
+  });
+
   it('lists sessions when the provider conversation exists', () => {
     const provider = {
       name: 'existing-conversation',

@@ -237,6 +237,10 @@ export class SessionManager {
       this.store.updateStatus(sessionId, 'running', { pid: process.pid });
       this.notifyStatusChange(sessionId, 'running');
     } catch (err) {
+      const errorChunk = outputBuffer.push(formatSessionStartError(err));
+      this.store.appendTerminalOutput(sessionId, errorChunk, this.outputHistoryLimit);
+      this.writeSnapshotChunk(sessionId, errorChunk);
+      onOutput?.(errorChunk);
       this.store.updateStatus(sessionId, 'ended', { exitCode: 1 });
       this.notifyStatusChange(sessionId, 'ended');
       await this.disposeSnapshotBuffer(sessionId);
@@ -651,6 +655,11 @@ function replayOutputChunks(
 
 function canReplayOutputChunks(chunks: TerminalOutputChunk[], lastSeq: number): boolean {
   return chunks.length > 0 && (lastSeq <= 0 || lastSeq >= chunks[0].seqStart);
+}
+
+function formatSessionStartError(err: unknown): string {
+  const message = err instanceof Error ? err.message : String(err);
+  return `Failed to start session: ${message}\r\n`;
 }
 
 function normalizeSequence(value: number): number {
