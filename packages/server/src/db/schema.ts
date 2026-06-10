@@ -6,6 +6,7 @@ CREATE TABLE IF NOT EXISTS sessions (
   provider TEXT NOT NULL,
   provider_session_id TEXT,
   model TEXT,
+  yolo INTEGER NOT NULL DEFAULT 1,
   status TEXT NOT NULL DEFAULT 'draft',
   pid INTEGER,
   exit_code INTEGER,

@@ -8,6 +8,7 @@ export interface Session {
   provider: string;
   providerSessionId: string | null;
   model: string | null;
+  yolo: boolean;
   status: SessionStatus;
   pid: number | null;
   exitCode: number | null;
@@ -21,4 +22,5 @@ export interface CreateSessionInput {
   provider: string;
   model?: string;
   title?: string;
+  yolo?: boolean;
 }
