@@ -49,12 +49,14 @@ export function registerRoutes(
       provider?: string;
       model?: string;
       title?: string;
+      yolo?: unknown;
     };
     const session = sessionManager.createSession({
       workspaceId: body.workspaceId ?? process.cwd(),
       provider: body.provider ?? 'claude-code',
       model: body.model,
       title: body.title,
+      yolo: typeof body.yolo === 'boolean' ? body.yolo : undefined,
     });
     return session;
   });

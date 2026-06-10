@@ -188,6 +188,7 @@ export class SessionManager {
           model: session.model ?? undefined,
           resume,
           providerSessionId: session.providerSessionId ?? undefined,
+          yolo: session.yolo,
         },
         (data) => {
           if (this.deletedSessionIds.has(sessionId)) return;
