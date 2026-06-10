@@ -593,6 +593,39 @@ describe('SessionManager', () => {
     expect(manager.listSessions().map((item) => item.id)).toContain(session.id);
   });
 
+  it('marks history-only ended sessions as not resumable', () => {
+    const provider: AgentProvider = {
+      name: 'history-without-conversation',
+      hasConversation: () => false,
+      async spawn() {
+        return {
+          pid: 30_015,
+          onData: (_callback) => {},
+          onExit: (_callback) => {},
+          write: () => {},
+          resize: () => {},
+          kill: () => {},
+        };
+      },
+      async kill() {},
+    };
+    manager.registerProvider(provider);
+    const session = manager.createSession({ workspaceId: '/tmp', provider: provider.name });
+    store.appendTerminalOutput(session.id, { data: 'saved terminal output', seqStart: 0, seq: 21 });
+    store.updateStatus(session.id, 'ended');
+
+    expect(manager.listSessions().find((item) => item.id === session.id)).toMatchObject({
+      id: session.id,
+      resumable: false,
+      resumeUnavailableReason: 'Provider conversation not found',
+    });
+    expect(manager.getSession(session.id)).toMatchObject({
+      id: session.id,
+      resumable: false,
+      resumeUnavailableReason: 'Provider conversation not found',
+    });
+  });
+
   it('lists draft sessions before the provider conversation exists', () => {
     const provider: AgentProvider = {
       name: 'new-only-draft',
