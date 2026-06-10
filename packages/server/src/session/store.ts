@@ -242,7 +242,7 @@ export class SessionStore {
       provider: row.provider as string,
       providerSessionId: (row.provider_session_id as string | null) ?? null,
       model: row.model as string | null,
-      yolo: row.yolo === 0 ? false : true,
+      yolo: row.yolo !== 0,
       status: row.status as SessionStatus,
       pid: row.pid as number | null,
       exitCode: row.exit_code as number | null,

@@ -186,13 +186,7 @@ describe('OpenCodeProvider', () => {
 
     expect(calls[0]).toMatchObject({
       file: 'opencode',
-      args: [
-        'run',
-        '--interactive',
-        '--dangerously-skip-permissions',
-        '--dir',
-        '/tmp/project',
-      ],
+      args: ['run', '--interactive', '--dangerously-skip-permissions', '--dir', '/tmp/project'],
     });
   });
 

@@ -50,13 +50,7 @@ export class OpenCodeProvider implements AgentProvider {
     yolo?: boolean;
   }): string[] {
     if (options.yolo) {
-      const args = [
-        'run',
-        '--interactive',
-        '--dangerously-skip-permissions',
-        '--dir',
-        options.cwd,
-      ];
+      const args = ['run', '--interactive', '--dangerously-skip-permissions', '--dir', options.cwd];
       if (options.resume) {
         if (!options.providerSessionId) {
           throw new Error('OpenCode resume requires a provider session id');
