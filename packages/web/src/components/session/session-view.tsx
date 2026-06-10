@@ -1,7 +1,8 @@
 import type { Session, TerminalOutputChunk, WSEvent, WSResponse } from '@cubby/core';
-import { MonitorUp } from 'lucide-react';
+import { Folder, MonitorUp } from 'lucide-react';
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { type TerminalHandle, TerminalView } from '../terminal/terminal.js';
+import { FileExplorer } from '../workspace/file-explorer.js';
 import {
   filterRenderableLiveChunks,
   isRecoveryReconcileData,
@@ -194,6 +195,7 @@ export function SessionView({
   const [endedReplayLayoutRevision, setEndedReplayLayoutRevision] = useState(0);
   const [endedReplayFitToContainer, setEndedReplayFitToContainer] = useState(false);
   const [resizeAuthority, setResizeAuthority] = useState(false);
+  const [showFileExplorer, setShowFileExplorer] = useState(false);
   const live = isLiveStatus(session.status);
   const canReplayHistory = terminalReady && (live || session.status === 'ended');
   const fitTerminalToContainer =
@@ -1036,6 +1038,46 @@ export function SessionView({
           </div>
         )}
       </div>
+      <div
+        data-testid="terminal-tools"
+        style={{
+          minHeight: '42px',
+          flexShrink: 0,
+          borderTop: '1px solid #1d1d1d',
+          background: '#080a09',
+          display: 'flex',
+          alignItems: 'center',
+          gap: '8px',
+          padding: '0 14px',
+        }}
+      >
+        <button
+          type="button"
+          aria-label="Open file explorer"
+          title="Open file explorer"
+          onClick={() => setShowFileExplorer(true)}
+          style={{
+            height: '30px',
+            border: '1px solid #2a2d2a',
+            borderRadius: '6px',
+            background: 'linear-gradient(180deg, #161918 0%, #0d0f0e 100%)',
+            color: '#d7d5ca',
+            cursor: 'pointer',
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: '8px',
+            padding: '0 10px',
+            fontSize: '12px',
+            fontWeight: 650,
+          }}
+        >
+          <Folder {...ACTION_ICON_PROPS} />
+          <span>File Explorer</span>
+        </button>
+      </div>
+      {showFileExplorer && (
+        <FileExplorer rootPath={session.workspaceId} onClose={() => setShowFileExplorer(false)} />
+      )}
     </div>
   );
 }

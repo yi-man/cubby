@@ -1,5 +1,5 @@
 import { type ChildProcess, spawn } from 'node:child_process';
-import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { WS_EVENTS } from '@cubby/core';
@@ -114,6 +114,93 @@ describe('createServer', () => {
     expect(response.statusCode).toBe(200);
     expect(body.path).toBe(resolve(homedir()));
     expect(Array.isArray(body.entries)).toBe(true);
+  });
+
+  it('browses directories inside a workspace root', async () => {
+    const workspaceDir = mkdtempSync(join(tmpdir(), 'cubby-workspace-'));
+    dataDirs.push(workspaceDir);
+    mkdirSync(join(workspaceDir, 'src'));
+    writeFileSync(join(workspaceDir, 'README.md'), '# Cubby\n');
+    const { app } = await createServer(0);
+
+    const response = await app.inject({
+      method: 'GET',
+      url: `/api/browse?root=${encodeURIComponent(workspaceDir)}&path=${encodeURIComponent(
+        workspaceDir,
+      )}`,
+    });
+    const body = response.json();
+    await app.close();
+
+    expect(response.statusCode).toBe(200);
+    expect(body.path).toBe(realpathSync(workspaceDir));
+    expect(body.root).toBe(realpathSync(workspaceDir));
+    expect(body.entries).toEqual([
+      expect.objectContaining({ name: 'src', isDir: true }),
+      expect.objectContaining({ name: 'README.md', isDir: false, previewable: true }),
+    ]);
+  });
+
+  it('rejects workspace browsing outside the root', async () => {
+    const workspaceDir = mkdtempSync(join(tmpdir(), 'cubby-workspace-'));
+    dataDirs.push(workspaceDir);
+    const outsideDir = mkdtempSync(join(tmpdir(), 'cubby-outside-'));
+    dataDirs.push(outsideDir);
+    const { app } = await createServer(0);
+
+    const response = await app.inject({
+      method: 'GET',
+      url: `/api/browse?root=${encodeURIComponent(workspaceDir)}&path=${encodeURIComponent(
+        outsideDir,
+      )}`,
+    });
+    await app.close();
+
+    expect(response.statusCode).toBe(403);
+    expect(response.json()).toEqual({ error: 'Path is outside workspace root' });
+  });
+
+  it('reads a text file inside a workspace root', async () => {
+    const workspaceDir = mkdtempSync(join(tmpdir(), 'cubby-workspace-'));
+    dataDirs.push(workspaceDir);
+    const filePath = join(workspaceDir, 'notes.txt');
+    writeFileSync(filePath, 'hello workspace\n');
+    const { app } = await createServer(0);
+
+    const response = await app.inject({
+      method: 'GET',
+      url: `/api/file?root=${encodeURIComponent(workspaceDir)}&path=${encodeURIComponent(
+        filePath,
+      )}`,
+    });
+    const body = response.json();
+    await app.close();
+
+    expect(response.statusCode).toBe(200);
+    expect(body).toEqual({
+      path: realpathSync(filePath),
+      content: 'hello workspace\n',
+      truncated: false,
+    });
+  });
+
+  it('rejects binary file previews', async () => {
+    const workspaceDir = mkdtempSync(join(tmpdir(), 'cubby-workspace-'));
+    dataDirs.push(workspaceDir);
+    const filePath = join(workspaceDir, 'image.bin');
+    writeFileSync(filePath, Buffer.from([0x00, 0x01, 0x02, 0x03]));
+    const { app } = await createServer(0);
+
+    const response = await app.inject({
+      method: 'GET',
+      url: `/api/file?root=${encodeURIComponent(workspaceDir)}&path=${encodeURIComponent(
+        filePath,
+      )}`,
+    });
+    await app.close();
+
+    expect(response.statusCode).toBe(415);
+    expect(response.json()).toEqual({ error: 'File is not previewable' });
   });
 
   it('marks persisted live sessions as ended on startup', async () => {

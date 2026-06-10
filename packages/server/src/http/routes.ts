@@ -1,6 +1,6 @@
-import { readdir, stat } from 'node:fs/promises';
+import { open, readdir, realpath, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { isAbsolute, join, relative, resolve } from 'node:path';
 import type { Session } from '@cubby/core';
 import type { FastifyInstance, FastifyReply } from 'fastify';
 import type { SessionManager } from '../session/manager.js';
@@ -10,25 +10,72 @@ export interface SessionRouteCallbacks {
   onSessionDeleted?: (sessionId: string) => void;
 }
 
+const MAX_FILE_PREVIEW_BYTES = 256 * 1024;
+
 export function registerRoutes(
   app: FastifyInstance,
   sessionManager: SessionManager,
   callbacks: SessionRouteCallbacks = {},
 ) {
-  app.get('/api/browse', async (request) => {
-    const { path } = request.query as { path?: string };
-    const target = resolve(path || homedir());
-    const entries = await readdir(target);
-    const items: { name: string; path: string; isDir: boolean }[] = [];
-    for (const name of entries) {
-      if (name.startsWith('.')) continue;
-      try {
-        const s = await stat(join(target, name));
-        items.push({ name, path: join(target, name), isDir: s.isDirectory() });
-      } catch {}
+  app.get('/api/browse', async (request, reply) => {
+    const { path, root } = request.query as { path?: string; root?: string };
+
+    try {
+      const target = await resolveWorkspacePath(path, root);
+      const targetStat = await stat(target.path);
+      if (!targetStat.isDirectory()) {
+        return reply.code(400).send({ error: 'Path is not a directory' });
+      }
+
+      const entries = await readdir(target.path);
+      const items: { name: string; path: string; isDir: boolean; previewable: boolean }[] = [];
+      for (const name of entries) {
+        if (name.startsWith('.')) continue;
+        const entryPath = join(target.path, name);
+        try {
+          const s = await stat(entryPath);
+          const isDir = s.isDirectory();
+          items.push({
+            name,
+            path: entryPath,
+            isDir,
+            previewable: !isDir && s.isFile(),
+          });
+        } catch {}
+      }
+      items.sort((a, b) => (a.isDir === b.isDir ? a.name.localeCompare(b.name) : a.isDir ? -1 : 1));
+      return { path: target.path, root: target.root, entries: items };
+    } catch (err) {
+      return sendFileSystemError(reply, err);
     }
-    items.sort((a, b) => (a.isDir === b.isDir ? a.name.localeCompare(b.name) : a.isDir ? -1 : 1));
-    return { path: target, entries: items };
+  });
+
+  app.get('/api/file', async (request, reply) => {
+    const { path, root } = request.query as { path?: string; root?: string };
+    if (!root) {
+      return reply.code(400).send({ error: 'Workspace root is required' });
+    }
+
+    try {
+      const target = await resolveWorkspacePath(path, root);
+      const targetStat = await stat(target.path);
+      if (!targetStat.isFile()) {
+        return reply.code(400).send({ error: 'Path is not a file' });
+      }
+
+      const preview = await readTextPreview(target.path, targetStat.size);
+      if (!preview.previewable) {
+        return reply.code(415).send({ error: 'File is not previewable' });
+      }
+
+      return {
+        path: target.path,
+        content: preview.content,
+        truncated: preview.truncated,
+      };
+    } catch (err) {
+      return sendFileSystemError(reply, err);
+    }
   });
   app.get('/api/sessions', async () => {
     return sessionManager.listSessions();
@@ -121,6 +168,82 @@ export function registerRoutes(
 
 function sendNotFound(reply: FastifyReply) {
   return reply.code(404).send({ error: 'Not found' });
+}
+
+function sendFileSystemError(reply: FastifyReply, err: unknown) {
+  if (err instanceof WorkspacePathError) {
+    return reply.code(403).send({ error: err.message });
+  }
+  if (isNodeError(err) && err.code === 'ENOENT') {
+    return reply.code(404).send({ error: 'Path not found' });
+  }
+  if (isNodeError(err) && (err.code === 'EACCES' || err.code === 'EPERM')) {
+    return reply.code(403).send({ error: 'Path is not accessible' });
+  }
+  throw err;
+}
+
+class WorkspacePathError extends Error {}
+
+async function resolveWorkspacePath(pathValue?: string, rootValue?: string) {
+  if (!rootValue?.trim()) {
+    return { path: resolve(pathValue || homedir()), root: undefined };
+  }
+
+  const root = await realpath(resolve(rootValue));
+  const requestedPath = pathValue?.trim()
+    ? isAbsolute(pathValue)
+      ? resolve(pathValue)
+      : resolve(root, pathValue)
+    : root;
+  const target = await realpath(requestedPath);
+  if (!isPathInsideRoot(root, target)) {
+    throw new WorkspacePathError('Path is outside workspace root');
+  }
+  return { path: target, root };
+}
+
+function isPathInsideRoot(root: string, target: string): boolean {
+  const rel = relative(root, target);
+  return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
+}
+
+async function readTextPreview(
+  path: string,
+  size: number,
+): Promise<{ previewable: boolean; content: string; truncated: boolean }> {
+  const bytesToRead = Math.min(size, MAX_FILE_PREVIEW_BYTES + 1);
+  const buffer = Buffer.alloc(bytesToRead);
+  const file = await open(path, 'r');
+  try {
+    const { bytesRead } = await file.read(buffer, 0, bytesToRead, 0);
+    const readBuffer = buffer.subarray(0, bytesRead);
+    if (isBinaryBuffer(readBuffer)) {
+      return { previewable: false, content: '', truncated: false };
+    }
+
+    const contentBuffer = readBuffer.subarray(0, MAX_FILE_PREVIEW_BYTES);
+    const content = contentBuffer.toString('utf8');
+    if (content.includes('\uFFFD')) {
+      return { previewable: false, content: '', truncated: false };
+    }
+
+    return {
+      previewable: true,
+      content,
+      truncated: size > MAX_FILE_PREVIEW_BYTES || bytesRead > MAX_FILE_PREVIEW_BYTES,
+    };
+  } finally {
+    await file.close();
+  }
+}
+
+function isBinaryBuffer(buffer: Buffer): boolean {
+  return buffer.includes(0);
+}
+
+function isNodeError(err: unknown): err is NodeJS.ErrnoException {
+  return err instanceof Error && 'code' in err;
 }
 
 function isSessionNotFound(err: unknown): boolean {
