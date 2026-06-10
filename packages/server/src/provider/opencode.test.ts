@@ -20,6 +20,26 @@ describe('OpenCodeProvider', () => {
     expect(args).toEqual(['/tmp/project', '--model', 'anthropic/claude-sonnet-4']);
   });
 
+  it('builds yolo direct interactive args with cwd and model', () => {
+    const provider = new OpenCodeProvider();
+
+    const args = provider.buildArgs({
+      cwd: '/tmp/project',
+      model: 'anthropic/claude-sonnet-4',
+      yolo: true,
+    });
+
+    expect(args).toEqual([
+      'run',
+      '--interactive',
+      '--dangerously-skip-permissions',
+      '--dir',
+      '/tmp/project',
+      '--model',
+      'anthropic/claude-sonnet-4',
+    ]);
+  });
+
   it('builds resume args with a mapped provider session id', () => {
     const provider = new OpenCodeProvider();
 
@@ -36,6 +56,27 @@ describe('OpenCodeProvider', () => {
       '/tmp/project',
       '--model',
       'anthropic/claude-sonnet-4',
+    ]);
+  });
+
+  it('builds yolo direct interactive resume args with a mapped provider session id', () => {
+    const provider = new OpenCodeProvider();
+
+    const args = provider.buildArgs({
+      cwd: '/tmp/project',
+      resume: true,
+      providerSessionId: 'opencode-session-1',
+      yolo: true,
+    });
+
+    expect(args).toEqual([
+      'run',
+      '--interactive',
+      '--dangerously-skip-permissions',
+      '--dir',
+      '/tmp/project',
+      '--session',
+      'opencode-session-1',
     ]);
   });
 

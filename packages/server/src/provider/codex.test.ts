@@ -20,6 +20,20 @@ describe('CodexProvider', () => {
     expect(args).toEqual(['--cd', '/tmp/project', '--model', 'gpt-5']);
   });
 
+  it('builds yolo args with cwd and model', () => {
+    const provider = new CodexProvider();
+
+    const args = provider.buildArgs({ cwd: '/tmp/project', model: 'gpt-5', yolo: true });
+
+    expect(args).toEqual([
+      '--cd',
+      '/tmp/project',
+      '--model',
+      'gpt-5',
+      '--dangerously-bypass-approvals-and-sandbox',
+    ]);
+  });
+
   it('builds resume args with a mapped provider session id', () => {
     const provider = new CodexProvider();
 
@@ -31,6 +45,25 @@ describe('CodexProvider', () => {
     });
 
     expect(args).toEqual(['resume', '--cd', '/tmp/project', '--model', 'gpt-5', 'codex-session-1']);
+  });
+
+  it('builds yolo resume args with a mapped provider session id', () => {
+    const provider = new CodexProvider();
+
+    const args = provider.buildArgs({
+      cwd: '/tmp/project',
+      resume: true,
+      providerSessionId: 'codex-session-1',
+      yolo: true,
+    });
+
+    expect(args).toEqual([
+      'resume',
+      '--cd',
+      '/tmp/project',
+      '--dangerously-bypass-approvals-and-sandbox',
+      'codex-session-1',
+    ]);
   });
 
   it('spawns codex in a pty and forwards terminal io', async () => {

@@ -23,6 +23,30 @@ describe('ClaudeCodeProvider', () => {
     expect(args).toEqual([]);
   });
 
+  it('builds yolo args for a new Claude Code session', () => {
+    const provider = new ClaudeCodeProvider();
+    const args = provider.buildArgs({
+      sessionId: '00000000-0000-4000-8000-000000000001',
+      yolo: true,
+    });
+
+    expect(args).toEqual([
+      '--session-id',
+      '00000000-0000-4000-8000-000000000001',
+      '--dangerously-skip-permissions',
+    ]);
+  });
+
+  it('does not add Claude Code permission bypass args when yolo is false', () => {
+    const provider = new ClaudeCodeProvider();
+    const args = provider.buildArgs({
+      sessionId: '00000000-0000-4000-8000-000000000001',
+      yolo: false,
+    });
+
+    expect(args).toEqual(['--session-id', '00000000-0000-4000-8000-000000000001']);
+  });
+
   it('binds a new Claude conversation to the Cubby session id', () => {
     const provider = new ClaudeCodeProvider();
     const args = provider.buildArgs({ sessionId: '00000000-0000-4000-8000-000000000001' });
