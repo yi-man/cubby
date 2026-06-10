@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  fileExplorerLayoutMode,
   fileLanguageFromPath,
   isFileBrowseResponse,
   isFilePreviewResponse,
@@ -60,5 +61,12 @@ describe('file explorer model', () => {
     expect(fileLanguageFromPath('/work/styles/global.css')).toBe('css');
     expect(fileLanguageFromPath('/work/scripts/dev.ts')).toBe('typescript');
     expect(fileLanguageFromPath('/work/unknown.config')).toBe('plaintext');
+  });
+
+  it('uses compact layout on mobile-sized viewports', () => {
+    expect(fileExplorerLayoutMode(390)).toBe('compact');
+    expect(fileExplorerLayoutMode(719)).toBe('compact');
+    expect(fileExplorerLayoutMode(720)).toBe('split');
+    expect(fileExplorerLayoutMode(1040)).toBe('split');
   });
 });

@@ -17,6 +17,10 @@ export interface FilePreviewResponse {
   truncated: boolean;
 }
 
+export type FileExplorerLayoutMode = 'compact' | 'split';
+
+export const FILE_EXPLORER_COMPACT_BREAKPOINT = 720;
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
 }
@@ -59,6 +63,10 @@ export function parentPathWithinRoot(currentPath: string, rootPath: string): str
   if (slashIndex <= 0) return root;
   const parent = current.slice(0, slashIndex);
   return isPathInsideRoot(parent, root) ? parent : root;
+}
+
+export function fileExplorerLayoutMode(viewportWidth: number): FileExplorerLayoutMode {
+  return viewportWidth < FILE_EXPLORER_COMPACT_BREAKPOINT ? 'compact' : 'split';
 }
 
 export function fileLanguageFromPath(path: string): string {

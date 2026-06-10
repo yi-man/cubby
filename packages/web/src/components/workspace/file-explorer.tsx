@@ -1,8 +1,9 @@
 import Editor from '@monaco-editor/react';
-import { ArrowUp, FileText, Folder, Loader2, RefreshCw, X } from 'lucide-react';
+import { ArrowLeft, ArrowUp, FileText, Folder, Loader2, RefreshCw, X } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   type FileExplorerEntry,
+  fileExplorerLayoutMode,
   fileLanguageFromPath,
   isFileBrowseResponse,
   isFilePreviewResponse,
@@ -21,10 +22,13 @@ interface SelectedFile {
   truncated: boolean;
 }
 
+type CompactPanel = 'files' | 'preview';
+
 const ICON_PROPS = { size: 15, strokeWidth: 2.1, 'aria-hidden': true } as const;
 const FILE_EXPLORER_Z_INDEX = 1000;
 
 export function FileExplorer({ rootPath, onClose }: FileExplorerProps) {
+  const viewportWidth = useViewportWidth();
   const [root, setRoot] = useState(rootPath);
   const [currentPath, setCurrentPath] = useState(rootPath);
   const [entries, setEntries] = useState<FileExplorerEntry[]>([]);
@@ -35,8 +39,12 @@ export function FileExplorer({ rootPath, onClose }: FileExplorerProps) {
   const [previewLoadingPath, setPreviewLoadingPath] = useState<string | null>(null);
   const [previewError, setPreviewError] = useState('');
   const [wordWrap, setWordWrap] = useState(true);
+  const [compactPanel, setCompactPanel] = useState<CompactPanel>('files');
   const parent = useMemo(() => parentPathWithinRoot(currentPath, root), [currentPath, root]);
   const canGoParent = currentPath !== parent;
+  const compact = fileExplorerLayoutMode(viewportWidth) === 'compact';
+  const showFilesPanel = !compact || compactPanel === 'files';
+  const showPreviewPanel = !compact || compactPanel === 'preview';
   const selectedLanguage = useMemo(
     () => (selectedFile ? fileLanguageFromPath(selectedFile.path) : 'plaintext'),
     [selectedFile],
@@ -81,6 +89,7 @@ export function FileExplorer({ rootPath, onClose }: FileExplorerProps) {
   const openDirectory = useCallback(
     (path: string) => {
       setSelectedFile(null);
+      setCompactPanel('files');
       setNavigatingPath(path);
       void loadDirectory(path);
     },
@@ -97,11 +106,13 @@ export function FileExplorer({ rootPath, onClose }: FileExplorerProps) {
         if (res.status === 415) {
           setSelectedFile(null);
           setPreviewError('This file is not previewable');
+          setCompactPanel('preview');
           return;
         }
         if (!res.ok) {
           setSelectedFile(null);
           setPreviewError('Failed to open file');
+          setCompactPanel('preview');
           return;
         }
 
@@ -109,6 +120,7 @@ export function FileExplorer({ rootPath, onClose }: FileExplorerProps) {
         if (!isFilePreviewResponse(data)) {
           setSelectedFile(null);
           setPreviewError('Failed to read file');
+          setCompactPanel('preview');
           return;
         }
 
@@ -118,9 +130,11 @@ export function FileExplorer({ rootPath, onClose }: FileExplorerProps) {
           content: data.content,
           truncated: data.truncated,
         });
+        setCompactPanel('preview');
       } catch {
         setSelectedFile(null);
         setPreviewError('Failed to open file');
+        setCompactPanel('preview');
       } finally {
         setPreviewLoadingPath(null);
       }
@@ -220,18 +234,20 @@ export function FileExplorer({ rootPath, onClose }: FileExplorerProps) {
             minHeight: 0,
             flex: 1,
             display: 'flex',
-            flexWrap: 'wrap',
+            flexWrap: compact ? 'nowrap' : 'wrap',
             overflow: 'hidden',
           }}
         >
           <section
             aria-label="Workspace files"
             style={{
-              minWidth: '280px',
-              flex: '1 1 340px',
+              minWidth: compact ? 0 : '280px',
+              width: compact ? '100%' : undefined,
+              height: compact ? '100%' : undefined,
+              flex: compact ? '0 0 100%' : '1 1 340px',
               minHeight: 0,
-              borderRight: '1px solid #242624',
-              display: 'flex',
+              borderRight: compact ? 'none' : '1px solid #242624',
+              display: showFilesPanel ? 'flex' : 'none',
               flexDirection: 'column',
               background: '#090b0a',
             }}
@@ -369,10 +385,12 @@ export function FileExplorer({ rootPath, onClose }: FileExplorerProps) {
           <section
             aria-label="File preview"
             style={{
-              minWidth: '300px',
-              flex: '2 1 520px',
+              minWidth: compact ? 0 : '300px',
+              width: compact ? '100%' : undefined,
+              height: compact ? '100%' : undefined,
+              flex: compact ? '0 0 100%' : '2 1 520px',
               minHeight: 0,
-              display: 'flex',
+              display: showPreviewPanel ? 'flex' : 'none',
               flexDirection: 'column',
               background: '#050606',
             }}
@@ -388,6 +406,32 @@ export function FileExplorer({ rootPath, onClose }: FileExplorerProps) {
                 minWidth: 0,
               }}
             >
+              {compact && (
+                <button
+                  type="button"
+                  aria-label="Back to file list"
+                  title="Back to file list"
+                  onClick={() => setCompactPanel('files')}
+                  style={{
+                    flexShrink: 0,
+                    height: '30px',
+                    border: '1px solid #303331',
+                    borderRadius: '6px',
+                    background: '#141715',
+                    color: '#d7d5ca',
+                    cursor: 'pointer',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                    padding: '0 9px',
+                    fontSize: '11px',
+                    fontWeight: 700,
+                  }}
+                >
+                  <ArrowLeft {...ICON_PROPS} />
+                  Files
+                </button>
+              )}
               <div
                 title={selectedFile?.path ?? ''}
                 style={{
@@ -565,4 +609,19 @@ function iconButtonStyle(enabled: boolean) {
     padding: 0,
     flexShrink: 0,
   } as const;
+}
+
+function useViewportWidth(): number {
+  const [width, setWidth] = useState(() =>
+    typeof window === 'undefined' ? 1024 : window.innerWidth,
+  );
+
+  useEffect(() => {
+    const handleResize = () => setWidth(window.innerWidth);
+    handleResize();
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
+
+  return width;
 }
