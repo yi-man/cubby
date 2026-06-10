@@ -572,15 +572,20 @@ test.describe('Cubby MVP', () => {
     page,
   }) => {
     const workspaceDir = mkdtempSync(join(tmpdir(), 'cubby-git-toolbar-'));
+    mkdirSync(join(workspaceDir, 'docs'));
     mkdirSync(join(workspaceDir, 'src'));
     try {
+      writeFileSync(join(workspaceDir, 'docs/guide.md'), 'initial docs\n');
       writeFileSync(join(workspaceDir, 'src/app.ts'), 'export const value = 1;\n');
       await runGit(workspaceDir, ['init']);
       await runGit(workspaceDir, ['config', 'user.email', 'cubby@example.test']);
       await runGit(workspaceDir, ['config', 'user.name', 'Cubby Test']);
       await runGit(workspaceDir, ['add', '.']);
       await runGit(workspaceDir, ['commit', '-m', 'initial']);
+      writeFileSync(join(workspaceDir, 'docs/guide.md'), 'updated docs\n');
       writeFileSync(join(workspaceDir, 'src/app.ts'), 'export const value = 2;\n');
+      mkdirSync(join(workspaceDir, 'notes'));
+      writeFileSync(join(workspaceDir, 'notes/todo.txt'), 'write release notes\n');
 
       const session = await createSession(page, {
         workspaceId: workspaceDir,
@@ -592,19 +597,37 @@ test.describe('Cubby MVP', () => {
       await selectSessionTab(group, session.title);
 
       const gitButton = page.getByRole('button', { name: 'Open git changes' });
-      await expect(gitButton).toContainText('1 change');
+      await expect(gitButton).toContainText('3 changes');
       await gitButton.click();
       const dialog = page.getByTestId('git-changes-dialog');
       await expect(dialog).toBeVisible();
-      await expect(dialog.getByRole('button', { name: 'Expand folder src' })).toBeVisible();
-      await dialog.getByRole('button', { name: 'Expand folder src' }).click();
-      await dialog.getByRole('button', { name: 'Open git change src/app.ts' }).click();
-      await expect(dialog.getByTestId('git-diff-preview')).toContainText(
-        '-export const value = 1;',
-      );
-      await expect(dialog.getByTestId('git-diff-preview')).toContainText(
-        '+export const value = 2;',
-      );
+      const directories = dialog.getByLabel('Changed directories');
+      await expect(directories.getByRole('button', { name: 'Show changes in docs' })).toBeVisible();
+      await expect(
+        directories.getByRole('button', { name: 'Show changes in notes' }),
+      ).toBeVisible();
+      await expect(directories.getByRole('button', { name: 'Show changes in src' })).toBeVisible();
+      await expect(
+        directories.getByRole('button', { name: 'Open git change src/app.ts' }),
+      ).toHaveCount(0);
+
+      const preview = dialog.getByTestId('git-diff-preview');
+      await expect(preview).toContainText('-initial docs');
+      await expect(preview).toContainText('+updated docs');
+      await expect(preview).toContainText('notes/todo.txt');
+      await expect(preview).toContainText('write release notes');
+      await expect(preview).toContainText('-export const value = 1;');
+      await expect(preview).toContainText('+export const value = 2;');
+      await expect(
+        preview.getByRole('button', { name: 'Open git change notes/todo.txt' }),
+      ).toBeVisible();
+      await expect(
+        preview.getByRole('button', { name: 'Open git change notes/', exact: true }),
+      ).toHaveCount(0);
+
+      await preview.getByRole('button', { name: 'Open git change src/app.ts' }).click();
+      await expect(preview).toContainText('+export const value = 2;');
+      await expect(preview).not.toContainText('+updated docs');
     } finally {
       rmSync(workspaceDir, { recursive: true, force: true });
     }

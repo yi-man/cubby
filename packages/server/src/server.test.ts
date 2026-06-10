@@ -233,6 +233,8 @@ describe('createServer', () => {
     await runGit(workspaceDir, ['commit', '-m', 'initial']);
     writeFileSync(join(workspaceDir, 'src/app.ts'), 'export const value = 2;\n');
     writeFileSync(join(workspaceDir, 'src/new.ts'), 'export const fresh = true;\n');
+    mkdirSync(join(workspaceDir, 'scratch'));
+    writeFileSync(join(workspaceDir, 'scratch/notes.txt'), 'untracked notes\n');
     const { app } = await createServer(0);
 
     const response = await app.inject({
@@ -249,7 +251,11 @@ describe('createServer', () => {
       expect.arrayContaining([
         expect.objectContaining({ path: 'src/app.ts', status: 'M' }),
         expect.objectContaining({ path: 'src/new.ts', status: '??' }),
+        expect.objectContaining({ path: 'scratch/notes.txt', status: '??' }),
       ]),
+    );
+    expect(body.entries).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ path: 'scratch/' })]),
     );
   });
 

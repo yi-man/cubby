@@ -34,7 +34,7 @@ interface RunGitResult {
 }
 
 export async function readGitStatus(root: string): Promise<GitStatusResponse> {
-  const result = await runGit(root, ['status', '--porcelain=v1', '-b']);
+  const result = await runGit(root, ['status', '--porcelain=v1', '-b', '-uall']);
   if (!result.ok) {
     if (result.reason === 'not-repo') return { isRepo: false, branch: null, entries: [] };
     throw result.error;

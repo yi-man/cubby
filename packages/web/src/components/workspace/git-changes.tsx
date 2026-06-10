@@ -1,20 +1,10 @@
-import Editor from '@monaco-editor/react';
-import {
-  ArrowLeft,
-  ChevronDown,
-  ChevronRight,
-  FileCode2,
-  Folder,
-  GitBranch,
-  Loader2,
-  RefreshCw,
-  X,
-} from 'lucide-react';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { ArrowLeft, FileCode2, Folder, GitBranch, Loader2, RefreshCw, X } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { fileExplorerLayoutMode } from './file-explorer-model.js';
 import {
-  buildGitChangeTree,
-  type GitChangeTreeNode,
+  buildGitChangeDirectoryTree,
+  entriesForGitDirectory,
+  type GitChangeDirectoryOnlyNode,
   type GitDiffResponse,
   type GitStatusEntry,
   type GitStatusResponse,
@@ -30,6 +20,10 @@ interface GitChangesProps {
 }
 
 type CompactPanel = 'files' | 'preview';
+type DiffLoadState =
+  | { state: 'loading' }
+  | { state: 'loaded'; preview: GitDiffResponse }
+  | { state: 'error'; message: string };
 
 const ICON_PROPS = { size: 15, strokeWidth: 2.1, 'aria-hidden': true } as const;
 const GIT_CHANGES_Z_INDEX = 1000;
@@ -37,59 +31,89 @@ const GIT_CHANGES_Z_INDEX = 1000;
 export function GitChanges({ rootPath, status, onClose, onRefresh }: GitChangesProps) {
   const viewportWidth = useViewportWidth();
   const compact = fileExplorerLayoutMode(viewportWidth) === 'compact';
-  const tree = useMemo(() => buildGitChangeTree(status.entries), [status.entries]);
-  const [expandedPaths, setExpandedPaths] = useState<Set<string>>(() => new Set());
+  const directoryTree = useMemo(
+    () => buildGitChangeDirectoryTree(status.entries),
+    [status.entries],
+  );
+  const statusKey = useMemo(
+    () =>
+      status.entries
+        .map((entry) => `${entry.path}\0${entry.staged}\0${entry.worktree}\0${entry.status}`)
+        .join('\n'),
+    [status.entries],
+  );
+  const resetKey = `${rootPath}\0${statusKey}`;
+  const requestedDiffPaths = useRef<Set<string>>(new Set());
+  const lastResetKey = useRef(resetKey);
+  const [selectedDirectoryPath, setSelectedDirectoryPath] = useState<string | null>(null);
   const [selectedEntry, setSelectedEntry] = useState<GitStatusEntry | null>(null);
-  const [preview, setPreview] = useState<GitDiffResponse | null>(null);
-  const [previewLoading, setPreviewLoading] = useState(false);
-  const [previewError, setPreviewError] = useState('');
+  const [diffsByPath, setDiffsByPath] = useState<Record<string, DiffLoadState>>({});
   const [refreshing, setRefreshing] = useState(false);
-  const [compactPanel, setCompactPanel] = useState<CompactPanel>('files');
+  const [compactPanel, setCompactPanel] = useState<CompactPanel>('preview');
   const showFilesPanel = !compact || compactPanel === 'files';
   const showPreviewPanel = !compact || compactPanel === 'preview';
+  const visibleEntries = useMemo(() => {
+    if (selectedEntry) return [selectedEntry];
+    return entriesForGitDirectory(status.entries, selectedDirectoryPath);
+  }, [selectedDirectoryPath, selectedEntry, status.entries]);
 
-  const toggleDirectory = useCallback((path: string) => {
-    setExpandedPaths((current) => {
-      const next = new Set(current);
-      if (next.has(path)) {
-        next.delete(path);
-      } else {
-        next.add(path);
-      }
-      return next;
-    });
-  }, []);
-
-  const openEntry = useCallback(
+  const loadDiff = useCallback(
     async (entry: GitStatusEntry) => {
-      setSelectedEntry(entry);
-      setPreview(null);
-      setPreviewError('');
-      setPreviewLoading(true);
-      setCompactPanel('preview');
+      if (requestedDiffPaths.current.has(entry.path)) return;
+
+      requestedDiffPaths.current.add(entry.path);
+      setDiffsByPath((current) => ({ ...current, [entry.path]: { state: 'loading' } }));
+
       try {
         const query = new URLSearchParams({ root: rootPath, path: entry.path });
         const response = await fetch(`/api/git/diff?${query.toString()}`);
         if (!response.ok) {
-          setPreviewError('Failed to load diff');
+          setDiffsByPath((current) => ({
+            ...current,
+            [entry.path]: { state: 'error', message: 'Failed to load diff' },
+          }));
           return;
         }
 
         const data = await response.json();
         if (!isGitDiffResponse(data)) {
-          setPreviewError('Failed to read diff');
+          setDiffsByPath((current) => ({
+            ...current,
+            [entry.path]: { state: 'error', message: 'Failed to read diff' },
+          }));
           return;
         }
 
-        setPreview(data);
+        setDiffsByPath((current) => ({
+          ...current,
+          [entry.path]: { state: 'loaded', preview: data },
+        }));
       } catch {
-        setPreviewError('Failed to load diff');
-      } finally {
-        setPreviewLoading(false);
+        setDiffsByPath((current) => ({
+          ...current,
+          [entry.path]: { state: 'error', message: 'Failed to load diff' },
+        }));
       }
     },
     [rootPath],
   );
+
+  const showAllChanges = useCallback(() => {
+    setSelectedDirectoryPath(null);
+    setSelectedEntry(null);
+    setCompactPanel('preview');
+  }, []);
+
+  const openDirectory = useCallback((path: string) => {
+    setSelectedDirectoryPath(path);
+    setSelectedEntry(null);
+    setCompactPanel('preview');
+  }, []);
+
+  const openEntry = useCallback((entry: GitStatusEntry) => {
+    setSelectedEntry(entry);
+    setCompactPanel('preview');
+  }, []);
 
   const refresh = useCallback(async () => {
     setRefreshing(true);
@@ -101,10 +125,22 @@ export function GitChanges({ rootPath, status, onClose, onRefresh }: GitChangesP
   }, [onRefresh]);
 
   useEffect(() => {
-    if (!selectedEntry && status.entries[0]) {
-      void openEntry(status.entries[0]);
+    if (lastResetKey.current === resetKey) return;
+
+    lastResetKey.current = resetKey;
+    setSelectedDirectoryPath(null);
+    setSelectedEntry(null);
+    setDiffsByPath({});
+    requestedDiffPaths.current.clear();
+  });
+
+  useEffect(() => {
+    for (const entry of visibleEntries) {
+      if (!diffsByPath[entry.path]) {
+        void loadDiff(entry);
+      }
     }
-  }, [openEntry, selectedEntry, status.entries]);
+  }, [diffsByPath, loadDiff, visibleEntries]);
 
   return (
     <div
@@ -194,12 +230,12 @@ export function GitChanges({ rootPath, status, onClose, onRefresh }: GitChangesP
 
         <div style={{ minHeight: 0, flex: 1, display: 'flex', overflow: 'hidden' }}>
           <section
-            aria-label="Changed files"
+            aria-label="Changed directories"
             style={{
-              minWidth: compact ? 0 : '300px',
+              minWidth: compact ? 0 : '260px',
               width: compact ? '100%' : undefined,
               height: compact ? '100%' : undefined,
-              flex: compact ? '0 0 100%' : '1 1 340px',
+              flex: compact ? '0 0 100%' : '0 0 280px',
               minHeight: 0,
               borderRight: compact ? 'none' : '1px solid #242624',
               display: showFilesPanel ? 'flex' : 'none',
@@ -208,18 +244,16 @@ export function GitChanges({ rootPath, status, onClose, onRefresh }: GitChangesP
             }}
           >
             <div style={{ minHeight: 0, flex: 1, overflowY: 'auto', padding: '8px' }}>
-              {tree.length === 0 ? (
+              {status.entries.length === 0 ? (
                 <EmptyState label="No Git changes" />
               ) : (
-                tree.map((node) => (
-                  <GitTreeNodeView
-                    key={node.path}
+                directoryTree.map((node) => (
+                  <GitDirectoryNodeView
+                    key={node.path || 'root'}
                     node={node}
                     depth={0}
-                    expandedPaths={expandedPaths}
-                    selectedPath={selectedEntry?.path ?? null}
-                    onToggleDirectory={toggleDirectory}
-                    onOpenEntry={openEntry}
+                    selectedDirectoryPath={selectedEntry ? null : selectedDirectoryPath}
+                    onOpenDirectory={openDirectory}
                   />
                 ))
               )}
@@ -263,61 +297,44 @@ export function GitChanges({ rootPath, status, onClose, onRefresh }: GitChangesP
                 </button>
               )}
               <div
-                title={selectedEntry?.path ?? ''}
+                title={previewTitle(selectedEntry, selectedDirectoryPath)}
                 style={{
                   minWidth: 0,
                   flex: 1,
                   overflow: 'hidden',
                   textOverflow: 'ellipsis',
                   whiteSpace: 'nowrap',
-                  color: selectedEntry ? '#f5f4ec' : '#777c76',
+                  color: '#f5f4ec',
                   fontFamily: selectedEntry ? 'monospace' : undefined,
                   fontSize: '12px',
-                  fontWeight: selectedEntry ? 500 : 650,
+                  fontWeight: selectedEntry ? 500 : 700,
                 }}
               >
-                {selectedEntry?.path ?? 'Select a changed file'}
+                {previewTitle(selectedEntry, selectedDirectoryPath)}
               </div>
-              {selectedEntry && <StatusChip status={selectedEntry.status} />}
+              {(selectedEntry || selectedDirectoryPath !== null) && (
+                <button
+                  type="button"
+                  aria-label="Show all git changes"
+                  onClick={showAllChanges}
+                  style={textButtonStyle()}
+                >
+                  <GitBranch {...ICON_PROPS} />
+                  All changes
+                </button>
+              )}
+              {selectedEntry ? (
+                <StatusChip status={selectedEntry.status} />
+              ) : (
+                <CountChip count={visibleEntries.length} />
+              )}
             </div>
-            {previewLoading ? (
-              <EmptyState label="Loading diff" />
-            ) : previewError ? (
-              <EmptyState label={previewError} />
-            ) : preview ? (
-              <div
-                data-testid="git-diff-preview"
-                style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}
-              >
-                <Editor
-                  height="100%"
-                  path={`git:${preview.path}`}
-                  language={preview.language}
-                  value={preview.content}
-                  theme="vs-dark"
-                  loading={<PlainTextPreview content={preview.content} />}
-                  options={{
-                    readOnly: true,
-                    domReadOnly: true,
-                    automaticLayout: true,
-                    minimap: { enabled: false },
-                    fontSize: 12,
-                    lineHeight: 20,
-                    lineNumbers: 'on',
-                    renderLineHighlight: 'line',
-                    scrollBeyondLastLine: false,
-                    smoothScrolling: true,
-                    wordWrap: 'off',
-                    tabSize: 2,
-                    readOnlyMessage: { value: 'Git preview is read-only' },
-                    overviewRulerBorder: false,
-                    padding: { top: 12, bottom: 12 },
-                  }}
-                />
-              </div>
-            ) : (
-              <EmptyState label="No file selected" />
-            )}
+            <GitDiffPreviewStack
+              entries={visibleEntries}
+              diffsByPath={diffsByPath}
+              selectedPath={selectedEntry?.path ?? null}
+              onOpenEntry={openEntry}
+            />
           </section>
         </div>
       </div>
@@ -325,64 +342,121 @@ export function GitChanges({ rootPath, status, onClose, onRefresh }: GitChangesP
   );
 }
 
-function GitTreeNodeView({
+function GitDirectoryNodeView({
   node,
   depth,
-  expandedPaths,
+  selectedDirectoryPath,
+  onOpenDirectory,
+}: {
+  node: GitChangeDirectoryOnlyNode;
+  depth: number;
+  selectedDirectoryPath: string | null;
+  onOpenDirectory: (path: string) => void;
+}) {
+  return (
+    <div>
+      <button
+        type="button"
+        aria-label={`Show changes in ${node.name}`}
+        onClick={() => onOpenDirectory(node.path)}
+        style={directoryButtonStyle(depth, selectedDirectoryPath === node.path)}
+      >
+        <Folder {...ICON_PROPS} />
+        <span style={treeLabelStyle}>{node.name}</span>
+        <CountChip count={node.changeCount} />
+      </button>
+      {node.children.map((child) => (
+        <GitDirectoryNodeView
+          key={child.path}
+          node={child}
+          depth={depth + 1}
+          selectedDirectoryPath={selectedDirectoryPath}
+          onOpenDirectory={onOpenDirectory}
+        />
+      ))}
+    </div>
+  );
+}
+
+function GitDiffPreviewStack({
+  entries,
+  diffsByPath,
   selectedPath,
-  onToggleDirectory,
   onOpenEntry,
 }: {
-  node: GitChangeTreeNode;
-  depth: number;
-  expandedPaths: Set<string>;
+  entries: GitStatusEntry[];
+  diffsByPath: Record<string, DiffLoadState>;
   selectedPath: string | null;
-  onToggleDirectory: (path: string) => void;
   onOpenEntry: (entry: GitStatusEntry) => void;
 }) {
-  if (node.type === 'directory') {
-    const expanded = expandedPaths.has(node.path);
-    return (
-      <div>
-        <button
-          type="button"
-          aria-label={`${expanded ? 'Collapse' : 'Expand'} folder ${node.name}`}
-          onClick={() => onToggleDirectory(node.path)}
-          style={treeButtonStyle(depth, false)}
-        >
-          {expanded ? <ChevronDown {...ICON_PROPS} /> : <ChevronRight {...ICON_PROPS} />}
-          <Folder {...ICON_PROPS} />
-          <span style={treeLabelStyle}>{node.name}</span>
-        </button>
-        {expanded &&
-          node.children.map((child) => (
-            <GitTreeNodeView
-              key={child.path}
-              node={child}
-              depth={depth + 1}
-              expandedPaths={expandedPaths}
-              selectedPath={selectedPath}
-              onToggleDirectory={onToggleDirectory}
-              onOpenEntry={onOpenEntry}
-            />
-          ))}
-      </div>
-    );
+  if (entries.length === 0) {
+    return <EmptyState label="No Git changes in this directory" />;
   }
 
-  const selected = selectedPath === node.entry.path;
   return (
-    <button
-      type="button"
-      aria-label={`Open git change ${node.entry.path}`}
-      onClick={() => onOpenEntry(node.entry)}
-      style={treeButtonStyle(depth, selected)}
+    <div
+      data-testid="git-diff-preview"
+      style={{
+        flex: 1,
+        minHeight: 0,
+        overflowY: 'auto',
+        padding: '12px',
+      }}
     >
-      <span style={{ width: '15px', flexShrink: 0 }} />
-      <FileCode2 {...ICON_PROPS} />
-      <span style={treeLabelStyle}>{node.name}</span>
-      <StatusChip status={node.entry.status} />
-    </button>
+      {entries.map((entry) => (
+        <GitDiffSection
+          key={entry.path}
+          entry={entry}
+          diffState={diffsByPath[entry.path]}
+          selected={selectedPath === entry.path}
+          onOpenEntry={onOpenEntry}
+        />
+      ))}
+    </div>
+  );
+}
+
+function GitDiffSection({
+  entry,
+  diffState,
+  selected,
+  onOpenEntry,
+}: {
+  entry: GitStatusEntry;
+  diffState: DiffLoadState | undefined;
+  selected: boolean;
+  onOpenEntry: (entry: GitStatusEntry) => void;
+}) {
+  return (
+    <article
+      style={{
+        border: `1px solid ${selected ? '#315f6b' : '#242a26'}`,
+        borderRadius: '6px',
+        background: '#090b0a',
+        overflow: 'hidden',
+        marginBottom: '12px',
+      }}
+    >
+      <button
+        type="button"
+        aria-label={`Open git change ${entry.path}`}
+        onClick={() => onOpenEntry(entry)}
+        style={fileHeaderButtonStyle(selected)}
+      >
+        <FileCode2 {...ICON_PROPS} />
+        <span style={filePathStyle} title={entry.path}>
+          {entry.path}
+        </span>
+        <StatusChip status={entry.status} />
+      </button>
+      {diffState?.state === 'loaded' ? (
+        <DiffTextPreview content={diffState.preview.content} />
+      ) : diffState?.state === 'error' ? (
+        <InlineDiffState label={diffState.message} />
+      ) : (
+        <InlineDiffState label="Loading diff" />
+      )}
+    </article>
   );
 }
 
@@ -401,6 +475,25 @@ function StatusChip({ status }: { status: string }) {
       }}
     >
       {status}
+    </span>
+  );
+}
+
+function CountChip({ count }: { count: number }) {
+  return (
+    <span
+      style={{
+        flexShrink: 0,
+        border: '1px solid #343832',
+        borderRadius: '999px',
+        background: '#131712',
+        color: '#cbc8b8',
+        padding: '2px 7px',
+        fontSize: '11px',
+        fontWeight: 800,
+      }}
+    >
+      {count}
     </span>
   );
 }
@@ -425,14 +518,29 @@ function EmptyState({ label }: { label: string }) {
   );
 }
 
-function PlainTextPreview({ content }: { content: string }) {
+function InlineDiffState({ label }: { label: string }) {
+  return (
+    <div
+      style={{
+        padding: '18px 14px',
+        color: '#777c76',
+        fontSize: '12px',
+      }}
+    >
+      {label}
+    </div>
+  );
+}
+
+function DiffTextPreview({ content }: { content: string }) {
+  const lines = diffPreviewLines(content);
+
   return (
     <pre
       style={{
-        height: '100%',
         margin: 0,
-        overflow: 'auto',
-        padding: '12px',
+        overflowX: 'auto',
+        padding: '10px 0',
         background: '#050606',
         color: '#f5f4ec',
         fontFamily: 'monospace',
@@ -441,9 +549,39 @@ function PlainTextPreview({ content }: { content: string }) {
         whiteSpace: 'pre',
       }}
     >
-      {content}
+      {lines.map(({ key, line }) => (
+        <span
+          key={key}
+          style={{
+            ...diffLineStyle(line),
+            display: 'block',
+            minHeight: '20px',
+            padding: '0 12px',
+          }}
+        >
+          {line || ' '}
+        </span>
+      ))}
     </pre>
   );
+}
+
+function previewTitle(entry: GitStatusEntry | null, directoryPath: string | null): string {
+  if (entry) return entry.path;
+  if (directoryPath === null) return 'All changes';
+  if (directoryPath === '') return 'Root changes';
+  return directoryPath;
+}
+
+function diffPreviewLines(content: string): Array<{ key: string; line: string }> {
+  if (content.length === 0) return [{ key: 'empty', line: 'No textual diff' }];
+
+  let offset = 0;
+  return content.split('\n').map((line) => {
+    const key = `${offset}:${line}`;
+    offset += line.length + 1;
+    return { key, line };
+  });
 }
 
 const treeLabelStyle = {
@@ -456,7 +594,18 @@ const treeLabelStyle = {
   fontWeight: 650,
 } as const;
 
-function treeButtonStyle(depth: number, selected: boolean) {
+const filePathStyle = {
+  minWidth: 0,
+  flex: 1,
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  whiteSpace: 'nowrap',
+  fontFamily: 'monospace',
+  fontSize: '12px',
+  fontWeight: 650,
+} as const;
+
+function directoryButtonStyle(depth: number, selected: boolean) {
   return {
     width: '100%',
     minHeight: '34px',
@@ -471,6 +620,39 @@ function treeButtonStyle(depth: number, selected: boolean) {
     padding: `6px 8px 6px ${8 + depth * 14}px`,
     textAlign: 'left',
   } as const;
+}
+
+function fileHeaderButtonStyle(selected: boolean) {
+  return {
+    width: '100%',
+    minHeight: '38px',
+    border: 'none',
+    borderBottom: '1px solid #242a26',
+    background: selected ? '#071a1f' : '#101310',
+    color: '#f3f1e7',
+    cursor: 'pointer',
+    display: 'flex',
+    alignItems: 'center',
+    gap: '8px',
+    padding: '8px 12px',
+    textAlign: 'left',
+  } as const;
+}
+
+function diffLineStyle(line: string) {
+  if (line.startsWith('+') && !line.startsWith('+++')) {
+    return { background: 'rgba(36, 128, 68, 0.22)', color: '#bcf2ca' } as const;
+  }
+  if (line.startsWith('-') && !line.startsWith('---')) {
+    return { background: 'rgba(174, 58, 55, 0.24)', color: '#ffd0ca' } as const;
+  }
+  if (line.startsWith('@@')) {
+    return { background: 'rgba(45, 74, 111, 0.34)', color: '#aacdff' } as const;
+  }
+  if (line.startsWith('diff --git')) {
+    return { color: '#cbc8b8', fontWeight: 800 } as const;
+  }
+  return {} as const;
 }
 
 function iconButtonStyle(enabled: boolean) {

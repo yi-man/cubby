@@ -28,6 +28,15 @@ export interface GitChangeDirectoryNode {
   children: GitChangeTreeNode[];
 }
 
+export interface GitChangeDirectoryOnlyNode {
+  type: 'directory';
+  name: string;
+  path: string;
+  changeCount: number;
+  entries: GitStatusEntry[];
+  children: GitChangeDirectoryOnlyNode[];
+}
+
 export interface GitChangeFileNode {
   type: 'file';
   name: string;
@@ -107,6 +116,71 @@ export function buildGitChangeTree(entries: GitStatusEntry[]): GitChangeTreeNode
   return root.children;
 }
 
+export function buildGitChangeDirectoryTree(
+  entries: GitStatusEntry[],
+): GitChangeDirectoryOnlyNode[] {
+  const roots: GitChangeDirectoryOnlyNode[] = [];
+  const directories = new Map<string, GitChangeDirectoryOnlyNode>();
+
+  const ensureDirectory = (path: string, name: string, parentPath: string | null) => {
+    const existing = directories.get(path);
+    if (existing) return existing;
+
+    const node: GitChangeDirectoryOnlyNode = {
+      type: 'directory',
+      name,
+      path,
+      changeCount: 0,
+      entries: [],
+      children: [],
+    };
+    directories.set(path, node);
+
+    if (parentPath === null) {
+      roots.push(node);
+    } else {
+      const parent = directories.get(parentPath);
+      parent?.children.push(node);
+    }
+
+    return node;
+  };
+
+  for (const entry of entries) {
+    const parts = entry.path.split('/').filter(Boolean);
+
+    if (parts.length <= 1) {
+      const root = ensureDirectory('', 'Root', null);
+      root.changeCount += 1;
+      root.entries.push(entry);
+      continue;
+    }
+
+    for (let index = 0; index < parts.length - 1; index++) {
+      const path = parts.slice(0, index + 1).join('/');
+      const parentPath = index === 0 ? null : parts.slice(0, index).join('/');
+      const directory = ensureDirectory(path, parts[index], parentPath);
+      directory.changeCount += 1;
+
+      if (index === parts.length - 2) {
+        directory.entries.push(entry);
+      }
+    }
+  }
+
+  sortDirectoryTree(roots);
+  return roots;
+}
+
+export function entriesForGitDirectory(
+  entries: GitStatusEntry[],
+  directoryPath: string | null,
+): GitStatusEntry[] {
+  if (directoryPath === null) return entries;
+  if (directoryPath === '') return entries.filter((entry) => !entry.path.includes('/'));
+  return entries.filter((entry) => entry.path.startsWith(`${directoryPath}/`));
+}
+
 function sortTree(nodes: GitChangeTreeNode[]): void {
   nodes.sort((left, right) => {
     if (left.type !== right.type) return left.type === 'file' ? -1 : 1;
@@ -114,5 +188,17 @@ function sortTree(nodes: GitChangeTreeNode[]): void {
   });
   for (const node of nodes) {
     if (node.type === 'directory') sortTree(node.children);
+  }
+}
+
+function sortDirectoryTree(nodes: GitChangeDirectoryOnlyNode[]): void {
+  nodes.sort((left, right) => {
+    if (left.path === '') return -1;
+    if (right.path === '') return 1;
+    return left.name.localeCompare(right.name);
+  });
+  for (const node of nodes) {
+    node.entries.sort((left, right) => left.path.localeCompare(right.path));
+    sortDirectoryTree(node.children);
   }
 }
