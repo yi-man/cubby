@@ -1,9 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import {
-  diffModeForEntry,
-  parseGitStatusPorcelain,
-  statusLabelForEntry,
-} from './git-service.js';
+import { diffModeForEntry, parseGitStatusPorcelain, statusLabelForEntry } from './git-service.js';
 
 describe('git service model', () => {
   it('parses branch and changed files from porcelain status', () => {

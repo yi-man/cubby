@@ -144,8 +144,7 @@ async function runGit(
   root: string,
   args: string[],
 ): Promise<
-  | { ok: true; value: RunGitResult }
-  | { ok: false; reason: 'not-repo' | 'failed'; error: Error }
+  { ok: true; value: RunGitResult } | { ok: false; reason: 'not-repo' | 'failed'; error: Error }
 > {
   try {
     const { stdout, stderr } = await execFileAsync('git', ['-C', root, ...args], {
@@ -154,8 +153,7 @@ async function runGit(
     return { ok: true, value: { stdout, stderr } };
   } catch (err) {
     const error = err instanceof Error ? err : new Error(String(err));
-    const stderr =
-      'stderr' in error ? String((error as Error & { stderr?: unknown }).stderr) : '';
+    const stderr = 'stderr' in error ? String((error as Error & { stderr?: unknown }).stderr) : '';
     if (stderr.includes('not a git repository')) {
       return { ok: false, reason: 'not-repo', error };
     }
