@@ -191,4 +191,33 @@ describe('ClaudeCodeProvider', () => {
     expect(kills).toEqual(['SIGTERM']);
     expect(exits).toEqual([7]);
   });
+
+  it('spawns claude with yolo args', async () => {
+    const calls: unknown[] = [];
+    const provider = new ClaudeCodeProvider({
+      spawn: (file, args, options) => {
+        calls.push({ file, args, options });
+        return {
+          pid: 1235,
+          onData: () => ({ dispose: () => {} }),
+          onExit: () => ({ dispose: () => {} }),
+          write: () => {},
+          resize: () => {},
+          kill: () => {},
+        };
+      },
+    });
+
+    await provider.spawn('session-1', {
+      cwd: '/tmp',
+      cols: 100,
+      rows: 40,
+      yolo: true,
+    });
+
+    expect(calls[0]).toMatchObject({
+      file: 'claude',
+      args: ['--session-id', 'session-1', '--dangerously-skip-permissions'],
+    });
+  });
 });

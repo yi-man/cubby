@@ -80,6 +80,18 @@ describe('OpenCodeProvider', () => {
     ]);
   });
 
+  it('throws when building yolo resume args without a mapped provider session id', () => {
+    const provider = new OpenCodeProvider();
+
+    expect(() =>
+      provider.buildArgs({
+        cwd: '/tmp/project',
+        resume: true,
+        yolo: true,
+      }),
+    ).toThrow('OpenCode resume requires a provider session id');
+  });
+
   it('spawns opencode in a pty and forwards terminal io', async () => {
     const dataListeners: ((data: string) => void)[] = [];
     const exitListeners: ((event: { exitCode: number; signal?: string }) => void)[] = [];
@@ -147,6 +159,41 @@ describe('OpenCodeProvider', () => {
     expect(resizes).toEqual([{ cols: 120, rows: 50 }]);
     expect(kills).toEqual(['SIGTERM']);
     expect(exits).toEqual([7]);
+  });
+
+  it('spawns opencode with yolo direct interactive args', async () => {
+    const calls: unknown[] = [];
+    const provider = new OpenCodeProvider({
+      spawn: (file, args, options) => {
+        calls.push({ file, args, options });
+        return {
+          pid: 5434,
+          onData: () => ({ dispose: () => {} }),
+          onExit: () => ({ dispose: () => {} }),
+          write: () => {},
+          resize: () => {},
+          kill: () => {},
+        };
+      },
+    });
+
+    await provider.spawn('session-1', {
+      cwd: '/tmp/project',
+      cols: 100,
+      rows: 40,
+      yolo: true,
+    });
+
+    expect(calls[0]).toMatchObject({
+      file: 'opencode',
+      args: [
+        'run',
+        '--interactive',
+        '--dangerously-skip-permissions',
+        '--dir',
+        '/tmp/project',
+      ],
+    });
   });
 
   it('spawns opencode resume with the mapped provider session id', async () => {

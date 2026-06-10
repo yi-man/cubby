@@ -135,6 +135,35 @@ describe('CodexProvider', () => {
     expect(exits).toEqual([7]);
   });
 
+  it('spawns codex with yolo args', async () => {
+    const calls: unknown[] = [];
+    const provider = new CodexProvider({
+      spawn: (file, args, options) => {
+        calls.push({ file, args, options });
+        return {
+          pid: 4323,
+          onData: () => ({ dispose: () => {} }),
+          onExit: () => ({ dispose: () => {} }),
+          write: () => {},
+          resize: () => {},
+          kill: () => {},
+        };
+      },
+    });
+
+    await provider.spawn('session-1', {
+      cwd: '/tmp/project',
+      cols: 100,
+      rows: 40,
+      yolo: true,
+    });
+
+    expect(calls[0]).toMatchObject({
+      file: 'codex',
+      args: ['--cd', '/tmp/project', '--dangerously-bypass-approvals-and-sandbox'],
+    });
+  });
+
   it('spawns codex resume with the mapped provider session id', async () => {
     const calls: unknown[] = [];
     const provider = new CodexProvider({
