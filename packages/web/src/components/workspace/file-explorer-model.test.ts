@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  fileLanguageFromPath,
   isFileBrowseResponse,
   isFilePreviewResponse,
   parentPathWithinRoot,
@@ -50,5 +51,14 @@ describe('file explorer model', () => {
     expect(parentPathWithinRoot('/work/src', '/work')).toBe('/work');
     expect(parentPathWithinRoot('/work', '/work')).toBe('/work');
     expect(parentPathWithinRoot('/work-alpha', '/work')).toBe('/work');
+  });
+
+  it('maps file paths to Monaco languages', () => {
+    expect(fileLanguageFromPath('/work/packages/web/src/app.tsx')).toBe('typescript');
+    expect(fileLanguageFromPath('/work/package.json')).toBe('json');
+    expect(fileLanguageFromPath('/work/docs/README.md')).toBe('markdown');
+    expect(fileLanguageFromPath('/work/styles/global.css')).toBe('css');
+    expect(fileLanguageFromPath('/work/scripts/dev.ts')).toBe('typescript');
+    expect(fileLanguageFromPath('/work/unknown.config')).toBe('plaintext');
   });
 });

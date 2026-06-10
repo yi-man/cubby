@@ -1,7 +1,9 @@
+import Editor from '@monaco-editor/react';
 import { ArrowUp, FileText, Folder, Loader2, RefreshCw, X } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   type FileExplorerEntry,
+  fileLanguageFromPath,
   isFileBrowseResponse,
   isFilePreviewResponse,
   parentPathWithinRoot,
@@ -32,8 +34,13 @@ export function FileExplorer({ rootPath, onClose }: FileExplorerProps) {
   const [selectedFile, setSelectedFile] = useState<SelectedFile | null>(null);
   const [previewLoadingPath, setPreviewLoadingPath] = useState<string | null>(null);
   const [previewError, setPreviewError] = useState('');
+  const [wordWrap, setWordWrap] = useState(true);
   const parent = useMemo(() => parentPathWithinRoot(currentPath, root), [currentPath, root]);
   const canGoParent = currentPath !== parent;
+  const selectedLanguage = useMemo(
+    () => (selectedFile ? fileLanguageFromPath(selectedFile.path) : 'plaintext'),
+    [selectedFile],
+  );
 
   const loadDirectory = useCallback(
     async (targetPath: string) => {
@@ -377,6 +384,7 @@ export function FileExplorer({ rootPath, onClose }: FileExplorerProps) {
                 padding: '0 12px',
                 display: 'flex',
                 alignItems: 'center',
+                gap: '10px',
                 minWidth: 0,
               }}
             >
@@ -384,6 +392,7 @@ export function FileExplorer({ rootPath, onClose }: FileExplorerProps) {
                 title={selectedFile?.path ?? ''}
                 style={{
                   minWidth: 0,
+                  flex: 1,
                   overflow: 'hidden',
                   textOverflow: 'ellipsis',
                   whiteSpace: 'nowrap',
@@ -395,6 +404,45 @@ export function FileExplorer({ rootPath, onClose }: FileExplorerProps) {
               >
                 {selectedFile?.path ?? 'Select a file'}
               </div>
+              {selectedFile && (
+                <>
+                  <span
+                    style={{
+                      flexShrink: 0,
+                      border: '1px solid #253b40',
+                      borderRadius: '999px',
+                      background: '#071a1f',
+                      color: '#9ce8f8',
+                      padding: '3px 8px',
+                      fontSize: '11px',
+                      fontWeight: 700,
+                    }}
+                  >
+                    {selectedLanguage}
+                  </span>
+                  <button
+                    type="button"
+                    aria-label="Toggle line wrap"
+                    aria-pressed={wordWrap}
+                    title="Toggle line wrap"
+                    onClick={() => setWordWrap((wrapped) => !wrapped)}
+                    style={{
+                      flexShrink: 0,
+                      height: '28px',
+                      border: `1px solid ${wordWrap ? '#315f6b' : '#303331'}`,
+                      borderRadius: '6px',
+                      background: wordWrap ? '#071a1f' : '#141715',
+                      color: wordWrap ? '#9ce8f8' : '#d7d5ca',
+                      cursor: 'pointer',
+                      padding: '0 9px',
+                      fontSize: '11px',
+                      fontWeight: 700,
+                    }}
+                  >
+                    Wrap
+                  </button>
+                </>
+              )}
             </div>
             {previewError ? (
               <EmptyState label={previewError} />
@@ -415,25 +463,44 @@ export function FileExplorer({ rootPath, onClose }: FileExplorerProps) {
                     Preview truncated
                   </div>
                 )}
-                <pre
+                <div
+                  data-testid="file-preview-editor"
                   style={{
                     flex: 1,
                     minHeight: 0,
-                    margin: 0,
-                    padding: '14px',
-                    overflow: 'auto',
-                    color: '#e8e5d8',
                     background: '#050606',
-                    fontFamily:
-                      'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace',
-                    fontSize: '12px',
-                    lineHeight: 1.55,
-                    whiteSpace: 'pre-wrap',
-                    wordBreak: 'break-word',
+                    overflow: 'hidden',
                   }}
                 >
-                  {selectedFile.content}
-                </pre>
+                  <Editor
+                    height="100%"
+                    path={selectedFile.path}
+                    language={selectedLanguage}
+                    value={selectedFile.content}
+                    theme="vs-dark"
+                    options={{
+                      readOnly: true,
+                      domReadOnly: true,
+                      automaticLayout: true,
+                      minimap: { enabled: false },
+                      fontSize: 12,
+                      lineHeight: 20,
+                      lineNumbers: 'on',
+                      renderLineHighlight: 'line',
+                      scrollBeyondLastLine: false,
+                      smoothScrolling: true,
+                      wordWrap: wordWrap ? 'on' : 'off',
+                      wrappingIndent: 'same',
+                      tabSize: 2,
+                      detectIndentation: true,
+                      readOnlyMessage: { value: 'File preview is read-only' },
+                      bracketPairColorization: { enabled: true },
+                      guides: { indentation: true, bracketPairs: true },
+                      overviewRulerBorder: false,
+                      padding: { top: 12, bottom: 12 },
+                    }}
+                  />
+                </div>
               </>
             ) : (
               <EmptyState label="No file selected" />
