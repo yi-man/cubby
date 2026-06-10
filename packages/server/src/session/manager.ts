@@ -16,6 +16,13 @@ import type { SessionStore } from './store.js';
 
 const OUTPUT_HISTORY_LIMIT = 5000;
 const SNAPSHOT_PERSIST_DEBOUNCE_MS = 250;
+const RESUME_UNSUPPORTED_REASON = 'Provider does not support resume';
+const RESUME_CONVERSATION_MISSING_REASON = 'Provider conversation not found';
+
+interface ResumeAvailability {
+  resumable: boolean;
+  reason: string | null;
+}
 
 interface SessionManagerOptions {
   outputHistoryLimit?: number;
@@ -87,18 +94,64 @@ export class SessionManager {
   }
 
   getSession(id: string): Session | null {
-    return this.store.get(id);
+    const session = this.store.get(id);
+    return session ? this.withResumeMetadata(session) : null;
   }
 
   listSessions(): Session[] {
-    return this.store.list().filter((session) => {
-      return (
-        session.status === 'draft' ||
-        isLiveSession(session.status) ||
-        this.hasConversation(session) ||
-        this.hasCapturedTerminalHistory(session.id)
-      );
-    });
+    return this.store
+      .list()
+      .filter((session) => {
+        return (
+          session.status === 'draft' ||
+          isLiveSession(session.status) ||
+          this.hasConversation(session) ||
+          this.hasCapturedTerminalHistory(session.id)
+        );
+      })
+      .map((session) => this.withResumeMetadata(session));
+  }
+
+  private withResumeMetadata(session: Session): Session {
+    if (session.status !== 'ended') return session;
+    const availability = this.resumeAvailability(session);
+    return {
+      ...session,
+      resumable: availability.resumable,
+      resumeUnavailableReason: availability.reason,
+    };
+  }
+
+  private resumeAvailability(session: Session): ResumeAvailability {
+    const provider = this.providers.get(session.provider);
+    if (provider?.supportsResume === false) {
+      return { resumable: false, reason: RESUME_UNSUPPORTED_REASON };
+    }
+    if (!this.hasConversation(session)) {
+      return { resumable: false, reason: RESUME_CONVERSATION_MISSING_REASON };
+    }
+    return { resumable: true, reason: null };
+  }
+
+  private hasConversation(session: Session): boolean {
+    const provider = this.providers.get(session.provider);
+    if (provider?.supportsResume === false) return false;
+    return (
+      provider?.hasConversation?.(
+        session.id,
+        session.workspaceId,
+        session.providerSessionId ?? undefined,
+      ) ?? true
+    );
+  }
+
+  private hasCapturedTerminalHistory(sessionId: string): boolean {
+    return this.store.getTerminalOutputHistory(sessionId, 1).length > 0;
+  }
+
+  private resumeErrorMessage(reason: string | null): string {
+    if (!reason) return 'Session is not resumable';
+    return `Session is not resumable: ${reason.charAt(0).toLowerCase()}${reason.slice(1)}`;
   }
 
   reconcileDetachedLiveSessions(): Session[] {
@@ -132,30 +185,9 @@ export class SessionManager {
   ): Promise<void> {
     const session = this.store.get(sessionId);
     if (!session) throw new Error('Session not found');
-    const provider = this.providers.get(session.provider);
-    if (provider?.supportsResume === false) {
-      throw new Error('Session is not resumable: provider does not support resume');
-    }
-    if (!this.hasConversation(session)) {
-      throw new Error('Session is not resumable: provider conversation not found');
-    }
+    const availability = this.resumeAvailability(session);
+    if (!availability.resumable) throw new Error(this.resumeErrorMessage(availability.reason));
     await this.spawnSession(sessionId, options, 'ended', true, onOutput);
-  }
-
-  private hasConversation(session: Session): boolean {
-    const provider = this.providers.get(session.provider);
-    if (provider?.supportsResume === false) return false;
-    return (
-      provider?.hasConversation?.(
-        session.id,
-        session.workspaceId,
-        session.providerSessionId ?? undefined,
-      ) ?? true
-    );
-  }
-
-  private hasCapturedTerminalHistory(sessionId: string): boolean {
-    return this.store.getTerminalOutputHistory(sessionId, 1).length > 0;
   }
 
   private async spawnSession(

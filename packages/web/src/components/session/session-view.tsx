@@ -1,7 +1,9 @@
 import type { Session, TerminalOutputChunk, WSEvent, WSResponse } from '@cubby/core';
-import { MonitorUp } from 'lucide-react';
+import { Folder, MonitorUp } from 'lucide-react';
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { type TerminalHandle, TerminalView } from '../terminal/terminal.js';
+import { FileExplorer } from '../workspace/file-explorer.js';
+import { resumeActionState, resumeErrorMessage } from './session-view-model.js';
 import {
   filterRenderableLiveChunks,
   isRecoveryReconcileData,
@@ -31,13 +33,6 @@ interface SessionViewProps {
 
 function isLiveStatus(status: Session['status']): boolean {
   return status === 'starting' || status === 'running';
-}
-
-function supportsResume(session: Session): boolean {
-  if (session.provider === 'codex' || session.provider === 'opencode') {
-    return Boolean(session.providerSessionId);
-  }
-  return true;
 }
 
 const VISUALLY_HIDDEN_STYLE = {
@@ -187,6 +182,7 @@ export function SessionView({
   const lastFocusRequestRef = useRef(focusRequest);
   const lastEndedReplayLayoutSignalRef = useRef(layoutSignal);
   const pendingInputRef = useRef('');
+  const actionErrorScopeRef = useRef({ id: session.id, status: session.status });
   const [terminalReady, setTerminalReady] = useState(false);
   const [replayState, setReplayState] = useState<ReplayState>(() => emptyReplayState());
   const [recoveryError, setRecoveryError] = useState<string | null>(null);
@@ -194,10 +190,19 @@ export function SessionView({
   const [endedReplayLayoutRevision, setEndedReplayLayoutRevision] = useState(0);
   const [endedReplayFitToContainer, setEndedReplayFitToContainer] = useState(false);
   const [resizeAuthority, setResizeAuthority] = useState(false);
+  const [showFileExplorer, setShowFileExplorer] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
   const live = isLiveStatus(session.status);
   const canReplayHistory = terminalReady && (live || session.status === 'ended');
   const fitTerminalToContainer =
     session.status === 'ended' ? endedReplayFitToContainer : !live || resizeAuthority;
+
+  useEffect(() => {
+    const scope = actionErrorScopeRef.current;
+    if (scope.id === session.id && scope.status === session.status) return;
+    actionErrorScopeRef.current = { id: session.id, status: session.status };
+    setActionError(null);
+  }, [session.id, session.status]);
 
   const setResizeAuthorityState = useCallback((nextAuthority: boolean) => {
     resizeAuthorityRef.current = nextAuthority;
@@ -650,6 +655,7 @@ export function SessionView({
 
   const startSession = useCallback(async () => {
     if (!active) return;
+    setActionError(null);
     replayGenerationRef.current += 1;
     renderedSeqRef.current = 0;
     pendingLiveChunksRef.current = [];
@@ -687,6 +693,7 @@ export function SessionView({
 
   const handleResume = useCallback(async () => {
     if (!active) return;
+    setActionError(null);
     replayGenerationRef.current += 1;
     renderedSeqRef.current = 0;
     pendingLiveChunksRef.current = [];
@@ -704,12 +711,21 @@ export function SessionView({
     const resetOk = await resetDone;
     if (!resetOk) return;
     setResizeAuthorityState(true);
-    const res = await request({
-      id: `resume-${Date.now()}`,
-      cmd: 'session.resume',
-      args: { sessionId: session.id, cwd: session.workspaceId, cols, rows },
-    });
-    if (!res.ok) {
+    try {
+      const res = await request({
+        id: `resume-${Date.now()}`,
+        cmd: 'session.resume',
+        args: { sessionId: session.id, cwd: session.workspaceId, cols, rows },
+      });
+      const errorMessage = resumeErrorMessage(res);
+      if (errorMessage) {
+        setActionError(errorMessage);
+        setResizeAuthorityState(false);
+        return;
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Request failed';
+      setActionError(`Resume failed: ${message}`);
       setResizeAuthorityState(false);
       return;
     }
@@ -808,6 +824,7 @@ export function SessionView({
       : resizeAuthority
         ? 'This view controls terminal size'
         : 'Use this view to control terminal size';
+  const resumeAction = resumeActionState(session);
 
   return (
     <div
@@ -962,7 +979,7 @@ export function SessionView({
               Stop
             </button>
           )}
-          {session.status === 'ended' && supportsResume(session) && (
+          {resumeAction.kind === 'enabled' && (
             <button
               type="button"
               onClick={handleResume}
@@ -977,6 +994,24 @@ export function SessionView({
               }}
             >
               Resume
+            </button>
+          )}
+          {resumeAction.kind === 'unavailable' && (
+            <button
+              type="button"
+              disabled
+              title={resumeAction.reason}
+              style={{
+                padding: '5px 12px',
+                border: '1px solid #2a2a2a',
+                borderRadius: '6px',
+                background: '#101010',
+                color: '#777c76',
+                cursor: 'not-allowed',
+                fontWeight: 650,
+              }}
+            >
+              {resumeAction.label}
             </button>
           )}
         </div>
@@ -1035,7 +1070,68 @@ export function SessionView({
             </div>
           </div>
         )}
+        {actionError && (
+          <div
+            data-testid="session-action-error"
+            style={{
+              position: 'absolute',
+              left: '22px',
+              right: '22px',
+              bottom: '22px',
+              border: '1px solid #4a2b29',
+              borderRadius: '6px',
+              background: '#1f100f',
+              color: '#f0c1b8',
+              padding: '9px 11px',
+              fontSize: '12px',
+              fontWeight: 650,
+              boxShadow: '0 12px 28px rgba(0, 0, 0, 0.38)',
+            }}
+          >
+            {actionError}
+          </div>
+        )}
       </div>
+      <div
+        data-testid="terminal-tools"
+        style={{
+          minHeight: '42px',
+          flexShrink: 0,
+          borderTop: '1px solid #1d1d1d',
+          background: '#080a09',
+          display: 'flex',
+          alignItems: 'center',
+          gap: '8px',
+          padding: '0 14px',
+        }}
+      >
+        <button
+          type="button"
+          aria-label="Open file explorer"
+          title="Open file explorer"
+          onClick={() => setShowFileExplorer(true)}
+          style={{
+            height: '30px',
+            border: '1px solid #2a2d2a',
+            borderRadius: '6px',
+            background: 'linear-gradient(180deg, #161918 0%, #0d0f0e 100%)',
+            color: '#d7d5ca',
+            cursor: 'pointer',
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: '8px',
+            padding: '0 10px',
+            fontSize: '12px',
+            fontWeight: 650,
+          }}
+        >
+          <Folder {...ACTION_ICON_PROPS} />
+          <span>File Explorer</span>
+        </button>
+      </div>
+      {showFileExplorer && (
+        <FileExplorer rootPath={session.workspaceId} onClose={() => setShowFileExplorer(false)} />
+      )}
     </div>
   );
 }

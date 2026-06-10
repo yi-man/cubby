@@ -15,6 +15,8 @@ export interface Session {
   createdAt: string;
   updatedAt: string;
   endedAt: string | null;
+  resumable?: boolean;
+  resumeUnavailableReason?: string | null;
 }
 
 export interface CreateSessionInput {
