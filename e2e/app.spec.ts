@@ -1584,15 +1584,23 @@ test.describe('Cubby MVP', () => {
       await expect
         .poll(
           () =>
-            page.evaluate(() => {
+            page.evaluate((expectedPath) => {
               const commands =
                 (
                   window as typeof window & {
-                    __wsCommands?: Array<{ cmd?: string; args?: { yolo?: boolean } }>;
+                    __wsCommands?: Array<{
+                      cmd?: string;
+                      args?: { workspaceId?: string; yolo?: boolean };
+                    }>;
                   }
                 ).__wsCommands ?? [];
-              return commands.find((command) => command.cmd === 'session.create')?.args?.yolo;
-            }),
+              return commands.some(
+                (command) =>
+                  command.cmd === 'session.create' &&
+                  command.args?.workspaceId === expectedPath &&
+                  command.args?.yolo === true,
+              );
+            }, defaultPath),
           { timeout: 10000 },
         )
         .toBe(true);
@@ -1610,18 +1618,26 @@ test.describe('Cubby MVP', () => {
       await expect
         .poll(
           () =>
-            page.evaluate(() => {
+            page.evaluate((expectedPath) => {
               const commands =
                 (
                   window as typeof window & {
-                    __wsCommands?: Array<{ cmd?: string; args?: { yolo?: boolean } }>;
+                    __wsCommands?: Array<{
+                      cmd?: string;
+                      args?: { workspaceId?: string; yolo?: boolean };
+                    }>;
                   }
                 ).__wsCommands ?? [];
-              return commands.find((command) => command.cmd === 'session.create')?.args?.yolo;
-            }),
+              return commands.some(
+                (command) =>
+                  command.cmd === 'session.create' &&
+                  command.args?.workspaceId === expectedPath &&
+                  command.args?.yolo === false,
+              );
+            }, disabledPath),
           { timeout: 10000 },
         )
-        .toBe(false);
+        .toBe(true);
     } finally {
       rmSync(defaultPath, { recursive: true, force: true });
       rmSync(disabledPath, { recursive: true, force: true });
