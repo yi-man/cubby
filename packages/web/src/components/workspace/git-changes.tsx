@@ -18,8 +18,9 @@ import {
   type GitDiffResponse,
   type GitStatusEntry,
   type GitStatusResponse,
-  gitChangeCountLabel,
   gitChangeStatusDisplay,
+  gitContextSummaryLabel,
+  gitPullRequestLabel,
   isGitDiffResponse,
 } from './git-status-model.js';
 
@@ -42,6 +43,9 @@ const GIT_CHANGES_Z_INDEX = 1000;
 export function GitChanges({ rootPath, status, onClose, onRefresh }: GitChangesProps) {
   const viewportWidth = useViewportWidth();
   const compact = fileExplorerLayoutMode(viewportWidth) === 'compact';
+  const contextSummary = gitContextSummaryLabel(status);
+  const pullRequest = status.context?.pullRequest ?? null;
+  const pullRequestLabel = gitPullRequestLabel(pullRequest);
   const tree = useMemo(() => buildGitChangeTree(status.entries), [status.entries]);
   const directoryPaths = useMemo(() => collectDirectoryPaths(tree), [tree]);
   const statusKey = useMemo(
@@ -208,6 +212,7 @@ export function GitChanges({ rootPath, status, onClose, onRefresh }: GitChangesP
               Git Changes
             </h2>
             <div
+              title={status.context?.worktreeRoot ?? contextSummary}
               style={{
                 marginTop: '2px',
                 overflow: 'hidden',
@@ -218,9 +223,20 @@ export function GitChanges({ rootPath, status, onClose, onRefresh }: GitChangesP
                 fontSize: '11px',
               }}
             >
-              {status.branch ?? 'Git'} · {gitChangeCountLabel(status.entries.length)}
+              {contextSummary}
             </div>
           </div>
+          {pullRequest && pullRequestLabel && (
+            <a
+              href={pullRequest.url}
+              target="_blank"
+              rel="noreferrer noopener"
+              title={pullRequest.title}
+              style={dialogPullRequestLinkStyle()}
+            >
+              {pullRequestLabel}
+            </a>
+          )}
           <button
             type="button"
             aria-label="Refresh git changes"
@@ -818,6 +834,24 @@ function textButtonStyle() {
     padding: '0 9px',
     fontSize: '11px',
     fontWeight: 700,
+  } as const;
+}
+
+function dialogPullRequestLinkStyle() {
+  return {
+    height: '30px',
+    border: '1px solid #253b40',
+    borderRadius: '6px',
+    background: '#071a1f',
+    color: '#9ce8f8',
+    cursor: 'pointer',
+    display: 'inline-flex',
+    alignItems: 'center',
+    padding: '0 10px',
+    fontSize: '12px',
+    fontWeight: 800,
+    textDecoration: 'none',
+    flexShrink: 0,
   } as const;
 }
 
