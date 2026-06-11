@@ -8,7 +8,7 @@ Cubby 是一个自托管的个人 AI 编码工作台。它不是浏览器版 VS 
 
 ### P0 — 远程可用基础
 
-1. **Authenticated remote access**
+1. **Authenticated remote access** — ✅ Done ([#10](https://github.com/yi-man/cubby/issues/10))
    - 密码登录或本地配置 token。
    - Cookie session。
    - WebSocket 鉴权。
@@ -95,7 +95,7 @@ Cubby 是一个自托管的个人 AI 编码工作台。它不是浏览器版 VS 
 
 这些条目已经同步为 GitHub issues：
 
-1. [#10 feat(auth): add password login and websocket authentication](https://github.com/yi-man/cubby/issues/10)
+1. ✅ [#10 feat(auth): add password login and websocket authentication](https://github.com/yi-man/cubby/issues/10)
 2. [#11 feat(cli): add serve/open/stop/status/logs/config commands](https://github.com/yi-man/cubby/issues/11)
 3. [#12 feat(ws): add reconnect, resubscribe, and keepalive support](https://github.com/yi-man/cubby/issues/12)
 4. [#13 feat(preview): add authenticated port preview proxy](https://github.com/yi-man/cubby/issues/13)
