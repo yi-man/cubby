@@ -6,7 +6,8 @@ import { FileExplorer } from '../workspace/file-explorer.js';
 import { GitChanges } from '../workspace/git-changes.js';
 import {
   type GitStatusResponse,
-  gitStatusSummaryLabel,
+  gitContextSummaryLabel,
+  gitPullRequestLabel,
   isGitStatusResponse,
 } from '../workspace/git-status-model.js';
 import { resumeActionState, resumeErrorMessage } from './session-view-model.js';
@@ -861,7 +862,9 @@ export function SessionView({
         ? 'This view controls terminal size'
         : 'Use this view to control terminal size';
   const resumeAction = resumeActionState(session);
-  const gitSummaryLabel = gitStatusError ? 'Git unavailable' : gitStatusSummaryLabel(gitStatus);
+  const gitSummaryLabel = gitStatusError ? 'Git unavailable' : gitContextSummaryLabel(gitStatus);
+  const gitPullRequest = gitStatus?.context?.pullRequest ?? null;
+  const gitPullRequestLabelText = gitPullRequestLabel(gitPullRequest);
   const gitButtonEnabled = Boolean(gitStatus?.isRepo);
 
   return (
@@ -1208,6 +1211,17 @@ export function SessionView({
             {gitSummaryLabel}
           </span>
         </button>
+        {gitPullRequest && gitPullRequestLabelText && (
+          <a
+            href={gitPullRequest.url}
+            target="_blank"
+            rel="noreferrer noopener"
+            title={gitPullRequest.title}
+            style={gitPullRequestLinkStyle()}
+          >
+            {gitPullRequestLabelText}
+          </a>
+        )}
       </div>
       {showFileExplorer && (
         <FileExplorer rootPath={session.workspaceId} onClose={() => setShowFileExplorer(false)} />
@@ -1222,4 +1236,22 @@ export function SessionView({
       )}
     </div>
   );
+}
+
+function gitPullRequestLinkStyle() {
+  return {
+    height: '30px',
+    border: '1px solid #253b40',
+    borderRadius: '6px',
+    background: '#071a1f',
+    color: '#9ce8f8',
+    cursor: 'pointer',
+    display: 'inline-flex',
+    alignItems: 'center',
+    padding: '0 10px',
+    fontSize: '12px',
+    fontWeight: 800,
+    textDecoration: 'none',
+    flexShrink: 0,
+  } as const;
 }

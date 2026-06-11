@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { expect, type Locator, type Page, test } from '@playwright/test';
 
 interface SessionFixture {
@@ -572,6 +572,7 @@ test.describe('Cubby MVP', () => {
     page,
   }) => {
     const workspaceDir = mkdtempSync(join(tmpdir(), 'cubby-git-toolbar-'));
+    const worktreeDir = join(tmpdir(), `cubby-git-toolbar-worktree-${Date.now()}`);
     mkdirSync(join(workspaceDir, 'assets'));
     mkdirSync(join(workspaceDir, 'docs'));
     mkdirSync(join(workspaceDir, 'src'));
@@ -583,12 +584,20 @@ test.describe('Cubby MVP', () => {
       await runGit(workspaceDir, ['config', 'user.name', 'Cubby Test']);
       await runGit(workspaceDir, ['add', '.']);
       await runGit(workspaceDir, ['commit', '-m', 'initial']);
-      writeFileSync(join(workspaceDir, 'docs/guide.md'), 'updated docs\n');
-      writeFileSync(join(workspaceDir, 'src/app.ts'), 'export const value = 2;\n');
-      mkdirSync(join(workspaceDir, 'notes'));
-      writeFileSync(join(workspaceDir, 'notes/todo.txt'), 'write release notes\n');
+      await runGit(workspaceDir, [
+        'worktree',
+        'add',
+        '-b',
+        'feature/git-toolbar-worktree',
+        worktreeDir,
+      ]);
+      writeFileSync(join(worktreeDir, 'docs/guide.md'), 'updated docs\n');
+      writeFileSync(join(worktreeDir, 'src/app.ts'), 'export const value = 2;\n');
+      mkdirSync(join(worktreeDir, 'assets'));
+      mkdirSync(join(worktreeDir, 'notes'));
+      writeFileSync(join(worktreeDir, 'notes/todo.txt'), 'write release notes\n');
       writeFileSync(
-        join(workspaceDir, 'assets/logo.png'),
+        join(worktreeDir, 'assets/logo.png'),
         Buffer.from(
           'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=',
           'base64',
@@ -596,19 +605,23 @@ test.describe('Cubby MVP', () => {
       );
 
       const session = await createSession(page, {
-        workspaceId: workspaceDir,
+        workspaceId: worktreeDir,
         title: `Git Toolbar ${Date.now()}`,
       });
 
       await page.goto('/');
-      const group = page.getByTestId('workspace-group').filter({ hasText: workspaceDir });
+      const group = page.getByTestId('workspace-group').filter({ hasText: worktreeDir });
       await selectSessionTab(group, session.title);
 
       const gitButton = page.getByRole('button', { name: 'Open git changes' });
+      await expect(gitButton).toContainText('worktree');
+      await expect(gitButton).toContainText(basename(worktreeDir));
       await expect(gitButton).toContainText('4 changes');
       await gitButton.click();
       const dialog = page.getByTestId('git-changes-dialog');
       await expect(dialog).toBeVisible();
+      await expect(dialog).toContainText('worktree');
+      await expect(dialog).toContainText(basename(worktreeDir));
       const fileTree = dialog.getByLabel('Changed files');
       await expect(
         fileTree.getByRole('button', { name: 'Open git change docs/guide.md' }),
@@ -647,6 +660,7 @@ test.describe('Cubby MVP', () => {
       await expect(preview).toContainText('+export const value = 2;');
       await expect(preview).not.toContainText('+updated docs');
     } finally {
+      rmSync(worktreeDir, { recursive: true, force: true });
       rmSync(workspaceDir, { recursive: true, force: true });
     }
   });
