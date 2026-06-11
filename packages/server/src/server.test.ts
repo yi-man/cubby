@@ -3,8 +3,10 @@ import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync
 import { homedir, tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { WS_EVENTS } from '@cubby/core';
+import bcrypt from 'bcryptjs';
 import Fastify from 'fastify';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import WebSocket from 'ws';
 import { Database } from './db/index.js';
 import { registerRoutes } from './http/routes.js';
 import { createServer } from './server.js';
@@ -29,14 +31,31 @@ async function waitForServer(port: number): Promise<void> {
   throw new Error(`Server did not become healthy: ${String(lastError)}`);
 }
 
-async function postJson<T>(port: number, path: string, payload?: unknown): Promise<T> {
+async function postJson<T>(
+  port: number,
+  path: string,
+  payload?: unknown,
+  headers: Record<string, string> = {},
+): Promise<T> {
   const response = await fetch(`http://127.0.0.1:${port}${path}`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...headers },
     body: payload === undefined ? undefined : JSON.stringify(payload),
   });
   expect(response.ok).toBe(true);
   return (await response.json()) as T;
+}
+
+async function login(port: number, password: string): Promise<string> {
+  const response = await fetch(`http://127.0.0.1:${port}/auth/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ password }),
+  });
+  expect(response.ok).toBe(true);
+  const cookie = response.headers.get('set-cookie');
+  expect(cookie).toBeTruthy();
+  return cookie ?? '';
 }
 
 async function runGit(cwd: string, args: string[]): Promise<void> {
@@ -82,7 +101,21 @@ describe('createServer', () => {
   const previousMockClaudeProvider = process.env.CUBBY_MOCK_CLAUDE_PROVIDER;
   const previousMockCodexProvider = process.env.CUBBY_MOCK_CODEX_PROVIDER;
   const previousMockOpenCodeProvider = process.env.CUBBY_MOCK_OPENCODE_PROVIDER;
+  const previousAuthPassword = process.env.CUBBY_AUTH_PASSWORD;
+  const previousAuthPasswordHash = process.env.CUBBY_AUTH_PASSWORD_HASH;
+  const previousAllowedOrigins = process.env.CUBBY_ALLOWED_ORIGINS;
   const dataDirs: string[] = [];
+
+  function useTempDataDir(prefix = 'cubby-server-'): string {
+    const dataDir = mkdtempSync(join(tmpdir(), prefix));
+    dataDirs.push(dataDir);
+    process.env.CUBBY_DATA_DIR = dataDir;
+    return dataDir;
+  }
+
+  beforeEach(() => {
+    useTempDataDir();
+  });
 
   afterEach(() => {
     if (previousDataDir === undefined) {
@@ -105,6 +138,21 @@ describe('createServer', () => {
     } else {
       process.env.CUBBY_MOCK_OPENCODE_PROVIDER = previousMockOpenCodeProvider;
     }
+    if (previousAuthPassword === undefined) {
+      delete process.env.CUBBY_AUTH_PASSWORD;
+    } else {
+      process.env.CUBBY_AUTH_PASSWORD = previousAuthPassword;
+    }
+    if (previousAuthPasswordHash === undefined) {
+      delete process.env.CUBBY_AUTH_PASSWORD_HASH;
+    } else {
+      process.env.CUBBY_AUTH_PASSWORD_HASH = previousAuthPasswordHash;
+    }
+    if (previousAllowedOrigins === undefined) {
+      delete process.env.CUBBY_ALLOWED_ORIGINS;
+    } else {
+      process.env.CUBBY_ALLOWED_ORIGINS = previousAllowedOrigins;
+    }
 
     for (const dataDir of dataDirs.splice(0)) {
       rmSync(dataDir, { recursive: true, force: true });
@@ -112,15 +160,179 @@ describe('createServer', () => {
   });
 
   it('stores runtime data in CUBBY_DATA_DIR when configured', async () => {
-    const dataDir = mkdtempSync(join(tmpdir(), 'cubby-server-'));
-    dataDirs.push(dataDir);
-    process.env.CUBBY_DATA_DIR = dataDir;
+    const dataDir = useTempDataDir();
 
     const { app } = await createServer(0);
     await app.ready();
     await app.close();
 
     expect(existsSync(join(dataDir, 'cubby.db'))).toBe(true);
+  });
+
+  it('keeps auth disabled when no password is configured', async () => {
+    const { app } = await createServer(0);
+
+    const statusResponse = await app.inject({ method: 'GET', url: '/auth/status' });
+    const sessionsResponse = await app.inject({ method: 'GET', url: '/api/sessions' });
+    await app.close();
+
+    expect(statusResponse.statusCode).toBe(200);
+    expect(statusResponse.json()).toEqual({ enabled: false, authenticated: true });
+    expect(sessionsResponse.statusCode).toBe(200);
+  });
+
+  it('requires login for protected HTTP routes when password auth is configured', async () => {
+    process.env.CUBBY_AUTH_PASSWORD = 'correct horse battery staple';
+    const { app } = await createServer(0);
+
+    const blockedResponse = await app.inject({ method: 'GET', url: '/api/sessions' });
+    const wrongLoginResponse = await app.inject({
+      method: 'POST',
+      url: '/auth/login',
+      payload: { password: 'wrong' },
+    });
+    const loginResponse = await app.inject({
+      method: 'POST',
+      url: '/auth/login',
+      payload: { password: 'correct horse battery staple' },
+    });
+    const cookie = loginResponse.headers['set-cookie'];
+    const authenticatedResponse = await app.inject({
+      method: 'GET',
+      url: '/api/sessions',
+      headers: { cookie: Array.isArray(cookie) ? cookie[0] : String(cookie) },
+    });
+    await app.close();
+
+    expect(blockedResponse.statusCode).toBe(401);
+    expect(blockedResponse.json()).toEqual({ error: 'Authentication required' });
+    expect(wrongLoginResponse.statusCode).toBe(401);
+    expect(wrongLoginResponse.json()).toEqual({ error: 'Invalid password' });
+    expect(loginResponse.statusCode).toBe(200);
+    expect(loginResponse.json()).toEqual({ ok: true });
+    expect(cookie).toBeTruthy();
+    expect(authenticatedResponse.statusCode).toBe(200);
+  });
+
+  it('requires login when password auth is configured in config.json', async () => {
+    const dataDir = useTempDataDir();
+    writeFileSync(
+      join(dataDir, 'config.json'),
+      JSON.stringify({
+        auth: { passwordHash: bcrypt.hashSync('config-secret', 10) },
+      }),
+    );
+    const { app } = await createServer(0);
+
+    const blockedResponse = await app.inject({ method: 'GET', url: '/api/sessions' });
+    const loginResponse = await app.inject({
+      method: 'POST',
+      url: '/auth/login',
+      payload: { password: 'config-secret' },
+    });
+    const cookie = loginResponse.headers['set-cookie'];
+    const authenticatedResponse = await app.inject({
+      method: 'GET',
+      url: '/api/sessions',
+      headers: { cookie: Array.isArray(cookie) ? cookie[0] : String(cookie) },
+    });
+    await app.close();
+
+    expect(blockedResponse.statusCode).toBe(401);
+    expect(loginResponse.statusCode).toBe(200);
+    expect(authenticatedResponse.statusCode).toBe(200);
+  });
+
+  it('reports authenticated status from the Cubby auth cookie', async () => {
+    process.env.CUBBY_AUTH_PASSWORD = 'status-secret';
+    const { app } = await createServer(0);
+
+    const beforeLoginResponse = await app.inject({ method: 'GET', url: '/auth/status' });
+    const loginResponse = await app.inject({
+      method: 'POST',
+      url: '/auth/login',
+      payload: { password: 'status-secret' },
+    });
+    const cookie = loginResponse.headers['set-cookie'];
+    const afterLoginResponse = await app.inject({
+      method: 'GET',
+      url: '/auth/status',
+      headers: { cookie: Array.isArray(cookie) ? cookie[0] : String(cookie) },
+    });
+    await app.close();
+
+    expect(beforeLoginResponse.json()).toEqual({ enabled: true, authenticated: false });
+    expect(afterLoginResponse.json()).toEqual({ enabled: true, authenticated: true });
+  });
+
+  it('temporarily blocks repeated failed login attempts', async () => {
+    process.env.CUBBY_AUTH_PASSWORD = 'lockout-secret';
+    const { app } = await createServer(0);
+
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const response = await app.inject({
+        method: 'POST',
+        url: '/auth/login',
+        payload: { password: 'wrong' },
+      });
+      expect(response.statusCode).toBe(401);
+    }
+
+    const blockedResponse = await app.inject({
+      method: 'POST',
+      url: '/auth/login',
+      payload: { password: 'lockout-secret' },
+    });
+    await app.close();
+
+    expect(blockedResponse.statusCode).toBe(429);
+    expect(blockedResponse.json()).toEqual({ error: 'Too many failed login attempts' });
+  });
+
+  it('rejects requests from origins outside the allowlist', async () => {
+    process.env.CUBBY_ALLOWED_ORIGINS = 'https://trusted.example';
+    const { app } = await createServer(0);
+
+    const rejectedResponse = await app.inject({
+      method: 'GET',
+      url: '/api/sessions',
+      headers: { origin: 'https://untrusted.example' },
+    });
+    const acceptedResponse = await app.inject({
+      method: 'GET',
+      url: '/api/sessions',
+      headers: { origin: 'https://trusted.example' },
+    });
+    await app.close();
+
+    expect(rejectedResponse.statusCode).toBe(403);
+    expect(rejectedResponse.json()).toEqual({ error: 'Origin is not allowed' });
+    expect(acceptedResponse.statusCode).toBe(200);
+  });
+
+  it('rejects websocket connections without an auth cookie when password auth is configured', async () => {
+    process.env.CUBBY_AUTH_PASSWORD = 'websocket-secret';
+    const { app } = await createServer(0);
+    await app.listen({ port: 0, host: '127.0.0.1' });
+    const address = app.server.address();
+    if (!address || typeof address === 'string') throw new Error('Expected TCP server address');
+
+    const result = await new Promise<{ opened: boolean; statusCode?: number }>((resolve) => {
+      const ws = new WebSocket(`ws://127.0.0.1:${address.port}/ws`);
+      ws.once('open', () => {
+        ws.close();
+        resolve({ opened: true });
+      });
+      ws.once('unexpected-response', (_request, response) => {
+        resolve({ opened: false, statusCode: response.statusCode });
+      });
+      ws.once('error', () => {
+        resolve({ opened: false });
+      });
+    });
+    await app.close();
+
+    expect(result).toEqual({ opened: false, statusCode: 401 });
   });
 
   it('defaults workspace browsing to the user home directory', async () => {
@@ -380,9 +592,7 @@ describe('createServer', () => {
   });
 
   it('marks persisted live sessions as ended on startup', async () => {
-    const dataDir = mkdtempSync(join(tmpdir(), 'cubby-server-'));
-    dataDirs.push(dataDir);
-    process.env.CUBBY_DATA_DIR = dataDir;
+    const dataDir = useTempDataDir();
     const db = new Database(join(dataDir, 'cubby.db'));
     const store = new SessionStore(db);
     const session = store.create({ workspaceId: '/tmp', provider: 'claude-code' });
@@ -401,9 +611,6 @@ describe('createServer', () => {
   });
 
   it('can start sessions with the mock Claude provider for CI E2E', async () => {
-    const dataDir = mkdtempSync(join(tmpdir(), 'cubby-server-'));
-    dataDirs.push(dataDir);
-    process.env.CUBBY_DATA_DIR = dataDir;
     process.env.CUBBY_MOCK_CLAUDE_PROVIDER = '1';
 
     const { app } = await createServer(0);
@@ -429,9 +636,6 @@ describe('createServer', () => {
   });
 
   it('can start sessions with the mock Codex provider for CI E2E', async () => {
-    const dataDir = mkdtempSync(join(tmpdir(), 'cubby-server-'));
-    dataDirs.push(dataDir);
-    process.env.CUBBY_DATA_DIR = dataDir;
     process.env.CUBBY_MOCK_CODEX_PROVIDER = '1';
 
     const { app } = await createServer(0);
@@ -457,9 +661,6 @@ describe('createServer', () => {
   });
 
   it('can start sessions with the mock OpenCode provider for CI E2E', async () => {
-    const dataDir = mkdtempSync(join(tmpdir(), 'cubby-server-'));
-    dataDirs.push(dataDir);
-    process.env.CUBBY_DATA_DIR = dataDir;
     process.env.CUBBY_MOCK_OPENCODE_PROVIDER = '1';
 
     const { app } = await createServer(0);
@@ -667,9 +868,7 @@ describe('createServer', () => {
   });
 
   it('marks active sessions ended when the server closes', async () => {
-    const dataDir = mkdtempSync(join(tmpdir(), 'cubby-server-'));
-    dataDirs.push(dataDir);
-    process.env.CUBBY_DATA_DIR = dataDir;
+    const dataDir = useTempDataDir();
     process.env.CUBBY_MOCK_CLAUDE_PROVIDER = '1';
 
     const { app } = await createServer(0);
@@ -696,6 +895,46 @@ describe('createServer', () => {
     }
   });
 
+  it('creates a default config and requires login when started from the entrypoint', async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'cubby-server-'));
+    dataDirs.push(dataDir);
+    const port = 20_000 + Math.floor(Math.random() * 20_000);
+    const child = spawn('bun', ['packages/server/src/index.ts'], {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        CUBBY_HOST: '127.0.0.1',
+        CUBBY_PORT: String(port),
+        CUBBY_DATA_DIR: dataDir,
+      },
+      stdio: 'ignore',
+    });
+
+    try {
+      await waitForServer(port);
+
+      const statusResponse = await fetch(`http://127.0.0.1:${port}/auth/status`);
+      const blockedResponse = await fetch(`http://127.0.0.1:${port}/api/sessions`);
+      const cookie = await login(port, 'cubby');
+      const authenticatedResponse = await fetch(`http://127.0.0.1:${port}/api/sessions`, {
+        headers: { cookie },
+      });
+
+      expect(existsSync(join(dataDir, 'config.json'))).toBe(true);
+      expect(existsSync(join(dataDir, 'initial-password.txt'))).toBe(false);
+      expect(statusResponse.status).toBe(200);
+      expect(await statusResponse.json()).toEqual({ enabled: true, authenticated: false });
+      expect(blockedResponse.status).toBe(401);
+      expect(authenticatedResponse.status).toBe(200);
+    } finally {
+      if (child.exitCode === null) {
+        const exitPromise = waitForExit(child, 1000).catch(() => {});
+        child.kill('SIGKILL');
+        await exitPromise;
+      }
+    }
+  }, 10000);
+
   it('marks active sessions ended on SIGTERM when started from the entrypoint', async () => {
     const dataDir = mkdtempSync(join(tmpdir(), 'cubby-server-'));
     dataDirs.push(dataDir);
@@ -714,12 +953,18 @@ describe('createServer', () => {
 
     try {
       await waitForServer(port);
-      const session = await postJson<SessionFixture>(port, '/api/sessions', {
-        workspaceId: '/tmp',
-        provider: 'claude-code',
-        title: 'Signal Cleanup',
-      });
-      await postJson(port, `/api/sessions/${session.id}/start`, { cwd: '/tmp' });
+      const cookie = await login(port, 'cubby');
+      const session = await postJson<SessionFixture>(
+        port,
+        '/api/sessions',
+        {
+          workspaceId: '/tmp',
+          provider: 'claude-code',
+          title: 'Signal Cleanup',
+        },
+        { cookie },
+      );
+      await postJson(port, `/api/sessions/${session.id}/start`, { cwd: '/tmp' }, { cookie });
 
       const exitPromise = waitForExit(child);
       child.kill('SIGTERM');

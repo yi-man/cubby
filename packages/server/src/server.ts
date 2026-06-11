@@ -4,7 +4,10 @@ import { WS_EVENTS, type WSRequest } from '@cubby/core';
 import fastifyCors from '@fastify/cors';
 import fastifyStatic from '@fastify/static';
 import fastifyWebsocket from '@fastify/websocket';
+import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import Fastify from 'fastify';
+import { AuthService, buildAuthCookie, clearAuthCookie } from './auth/service.js';
+import { DEFAULT_SERVER_PORT, loadRuntimeConfig, type RuntimeConfig } from './config/runtime.js';
 import { Database } from './db/index.js';
 import { registerRoutes } from './http/routes.js';
 import { ClaudeCodeProvider } from './provider/claude-code.js';
@@ -18,7 +21,10 @@ import { SessionStore } from './session/store.js';
 import { WSCommandHandler } from './ws/handler.js';
 import { WebSocketHub } from './ws/hub.js';
 
-export async function createServer(port = 6300) {
+export async function createServer(
+  port = DEFAULT_SERVER_PORT,
+  runtimeConfig: RuntimeConfig = loadRuntimeConfig(process.env),
+) {
   const app = Fastify({ logger: true });
 
   // Plugins
@@ -47,10 +53,14 @@ export async function createServer(port = 6300) {
   }
 
   // Database — ensure runtime data directory exists
-  const dataDir = process.env.CUBBY_DATA_DIR ?? join(process.cwd(), '.cubby');
-  const dbPath = join(dataDir, 'cubby.db');
+  const dbPath = join(runtimeConfig.dataDir, 'cubby.db');
   mkdirSync(dirname(dbPath), { recursive: true });
   const db = new Database(dbPath);
+  const authService = new AuthService(db, runtimeConfig.auth);
+
+  app.addHook('preHandler', async (request, reply) => {
+    return authenticateHttpRequest(authService, request, reply);
+  });
 
   // Core services
   const sessionStore = new SessionStore(db);
@@ -83,36 +93,46 @@ export async function createServer(port = 6300) {
       hub.broadcastToAll({ evt: WS_EVENTS.SESSION_DELETED, data: { sessionId } });
     },
   });
+  registerAuthRoutes(app, authService);
   app.get('/healthz', async () => ({ status: 'ok' }));
 
   // WebSocket
   app.register(async function wsRoutes(fastify) {
-    fastify.get('/ws', { websocket: true }, (socket) => {
-      hub.addClient(socket);
+    fastify.get(
+      '/ws',
+      {
+        websocket: true,
+        preValidation: async (request, reply) => {
+          return authenticateProtectedRequest(authService, request, reply);
+        },
+      },
+      (socket) => {
+        hub.addClient(socket);
 
-      socket.on('message', async (raw) => {
-        try {
-          const request = JSON.parse(raw.toString()) as WSRequest;
-          app.log.info({ cmd: request.cmd, id: request.id }, 'WS request');
-          const response = await wsHandler.handle(socket, request);
-          app.log.info({ cmd: request.cmd, id: request.id, ok: response.ok }, 'WS response');
-          socket.send(JSON.stringify(response));
-        } catch (err) {
-          app.log.error({ err }, 'WS error');
-          socket.send(
-            JSON.stringify({
-              id: 'error',
-              ok: false,
-              error: { code: 'PARSE_ERROR', message: 'Invalid JSON' },
-            }),
-          );
-        }
-      });
+        socket.on('message', async (raw) => {
+          try {
+            const request = JSON.parse(raw.toString()) as WSRequest;
+            app.log.info({ cmd: request.cmd, id: request.id }, 'WS request');
+            const response = await wsHandler.handle(socket, request);
+            app.log.info({ cmd: request.cmd, id: request.id, ok: response.ok }, 'WS response');
+            socket.send(JSON.stringify(response));
+          } catch (err) {
+            app.log.error({ err }, 'WS error');
+            socket.send(
+              JSON.stringify({
+                id: 'error',
+                ok: false,
+                error: { code: 'PARSE_ERROR', message: 'Invalid JSON' },
+              }),
+            );
+          }
+        });
 
-      socket.on('close', () => {
-        hub.removeClient(socket);
-      });
-    });
+        socket.on('close', () => {
+          hub.removeClient(socket);
+        });
+      },
+    );
   });
 
   // Graceful shutdown
@@ -125,6 +145,71 @@ export async function createServer(port = 6300) {
   });
 
   return { app, port };
+}
+
+function registerAuthRoutes(app: FastifyInstance, authService: AuthService) {
+  app.get('/auth/status', async (request) => ({
+    enabled: authService.enabled,
+    authenticated: authService.isRequestAuthenticated(request),
+  }));
+
+  app.post('/auth/login', async (request, reply) => {
+    if (!authService.enabled) return { ok: true };
+    const body = request.body as { password?: unknown } | undefined;
+    if (typeof body?.password !== 'string') {
+      return reply.code(400).send({ error: 'Password is required' });
+    }
+
+    const result = await authService.login(body.password, request.ip);
+    if (result.status === 'blocked') {
+      return reply.code(429).send({ error: 'Too many failed login attempts' });
+    }
+    if (result.status !== 'ok' || !result.token) {
+      return reply.code(401).send({ error: 'Invalid password' });
+    }
+
+    reply.header('Set-Cookie', buildAuthCookie(result.token));
+    return { ok: true };
+  });
+
+  app.post('/auth/logout', async (request, reply) => {
+    authService.logout(request);
+    reply.header('Set-Cookie', clearAuthCookie());
+    return { ok: true };
+  });
+}
+
+function authenticateHttpRequest(
+  authService: AuthService,
+  request: FastifyRequest,
+  reply: FastifyReply,
+) {
+  if (!authService.isOriginAllowed(request)) {
+    return reply.code(403).send({ error: 'Origin is not allowed' });
+  }
+  if (isPublicHttpPath(request.url)) return;
+  return authenticateProtectedRequest(authService, request, reply);
+}
+
+function authenticateProtectedRequest(
+  authService: AuthService,
+  request: FastifyRequest,
+  reply: FastifyReply,
+) {
+  if (authService.isRequestAuthenticated(request)) return;
+  return reply.code(401).send({ error: 'Authentication required' });
+}
+
+function isPublicHttpPath(url: string): boolean {
+  const pathname = url.split('?', 1)[0] ?? '/';
+  if (pathname === '/' || pathname === '/login' || pathname === '/healthz') return true;
+  if (pathname.startsWith('/auth/')) return true;
+  if (pathname.startsWith('/assets/')) return true;
+  return hasPublicAssetExtension(pathname);
+}
+
+function hasPublicAssetExtension(pathname: string): boolean {
+  return /\.(?:css|js|mjs|map|ico|png|jpg|jpeg|gif|webp|svg|woff2?)$/i.test(pathname);
 }
 
 function createClaudeCodeProvider() {
