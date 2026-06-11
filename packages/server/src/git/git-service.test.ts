@@ -1,5 +1,32 @@
+import { spawnSync } from 'node:child_process';
+import { mkdtempSync, realpathSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { basename, join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { diffModeForEntry, parseGitStatusPorcelain, statusLabelForEntry } from './git-service.js';
+import {
+  diffModeForEntry,
+  parseGitStatusPorcelain,
+  readGitStatus,
+  statusLabelForEntry,
+} from './git-service.js';
+
+function runGit(cwd: string, args: string[]): void {
+  const result = spawnSync('git', args, { cwd, encoding: 'utf8' });
+  if (result.status !== 0) {
+    throw new Error(`git ${args.join(' ')} failed: ${result.stderr}`);
+  }
+}
+
+function createCommittedRepo(prefix: string): string {
+  const root = mkdtempSync(join(tmpdir(), prefix));
+  writeFileSync(join(root, 'README.md'), '# test\n');
+  runGit(root, ['init']);
+  runGit(root, ['config', 'user.email', 'cubby@example.test']);
+  runGit(root, ['config', 'user.name', 'Cubby Test']);
+  runGit(root, ['add', '.']);
+  runGit(root, ['commit', '-m', 'initial']);
+  return root;
+}
 
 describe('git service model', () => {
   it('parses branch and changed files from porcelain status', () => {
@@ -82,5 +109,47 @@ describe('git service model', () => {
     expect(statusLabelForEntry({ path: 'a.txt', staged: '?', worktree: '?', status: '??' })).toBe(
       '??',
     );
+  });
+
+  it('returns repository context for an ordinary checkout', async () => {
+    const root = createCommittedRepo('cubby-git-context-main-');
+    const repoRoot = realpathSync(root);
+
+    const status = await readGitStatus(root);
+
+    expect(status.isRepo).toBe(true);
+    expect(status.context).toMatchObject({
+      repoRoot,
+      worktreeRoot: repoRoot,
+      worktreeName: null,
+      isLinkedWorktree: false,
+      headDetached: false,
+      pullRequest: null,
+    });
+    expect(status.context?.gitDir).toBe(join(repoRoot, '.git'));
+    expect(status.context?.gitCommonDir).toBe(join(repoRoot, '.git'));
+  });
+
+  it('returns linked worktree context for a session workspace inside a worktree', async () => {
+    const root = createCommittedRepo('cubby-git-context-root-');
+    const worktreeRoot = join(tmpdir(), `cubby-git-context-wt-${Date.now()}`);
+    runGit(root, ['worktree', 'add', '-b', 'feature/worktree-context', worktreeRoot]);
+    const repoRoot = realpathSync(root);
+    const canonicalWorktreeRoot = realpathSync(worktreeRoot);
+
+    const status = await readGitStatus(worktreeRoot);
+
+    expect(status.isRepo).toBe(true);
+    expect(status.branch).toBe('feature/worktree-context');
+    expect(status.context).toMatchObject({
+      repoRoot,
+      worktreeRoot: canonicalWorktreeRoot,
+      worktreeName: basename(canonicalWorktreeRoot),
+      isLinkedWorktree: true,
+      headDetached: false,
+      pullRequest: null,
+    });
+    expect(status.context?.gitDir).toContain(join('.git', 'worktrees'));
+    expect(status.context?.gitCommonDir).toBe(join(repoRoot, '.git'));
   });
 });
