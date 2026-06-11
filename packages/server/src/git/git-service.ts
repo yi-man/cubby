@@ -57,7 +57,29 @@ interface RunGitResult {
   stderr: string;
 }
 
-export async function readGitStatus(root: string): Promise<GitStatusResponse> {
+interface GitHubRemote {
+  owner: string;
+  repo: string;
+}
+
+interface GitHubPullRequestResponse {
+  number?: unknown;
+  title?: unknown;
+  html_url?: unknown;
+}
+
+export interface ReadGitStatusOptions {
+  fetchPullRequests?: (
+    owner: string,
+    repo: string,
+    branch: string,
+  ) => Promise<GitHubPullRequestResponse[]>;
+}
+
+export async function readGitStatus(
+  root: string,
+  options: ReadGitStatusOptions = {},
+): Promise<GitStatusResponse> {
   const result = await runGit(root, ['status', '--porcelain=v1', '-b', '-uall']);
   if (!result.ok) {
     if (result.reason === 'not-repo') return { isRepo: false, branch: null, entries: [] };
@@ -67,7 +89,7 @@ export async function readGitStatus(root: string): Promise<GitStatusResponse> {
   const status = parseGitStatusPorcelain(result.value.stdout);
   return {
     ...status,
-    context: await readGitRepositoryContext(root, status.branch),
+    context: await readGitRepositoryContext(root, status.branch, options),
   };
 }
 
@@ -171,6 +193,7 @@ async function runGitOrThrow(root: string, args: string[]): Promise<RunGitResult
 async function readGitRepositoryContext(
   root: string,
   branch: string | null,
+  options: ReadGitStatusOptions,
 ): Promise<GitRepositoryContext | undefined> {
   try {
     const [worktreeRoot, gitDir, gitCommonDir, commit, remoteUrl] = await Promise.all([
@@ -184,6 +207,8 @@ async function readGitRepositoryContext(
     const absoluteGitCommonDir = resolve(worktreeRoot, gitCommonDir);
     const isLinkedWorktree = absoluteGitDir !== absoluteGitCommonDir;
     const repoRoot = isLinkedWorktree ? dirname(absoluteGitCommonDir) : worktreeRoot;
+    const headDetached = branch === null || branch === 'HEAD (detached)';
+    const pullRequest = await readPullRequest(remoteUrl, branch, headDetached, options);
 
     return {
       repoRoot,
@@ -192,13 +217,90 @@ async function readGitRepositoryContext(
       gitDir: absoluteGitDir,
       gitCommonDir: absoluteGitCommonDir,
       isLinkedWorktree,
-      headDetached: branch === null || branch === 'HEAD (detached)',
+      headDetached,
       commit,
       remoteUrl,
-      pullRequest: null,
+      pullRequest,
     };
   } catch {
     return undefined;
+  }
+}
+
+export function parseGitHubRemoteUrl(remoteUrl: string | null): GitHubRemote | null {
+  if (!remoteUrl) return null;
+
+  const sshMatch = /^git@github\.com:([^/]+)\/(.+?)(?:\.git)?$/.exec(remoteUrl);
+  if (sshMatch) {
+    return { owner: sshMatch[1], repo: sshMatch[2] };
+  }
+
+  const httpsMatch = /^https:\/\/github\.com\/([^/]+)\/(.+?)(?:\.git)?$/.exec(remoteUrl);
+  if (httpsMatch) {
+    return { owner: httpsMatch[1], repo: httpsMatch[2] };
+  }
+
+  return null;
+}
+
+async function readPullRequest(
+  remoteUrl: string | null,
+  branch: string | null,
+  headDetached: boolean,
+  options: ReadGitStatusOptions,
+): Promise<GitPullRequest | null> {
+  if (!branch || headDetached) return null;
+  const remote = parseGitHubRemoteUrl(remoteUrl);
+  if (!remote) return null;
+
+  try {
+    const values = await fetchPullRequests(remote.owner, remote.repo, branch, options);
+    const first = values[0];
+    if (
+      !first ||
+      typeof first.number !== 'number' ||
+      typeof first.title !== 'string' ||
+      typeof first.html_url !== 'string'
+    ) {
+      return null;
+    }
+
+    return {
+      provider: 'github',
+      number: first.number,
+      title: first.title,
+      url: first.html_url,
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function fetchPullRequests(
+  owner: string,
+  repo: string,
+  branch: string,
+  options: ReadGitStatusOptions,
+): Promise<GitHubPullRequestResponse[]> {
+  if (options.fetchPullRequests) {
+    return await options.fetchPullRequests(owner, repo, branch);
+  }
+
+  const url = `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(
+    repo,
+  )}/pulls?head=${encodeURIComponent(`${owner}:${branch}`)}&state=open`;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 2500);
+  try {
+    const response = await fetch(url, {
+      headers: { Accept: 'application/vnd.github+json' },
+      signal: controller.signal,
+    });
+    if (!response.ok) return [];
+    const body = await response.json();
+    return Array.isArray(body) ? (body as GitHubPullRequestResponse[]) : [];
+  } finally {
+    clearTimeout(timeout);
   }
 }
 

@@ -5,6 +5,7 @@ import { basename, join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   diffModeForEntry,
+  parseGitHubRemoteUrl,
   parseGitStatusPorcelain,
   readGitStatus,
   statusLabelForEntry,
@@ -151,5 +152,64 @@ describe('git service model', () => {
     });
     expect(status.context?.gitDir).toContain(join('.git', 'worktrees'));
     expect(status.context?.gitCommonDir).toBe(join(repoRoot, '.git'));
+  });
+
+  it('parses GitHub remote URLs', () => {
+    expect(parseGitHubRemoteUrl('git@github.com:yi-man/cubby.git')).toEqual({
+      owner: 'yi-man',
+      repo: 'cubby',
+    });
+    expect(parseGitHubRemoteUrl('https://github.com/yi-man/cubby.git')).toEqual({
+      owner: 'yi-man',
+      repo: 'cubby',
+    });
+    expect(parseGitHubRemoteUrl('https://github.com/yi-man/cubby')).toEqual({
+      owner: 'yi-man',
+      repo: 'cubby',
+    });
+    expect(parseGitHubRemoteUrl('git@gitlab.com:yi-man/cubby.git')).toBeNull();
+  });
+
+  it('returns open GitHub pull request metadata when available', async () => {
+    const root = createCommittedRepo('cubby-git-context-pr-');
+    runGit(root, ['checkout', '-b', 'feature/pr-link']);
+    runGit(root, ['remote', 'add', 'origin', 'git@github.com:yi-man/cubby.git']);
+    const fetchPullRequests = async (owner: string, repo: string, branch: string) => {
+      expect({ owner, repo, branch }).toEqual({
+        owner: 'yi-man',
+        repo: 'cubby',
+        branch: 'feature/pr-link',
+      });
+      return [
+        {
+          number: 8,
+          title: 'Add terminal Git changes dialog',
+          html_url: 'https://github.com/yi-man/cubby/pull/8',
+        },
+      ];
+    };
+
+    const status = await readGitStatus(root, { fetchPullRequests });
+
+    expect(status.context?.pullRequest).toEqual({
+      provider: 'github',
+      number: 8,
+      title: 'Add terminal Git changes dialog',
+      url: 'https://github.com/yi-man/cubby/pull/8',
+    });
+  });
+
+  it('keeps pullRequest null when GitHub PR lookup fails', async () => {
+    const root = createCommittedRepo('cubby-git-context-pr-failure-');
+    runGit(root, ['checkout', '-b', 'feature/pr-link']);
+    runGit(root, ['remote', 'add', 'origin', 'https://github.com/yi-man/cubby.git']);
+
+    const status = await readGitStatus(root, {
+      fetchPullRequests: async () => {
+        throw new Error('network unavailable');
+      },
+    });
+
+    expect(status.context?.pullRequest).toBeNull();
   });
 });
