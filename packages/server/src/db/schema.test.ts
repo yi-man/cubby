@@ -24,4 +24,10 @@ describe('schema', () => {
     expect(SCHEMA_SQL).toContain('session_id TEXT PRIMARY KEY');
     expect(SCHEMA_SQL).toContain('seq INTEGER NOT NULL');
   });
+
+  it('contains auth session and login block tables', () => {
+    expect(SCHEMA_SQL).toContain('CREATE TABLE IF NOT EXISTS auth_sessions');
+    expect(SCHEMA_SQL).toContain('CREATE TABLE IF NOT EXISTS auth_login_blocks');
+    expect(SCHEMA_SQL).toContain('blocked_until INTEGER');
+  });
 });

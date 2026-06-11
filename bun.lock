@@ -27,8 +27,10 @@
       },
       "dependencies": {
         "@cubby/server": "workspace:*",
+        "bcryptjs": "^2.4.3",
       },
       "devDependencies": {
+        "@types/bcryptjs": "^2.4.6",
         "typescript": "^5.7.0",
       },
     },

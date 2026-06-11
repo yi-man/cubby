@@ -6,8 +6,16 @@ import {
   type WSResponse,
 } from '@cubby/core';
 import { useAtom } from 'jotai';
-import { Maximize2, PanelLeft, SlidersHorizontal } from 'lucide-react';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { LockKeyhole, Maximize2, PanelLeft, SlidersHorizontal } from 'lucide-react';
+import {
+  type CSSProperties,
+  type FormEvent,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import { currentSessionIdAtom, sessionsAtom } from './atoms/session.js';
 import { SessionList } from './components/session/session-list.js';
 import { SessionView } from './components/session/session-view.js';
@@ -38,6 +46,15 @@ const APP_SURFACE = '#050606';
 const APP_PANEL = '#0b0c0c';
 const APP_BORDER = '#202020';
 const HEADER_ICON_PROPS = { size: 16, strokeWidth: 2.1, 'aria-hidden': true } as const;
+const AUTH_PANEL_STYLE = {
+  width: 'min(360px, calc(100vw - 40px))',
+  border: `1px solid ${APP_BORDER}`,
+  borderRadius: '8px',
+  background: APP_PANEL,
+  color: '#ffffff',
+  boxShadow: '0 24px 80px rgba(0, 0, 0, 0.48)',
+  padding: '22px',
+} as const;
 
 declare global {
   interface Window {
@@ -108,6 +125,19 @@ function persistCurrentSessionId(sessionId: string | null): void {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
+}
+
+interface AuthStatus {
+  enabled: boolean;
+  authenticated: boolean;
+}
+
+function isAuthStatus(value: unknown): value is AuthStatus {
+  return (
+    isRecord(value) &&
+    typeof value.enabled === 'boolean' &&
+    typeof value.authenticated === 'boolean'
+  );
 }
 
 function isSession(value: unknown): value is Session {
@@ -214,6 +244,201 @@ function canUseBrowserNotifications(): boolean {
 }
 
 export function App() {
+  const [authStatus, setAuthStatus] = useState<AuthStatus | null>(null);
+  const [authStatusError, setAuthStatusError] = useState(false);
+
+  const loadAuthStatus = useCallback(async () => {
+    setAuthStatusError(false);
+    try {
+      const response = await fetch('/auth/status');
+      if (!response.ok) {
+        setAuthStatusError(true);
+        return;
+      }
+      const data = await response.json();
+      if (!isAuthStatus(data)) {
+        setAuthStatusError(true);
+        return;
+      }
+      setAuthStatus(data);
+    } catch {
+      setAuthStatusError(true);
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadAuthStatus();
+  }, [loadAuthStatus]);
+
+  if (authStatus === null) {
+    return <AuthLoadingScreen error={authStatusError} onRetry={loadAuthStatus} />;
+  }
+
+  if (!authStatus.authenticated) {
+    return (
+      <LoginScreen
+        onAuthenticated={() => setAuthStatus({ enabled: authStatus.enabled, authenticated: true })}
+      />
+    );
+  }
+
+  return <AuthenticatedApp />;
+}
+
+function AuthLoadingScreen({ error, onRetry }: { error: boolean; onRetry: () => void }) {
+  return (
+    <div style={authShellStyle()}>
+      <div style={AUTH_PANEL_STYLE}>
+        <div style={authBrandStyle()}>
+          <LockKeyhole size={18} strokeWidth={2.2} aria-hidden />
+          <h1 style={authTitleStyle()}>Cubby</h1>
+        </div>
+        <div style={{ marginTop: '14px', color: '#a8a8a1', fontSize: '13px' }}>
+          {error ? 'Unable to read auth status.' : 'Loading...'}
+        </div>
+        {error && (
+          <button type="button" onClick={onRetry} style={authButtonStyle(true)}>
+            Retry
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function LoginScreen({ onAuthenticated }: { onAuthenticated: () => void }) {
+  const [password, setPassword] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState('');
+
+  const submit = useCallback(
+    async (event: FormEvent<HTMLFormElement>) => {
+      event.preventDefault();
+      if (!password || submitting) return;
+      setSubmitting(true);
+      setError('');
+      try {
+        const response = await fetch('/auth/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ password }),
+        });
+        if (!response.ok) {
+          setError(response.status === 429 ? 'Too many attempts.' : 'Invalid password.');
+          return;
+        }
+        onAuthenticated();
+      } catch {
+        setError('Login failed.');
+      } finally {
+        setSubmitting(false);
+      }
+    },
+    [onAuthenticated, password, submitting],
+  );
+
+  return (
+    <div style={authShellStyle()}>
+      <form onSubmit={submit} style={AUTH_PANEL_STYLE}>
+        <div style={authBrandStyle()}>
+          <LockKeyhole size={18} strokeWidth={2.2} aria-hidden />
+          <h1 style={authTitleStyle()}>Cubby</h1>
+        </div>
+        <label
+          htmlFor="cubby-password"
+          style={{ display: 'block', marginTop: '18px', color: '#d8d8d0', fontSize: '12px' }}
+        >
+          Password
+        </label>
+        <input
+          id="cubby-password"
+          type="password"
+          autoComplete="current-password"
+          value={password}
+          onChange={(event) => {
+            setPassword(event.target.value);
+            setError('');
+          }}
+          style={{
+            width: '100%',
+            height: '38px',
+            marginTop: '7px',
+            boxSizing: 'border-box',
+            border: '1px solid #303330',
+            borderRadius: '7px',
+            background: '#050606',
+            color: '#ffffff',
+            padding: '0 11px',
+            fontSize: '14px',
+            outline: 'none',
+          }}
+        />
+        {error && (
+          <div role="alert" style={{ marginTop: '10px', color: '#f09a8b', fontSize: '12px' }}>
+            {error}
+          </div>
+        )}
+        <button
+          type="submit"
+          disabled={!password || submitting}
+          style={authButtonStyle(Boolean(password) && !submitting)}
+        >
+          {submitting ? 'Signing in' : 'Sign in'}
+        </button>
+      </form>
+    </div>
+  );
+}
+
+function authShellStyle(): CSSProperties {
+  return {
+    width: '100vw',
+    height: '100dvh',
+    background: APP_SURFACE,
+    color: '#ffffff',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    fontFamily: 'system-ui, sans-serif',
+    padding: '20px',
+    boxSizing: 'border-box',
+  };
+}
+
+function authBrandStyle(): CSSProperties {
+  return {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '9px',
+    color: '#ffffff',
+  };
+}
+
+function authTitleStyle(): CSSProperties {
+  return {
+    margin: 0,
+    fontSize: '18px',
+    lineHeight: 1,
+    fontWeight: 750,
+  };
+}
+
+function authButtonStyle(enabled: boolean): CSSProperties {
+  return {
+    width: '100%',
+    height: '38px',
+    marginTop: '16px',
+    border: `1px solid ${enabled ? '#286f7e' : '#2b2d2a'}`,
+    borderRadius: '7px',
+    background: enabled ? '#0d3038' : '#171817',
+    color: enabled ? '#ffffff' : '#777a73',
+    cursor: enabled ? 'pointer' : 'not-allowed',
+    fontSize: '13px',
+    fontWeight: 700,
+  };
+}
+
+function AuthenticatedApp() {
   const { send, request, onMessage, connected } = useWebSocket(getWsUrl());
   const [sessions, setSessions] = useAtom(sessionsAtom);
   const [currentId, setCurrentId] = useAtom(currentSessionIdAtom);

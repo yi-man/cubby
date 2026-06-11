@@ -44,6 +44,10 @@ bun run lint             # Biome lint + format check
 bun run lint:fix         # Biome 自动修复
 ```
 
+正式服务默认监听 `0.0.0.0:6310`。`bun run dev` 的浏览器入口也默认是 `6310`，后端 API/WebSocket 走 dev 专用内部端口 `6300` 并由 Vite 代理；不要把 `CUBBY_PORT` 当作 dev 内部端口覆盖项，dev 端口使用 `CUBBY_WEB_PORT` / `CUBBY_DEV_BACKEND_PORT`。
+
+正式 entrypoint 首次启动必须自动创建 `~/.cubby/config.json`，默认写入 server host/port、auth passwordHash 和 allowedOrigins。默认初始密码固定为 `cubby`，config 内只保存 bcrypt hash，不保存明文密码；改密码使用 `cubby auth set-password <password>`。登录 cookie 默认不设置 `Max-Age` / `Expires`。
+
 ## 代码规范
 
 - TypeScript strict mode

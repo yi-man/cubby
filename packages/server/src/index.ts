@@ -1,4 +1,5 @@
 // Cubby Server - Fastify backend
+import { loadRuntimeConfig } from './config/runtime.js';
 import { createServer } from './server.js';
 
 export { createServer };
@@ -6,9 +7,9 @@ export { createServer };
 // Start if run directly
 const isMain = import.meta.url === `file://${process.argv[1]}`;
 if (isMain) {
-  const port = Number(process.env.CUBBY_PORT ?? 6300);
-  const host = process.env.CUBBY_HOST ?? '0.0.0.0';
-  const { app } = await createServer(port);
+  const runtimeConfig = loadRuntimeConfig(process.env, { createDefaultConfig: true });
+  const { host, port } = runtimeConfig.server;
+  const { app } = await createServer(port, runtimeConfig);
   let closing = false;
   const shutdown = async (signal: string) => {
     if (closing) return;
@@ -24,5 +25,9 @@ if (isMain) {
   process.once('SIGINT', () => void shutdown('SIGINT'));
   process.once('SIGTERM', () => void shutdown('SIGTERM'));
   await app.listen({ port, host });
+  if (runtimeConfig.createdDefaultConfig) {
+    console.log(`Cubby created default config at ${runtimeConfig.configPath}`);
+    console.log(`Cubby initial password: ${runtimeConfig.createdDefaultConfig.initialPassword}`);
+  }
   console.log(`Cubby server listening on http://${host}:${port}`);
 }
