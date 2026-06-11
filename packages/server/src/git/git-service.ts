@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
-import { extname, join } from 'node:path';
+import { basename, dirname, extname, join, resolve } from 'node:path';
 import { promisify } from 'node:util';
 
 const execFileAsync = promisify(execFile);
@@ -20,6 +20,27 @@ export interface GitStatusResponse {
   isRepo: boolean;
   branch: string | null;
   entries: GitStatusEntry[];
+  context?: GitRepositoryContext;
+}
+
+export interface GitRepositoryContext {
+  repoRoot: string;
+  worktreeRoot: string;
+  worktreeName: string | null;
+  gitDir: string;
+  gitCommonDir: string;
+  isLinkedWorktree: boolean;
+  headDetached: boolean;
+  commit: string | null;
+  remoteUrl: string | null;
+  pullRequest: GitPullRequest | null;
+}
+
+export interface GitPullRequest {
+  provider: 'github';
+  number: number;
+  title: string;
+  url: string;
 }
 
 export interface GitDiffResponse {
@@ -43,7 +64,11 @@ export async function readGitStatus(root: string): Promise<GitStatusResponse> {
     throw result.error;
   }
 
-  return parseGitStatusPorcelain(result.value.stdout);
+  const status = parseGitStatusPorcelain(result.value.stdout);
+  return {
+    ...status,
+    context: await readGitRepositoryContext(root, status.branch),
+  };
 }
 
 export async function readGitDiff(
@@ -141,6 +166,52 @@ async function runGitOrThrow(root: string, args: string[]): Promise<RunGitResult
   const result = await runGit(root, args);
   if (!result.ok) throw result.error;
   return result.value;
+}
+
+async function readGitRepositoryContext(
+  root: string,
+  branch: string | null,
+): Promise<GitRepositoryContext | undefined> {
+  try {
+    const [worktreeRoot, gitDir, gitCommonDir, commit, remoteUrl] = await Promise.all([
+      readGitSingleLine(root, ['rev-parse', '--show-toplevel']),
+      readGitSingleLine(root, ['rev-parse', '--absolute-git-dir']),
+      readGitSingleLine(root, ['rev-parse', '--git-common-dir']),
+      readOptionalGitSingleLine(root, ['rev-parse', '--short', 'HEAD']),
+      readOptionalGitSingleLine(root, ['remote', 'get-url', 'origin']),
+    ]);
+    const absoluteGitDir = resolve(worktreeRoot, gitDir);
+    const absoluteGitCommonDir = resolve(worktreeRoot, gitCommonDir);
+    const isLinkedWorktree = absoluteGitDir !== absoluteGitCommonDir;
+    const repoRoot = isLinkedWorktree ? dirname(absoluteGitCommonDir) : worktreeRoot;
+
+    return {
+      repoRoot,
+      worktreeRoot,
+      worktreeName: isLinkedWorktree ? basename(worktreeRoot) : null,
+      gitDir: absoluteGitDir,
+      gitCommonDir: absoluteGitCommonDir,
+      isLinkedWorktree,
+      headDetached: branch === null || branch === 'HEAD (detached)',
+      commit,
+      remoteUrl,
+      pullRequest: null,
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+async function readGitSingleLine(root: string, args: string[]): Promise<string> {
+  const result = await runGitOrThrow(root, args);
+  return result.stdout.trim();
+}
+
+async function readOptionalGitSingleLine(root: string, args: string[]): Promise<string | null> {
+  const result = await runGit(root, args);
+  if (!result.ok) return null;
+  const value = result.value.stdout.trim();
+  return value.length > 0 ? value : null;
 }
 
 async function readContentPreview(root: string, relativePath: string): Promise<GitDiffResponse> {
