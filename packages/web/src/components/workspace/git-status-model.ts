@@ -6,10 +6,31 @@ export interface GitStatusEntry {
   status: string;
 }
 
+export interface GitPullRequest {
+  provider: 'github';
+  number: number;
+  title: string;
+  url: string;
+}
+
+export interface GitRepositoryContext {
+  repoRoot: string;
+  worktreeRoot: string;
+  worktreeName: string | null;
+  gitDir: string;
+  gitCommonDir: string;
+  isLinkedWorktree: boolean;
+  headDetached: boolean;
+  commit: string | null;
+  remoteUrl: string | null;
+  pullRequest: GitPullRequest | null;
+}
+
 export interface GitStatusResponse {
   isRepo: boolean;
   branch: string | null;
   entries: GitStatusEntry[];
+  context?: GitRepositoryContext;
 }
 
 export interface GitDiffResponse {
@@ -52,13 +73,40 @@ function isGitStatusEntry(value: unknown): value is GitStatusEntry {
   );
 }
 
+function isGitPullRequest(value: unknown): value is GitPullRequest {
+  return (
+    isRecord(value) &&
+    value.provider === 'github' &&
+    typeof value.number === 'number' &&
+    typeof value.title === 'string' &&
+    typeof value.url === 'string'
+  );
+}
+
+function isGitRepositoryContext(value: unknown): value is GitRepositoryContext {
+  return (
+    isRecord(value) &&
+    typeof value.repoRoot === 'string' &&
+    typeof value.worktreeRoot === 'string' &&
+    (typeof value.worktreeName === 'string' || value.worktreeName === null) &&
+    typeof value.gitDir === 'string' &&
+    typeof value.gitCommonDir === 'string' &&
+    typeof value.isLinkedWorktree === 'boolean' &&
+    typeof value.headDetached === 'boolean' &&
+    (typeof value.commit === 'string' || value.commit === null) &&
+    (typeof value.remoteUrl === 'string' || value.remoteUrl === null) &&
+    (isGitPullRequest(value.pullRequest) || value.pullRequest === null)
+  );
+}
+
 export function isGitStatusResponse(value: unknown): value is GitStatusResponse {
   return (
     isRecord(value) &&
     typeof value.isRepo === 'boolean' &&
     (typeof value.branch === 'string' || value.branch === null) &&
     Array.isArray(value.entries) &&
-    value.entries.every(isGitStatusEntry)
+    value.entries.every(isGitStatusEntry) &&
+    (isGitRepositoryContext(value.context) || value.context === undefined)
   );
 }
 
@@ -79,9 +127,24 @@ export function gitChangeCountLabel(count: number): string {
 }
 
 export function gitStatusSummaryLabel(status: GitStatusResponse | null): string {
+  return gitContextSummaryLabel(status);
+}
+
+export function gitContextSummaryLabel(status: GitStatusResponse | null): string {
   if (!status) return 'Git';
   if (!status.isRepo) return 'No Git repo';
-  return `${status.branch ?? 'Git'} · ${gitChangeCountLabel(status.entries.length)}`;
+
+  const branch = status.context?.headDetached ? 'HEAD detached' : (status.branch ?? 'Git');
+  const worktree =
+    status.context?.isLinkedWorktree && status.context.worktreeName
+      ? ` · worktree ${status.context.worktreeName}`
+      : '';
+  return `${branch}${worktree} · ${gitChangeCountLabel(status.entries.length)}`;
+}
+
+export function gitPullRequestLabel(pullRequest: GitPullRequest | null | undefined): string | null {
+  if (!pullRequest) return null;
+  return `PR #${pullRequest.number}`;
 }
 
 export function gitChangeStatusDisplay(status: string): { label: string; title: string } {

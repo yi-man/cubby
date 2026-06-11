@@ -3,6 +3,8 @@ import {
   buildGitChangeTree,
   gitChangeCountLabel,
   gitChangeStatusDisplay,
+  gitContextSummaryLabel,
+  gitPullRequestLabel,
   gitStatusSummaryLabel,
   isGitDiffResponse,
   isGitStatusResponse,
@@ -58,6 +60,87 @@ describe('git status model', () => {
         entries: [{ path: 'src/app.ts', staged: ' ', worktree: 'M', status: 'M' }],
       }),
     ).toBe('feature/git-ui · 1 change');
+  });
+
+  it('validates git status responses with context and pull request metadata', () => {
+    expect(
+      isGitStatusResponse({
+        isRepo: true,
+        branch: 'feature/git-ui',
+        entries: [],
+        context: {
+          repoRoot: '/repo',
+          worktreeRoot: '/repo/.worktrees/git-ui',
+          worktreeName: 'git-ui',
+          gitDir: '/repo/.git/worktrees/git-ui',
+          gitCommonDir: '/repo/.git',
+          isLinkedWorktree: true,
+          headDetached: false,
+          commit: 'abc1234',
+          remoteUrl: 'git@github.com:yi-man/cubby.git',
+          pullRequest: {
+            provider: 'github',
+            number: 8,
+            title: 'Add terminal Git changes dialog',
+            url: 'https://github.com/yi-man/cubby/pull/8',
+          },
+        },
+      }),
+    ).toBe(true);
+
+    expect(
+      isGitStatusResponse({
+        isRepo: true,
+        branch: 'feature/git-ui',
+        entries: [],
+        context: { isLinkedWorktree: true },
+      }),
+    ).toBe(false);
+  });
+
+  it('formats git context summary labels', () => {
+    expect(gitContextSummaryLabel(null)).toBe('Git');
+    expect(gitContextSummaryLabel({ isRepo: false, branch: null, entries: [] })).toBe(
+      'No Git repo',
+    );
+    expect(
+      gitContextSummaryLabel({
+        isRepo: true,
+        branch: 'feature/git-ui',
+        entries: [{ path: 'src/app.ts', staged: ' ', worktree: 'M', status: 'M' }],
+      }),
+    ).toBe('feature/git-ui · 1 change');
+    expect(
+      gitContextSummaryLabel({
+        isRepo: true,
+        branch: 'feature/git-ui',
+        entries: [],
+        context: {
+          repoRoot: '/repo',
+          worktreeRoot: '/repo/.worktrees/git-ui',
+          worktreeName: 'git-ui',
+          gitDir: '/repo/.git/worktrees/git-ui',
+          gitCommonDir: '/repo/.git',
+          isLinkedWorktree: true,
+          headDetached: false,
+          commit: 'abc1234',
+          remoteUrl: null,
+          pullRequest: null,
+        },
+      }),
+    ).toBe('feature/git-ui · worktree git-ui · 0 changes');
+  });
+
+  it('formats pull request labels', () => {
+    expect(gitPullRequestLabel(null)).toBeNull();
+    expect(
+      gitPullRequestLabel({
+        provider: 'github',
+        number: 8,
+        title: 'Add terminal Git changes dialog',
+        url: 'https://github.com/yi-man/cubby/pull/8',
+      }),
+    ).toBe('PR #8');
   });
 
   it('formats git status chips for changed files', () => {
