@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   buildGitChangeTree,
   gitChangeCountLabel,
+  gitChangeStatusDisplay,
   gitStatusSummaryLabel,
   isGitDiffResponse,
   isGitStatusResponse,
@@ -57,6 +58,15 @@ describe('git status model', () => {
         entries: [{ path: 'src/app.ts', staged: ' ', worktree: 'M', status: 'M' }],
       }),
     ).toBe('feature/git-ui · 1 change');
+  });
+
+  it('formats git status chips for changed files', () => {
+    expect(gitChangeStatusDisplay('??')).toEqual({ label: 'New', title: 'Untracked (??)' });
+    expect(gitChangeStatusDisplay('M')).toEqual({ label: 'Mod', title: 'Modified (M)' });
+    expect(gitChangeStatusDisplay('A')).toEqual({ label: 'Add', title: 'Added (A)' });
+    expect(gitChangeStatusDisplay('D')).toEqual({ label: 'Del', title: 'Deleted (D)' });
+    expect(gitChangeStatusDisplay('R')).toEqual({ label: 'Ren', title: 'Renamed (R)' });
+    expect(gitChangeStatusDisplay('XY')).toEqual({ label: 'XY', title: 'Git status XY' });
   });
 
   it('builds a directory tree for changed files', () => {

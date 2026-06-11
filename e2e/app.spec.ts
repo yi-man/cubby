@@ -623,6 +623,8 @@ test.describe('Cubby MVP', () => {
         fileTree.getByRole('button', { name: 'Open git change assets/logo.png' }),
       ).toBeVisible();
       await expect(fileTree.getByText('Root')).toHaveCount(0);
+      await expect(fileTree.getByText('??', { exact: true })).toHaveCount(0);
+      await expect(fileTree.getByText('New', { exact: true })).toHaveCount(2);
 
       const preview = dialog.getByTestId('git-diff-preview');
       await expect(preview).toContainText('-initial docs');

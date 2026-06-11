@@ -84,6 +84,29 @@ export function gitStatusSummaryLabel(status: GitStatusResponse | null): string 
   return `${status.branch ?? 'Git'} · ${gitChangeCountLabel(status.entries.length)}`;
 }
 
+export function gitChangeStatusDisplay(status: string): { label: string; title: string } {
+  switch (status) {
+    case '??':
+      return { label: 'New', title: 'Untracked (??)' };
+    case 'M':
+      return { label: 'Mod', title: 'Modified (M)' };
+    case 'A':
+      return { label: 'Add', title: 'Added (A)' };
+    case 'D':
+      return { label: 'Del', title: 'Deleted (D)' };
+    case 'R':
+      return { label: 'Ren', title: 'Renamed (R)' };
+    case 'C':
+      return { label: 'Copy', title: 'Copied (C)' };
+    case 'U':
+      return { label: 'Conflict', title: 'Unmerged conflict (U)' };
+    case '!':
+      return { label: 'Ignored', title: 'Ignored (!)' };
+    default:
+      return { label: status, title: `Git status ${status}` };
+  }
+}
+
 export function buildGitChangeTree(entries: GitStatusEntry[]): GitChangeTreeNode[] {
   const root: GitChangeDirectoryNode = { type: 'directory', name: '', path: '', children: [] };
 

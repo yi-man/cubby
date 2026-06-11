@@ -19,6 +19,7 @@ import {
   type GitStatusEntry,
   type GitStatusResponse,
   gitChangeCountLabel,
+  gitChangeStatusDisplay,
   isGitDiffResponse,
 } from './git-status-model.js';
 
@@ -561,8 +562,11 @@ function BinaryPreview({ preview }: { preview: GitDiffResponse }) {
 }
 
 function StatusChip({ status }: { status: string }) {
+  const display = gitChangeStatusDisplay(status);
+
   return (
     <span
+      title={display.title}
       style={{
         flexShrink: 0,
         border: '1px solid #253b40',
@@ -574,7 +578,7 @@ function StatusChip({ status }: { status: string }) {
         fontWeight: 800,
       }}
     >
-      {status}
+      {display.label}
     </span>
   );
 }
