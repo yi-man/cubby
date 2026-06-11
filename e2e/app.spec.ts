@@ -665,6 +665,59 @@ test.describe('Cubby MVP', () => {
     }
   });
 
+  test('terminal toolbar renders git pull request link from status metadata', async ({ page }) => {
+    const workspaceDir = mkdtempSync(join(tmpdir(), 'cubby-git-pr-link-'));
+    try {
+      const session = await createSession(page, {
+        workspaceId: workspaceDir,
+        title: `Git PR Link ${Date.now()}`,
+      });
+      await page.route('**/api/git/status?**', async (route) => {
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            isRepo: true,
+            branch: 'feature/pr-link',
+            entries: [],
+            context: {
+              repoRoot: workspaceDir,
+              worktreeRoot: workspaceDir,
+              worktreeName: null,
+              gitDir: `${workspaceDir}/.git`,
+              gitCommonDir: `${workspaceDir}/.git`,
+              isLinkedWorktree: false,
+              headDetached: false,
+              commit: 'abc1234',
+              remoteUrl: 'git@github.com:yi-man/cubby.git',
+              pullRequest: {
+                provider: 'github',
+                number: 8,
+                title: 'Add terminal Git changes dialog',
+                url: 'https://github.com/yi-man/cubby/pull/8',
+              },
+            },
+          }),
+        });
+      });
+
+      await page.goto('/');
+      const group = page.getByTestId('workspace-group').filter({ hasText: workspaceDir });
+      await selectSessionTab(group, session.title);
+
+      const link = page.getByRole('link', { name: 'PR #8' });
+      await expect(link).toBeVisible();
+      await expect(link).toHaveAttribute('href', 'https://github.com/yi-man/cubby/pull/8');
+      await expect(link).toHaveAttribute('target', '_blank');
+
+      await page.getByRole('button', { name: 'Open git changes' }).click();
+      const dialog = page.getByTestId('git-changes-dialog');
+      await expect(dialog.getByRole('link', { name: 'PR #8' })).toBeVisible();
+    } finally {
+      rmSync(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
   test('sidebar is expanded by default on desktop and remembers user collapse state', async ({
     page,
   }) => {
