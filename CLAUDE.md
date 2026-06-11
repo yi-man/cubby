@@ -2,7 +2,21 @@
 
 ## 项目简介
 
-Cubby 是一个自托管的浏览器 AI 编码工作区。技术栈：Bun + Fastify + React + SQLite。
+Cubby 是一个自托管的个人 AI 编码工作台。用户在自己的服务器（本机或 VPS）上部署，通过浏览器访问，用它启动、监督、恢复和验收 AI agent 编码会话。
+
+一句话定位：你自己的远程 AI 编码控制台，数据不上云，任何设备都能访问。
+
+当前产品定位不是浏览器版 VS Code，也不是多人协作 IDE。写代码、改文件、跑命令和 Git 操作优先交给 agent session 在终端内完成；Cubby 本身优先提供远程访问安全、会话控制、终端连续性、应用预览、结果审阅、验证记录和环境诊断。
+
+技术栈：Bun + Fastify + React + SQLite。
+
+## 产品原则
+
+- Agent-first：用户主要通过自然语言和终端驱动 agent 完成开发，不把 Cubby 做成完整可编辑 IDE。
+- 个人工作台：默认面向单人自托管使用，先保证个人远程工作流稳定，再考虑团队协作。
+- 审阅优先于手改：文件浏览、diff、session review、verification runs 和 app preview 比内置文件写入更重要。
+- 远程可用性优先：认证、服务管理、断线恢复、端口预览和诊断是远程开发的基础能力。
+- 保守暴露能力：任何能触发终端、agent 或本机文件访问的入口都必须经过认证和路径安全约束。
 
 ## 目录结构
 
@@ -55,7 +69,7 @@ bun run lint:fix         # Biome 自动修复
 
 ### E2E 测试（Playwright，Phase 7 集中写）
 - 核心用户流程必须有 E2E 测试
-- 流程：Agent 编码、文件编辑、Git 操作、认证、移动端
+- 流程：Agent 编码、会话恢复、结果审阅、端口预览、认证、移动端
 - 本地验证必须优先跑真实 Claude CLI，不要用 mock provider 代替真实复现；只有 CI 或明确没有可用 `claude` 的环境才使用 `CUBBY_MOCK_CLAUDE_PROVIDER=1`
 
 ### 不测什么
@@ -81,3 +95,4 @@ bun run lint:fix         # Biome 自动修复
 
 - PRD：docs/PRD.md
 - 开发计划：docs/PLAN.md
+- 当前路线图：docs/ROADMAP.md

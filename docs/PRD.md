@@ -2,9 +2,26 @@
 
 ## 产品定义
 
-**Cubby** 是一个自托管的浏览器 AI 编码工作区。用户在自己的服务器（本机或 VPS）上部署，通过浏览器访问，获得完整的 AI agent 编码体验。
+**Cubby** 是一个自托管的个人 AI 编码工作台。用户在自己的服务器（本机或 VPS）上部署，通过浏览器访问，用它启动、监督、恢复和验收 AI agent 编码会话。
 
-**一句话定位：** 你自己的浏览器编码工作区，数据不上云，任何设备都能访问。
+**一句话定位：** 你自己的远程 AI 编码控制台，数据不上云，任何设备都能访问。
+
+Cubby 的当前定位不是浏览器版 VS Code，也不是多人协作 IDE。代码写入、重构、测试命令和 Git 操作优先交给 agent session 在终端内完成；Cubby 本身优先提供远程访问安全、会话控制、终端连续性、运行预览、结果审阅、验证记录和环境诊断。
+
+### 产品原则
+
+- **Agent-first**：用户主要通过自然语言和终端驱动 agent 完成开发，不把 Cubby 做成完整可编辑 IDE。
+- **个人工作台**：默认面向单人自托管使用，先保证个人远程工作流稳定，再考虑团队协作。
+- **审阅优先于手改**：文件浏览、diff、session review、verification runs 和 app preview 比内置文件写入更重要。
+- **远程可用性优先**：认证、服务管理、断线恢复、端口预览和诊断是远程开发的基础能力。
+- **保守暴露能力**：任何能触发终端、agent 或本机文件访问的入口都必须经过认证和路径安全约束。
+
+### 当前非目标
+
+- 不做完整浏览器 IDE，不以内置 Monaco 编辑保存作为核心路径。
+- 不优先做多用户协作、权限分级和多人同时编辑。
+- 不优先做多 Tab 强控制权；个人使用场景下只保留必要的终端 resize/recovery 保护。
+- 不把 Git 写操作 UI 作为近期核心；提交、push、branch 操作可以先由 agent 在终端内完成。
 
 ## 技术栈
 
@@ -17,7 +34,7 @@
 | 前端 | React 19 + Vite + TypeScript |
 | 状态管理 | Jotai 2 |
 | 终端 | xterm.js 6 |
-| 编辑器 | Monaco Editor |
+| 查看器 | Monaco Editor（只读文件查看和审阅为主） |
 | 通信 | WebSocket（二进制终端 + JSON 命令） |
 | 认证 | Cookie session + bcrypt |
 | 测试 | Vitest（单元/集成）+ Playwright（E2E） |
@@ -147,44 +164,42 @@ cubby/
 - [ ] 断线重连后补发丢失消息
 - [ ] topic glob 订阅正确匹配
 
-#### F6: 文件系统操作
+#### F6: 文件查看与审阅
 - 文件树浏览（递归目录 + gitignore 过滤）
-- 文件 CRUD：read / write / create / mkdir / delete / rename
-- 文件写入 baseHash 冲突检测（乐观并发控制）
+- 文件读取和只读预览（文本、Markdown、图片、常见配置文件）
 - 文件内容搜索（关键词 + 匹配行 + 行号）
-- 文件名搜索
-- chokidar 文件监听（debounce 200ms + .gitignore 过滤）
+- 文件名搜索 / quick open
+- 从 Git diff、session review、验证失败输出跳转到相关文件
 - 图片文件检测和流式服务
 - 路径穿越防护（`resolveSafe`）
 
+> 当前决策：不把文件写入、创建、删除、重命名作为近期核心功能。写操作优先由 agent session 在终端中完成，Cubby 负责让用户能快速审阅 agent 的结果。
+
 **验收标准：**
 - [ ] 文件树正确展示，node_modules 被过滤
-- [ ] 编辑保存后终端 `cat` 验证内容正确
 - [ ] 搜索返回匹配结果
-- [ ] 终端 `touch` 新文件后文件树自动更新
-- [ ] 删除文件需二次确认
-- [ ] 写入冲突（baseHash 不匹配）时返回错误
+- [ ] 打开文本文件后只读预览正确
+- [ ] 打开 Markdown / 图片文件后可用于审阅
+- [ ] 从 diff 或验证失败结果可跳转到相关文件
 - [ ] 路径穿越尝试被拒绝
 
-#### F7: Git 集成
+#### F7: Git 审阅与变更理解
 - git status 解析（porcelain=v2：staged/modified/untracked/deleted + ahead/behind）
 - diff 生成（staged / unstaged）
-- stage / unstage / discard
-- commit 创建
-- branch 列表（local + remote）/ create / checkout
+- 变更文件树和按文件 diff 预览
+- 会话 baseline HEAD → current HEAD 的变更摘要
+- branch / worktree / PR 链接上下文展示
 - git log（提交历史）
 - git show（commit diff by SHA）
-- git push / pull / fetch（含 HTTP auth 支持，网络操作 3 分钟超时）
-- 结构化 GitAuthError（remote/host/reason）
-- 后台定时 auto-fetch（viewer-based，180s 周期 + jitter + 失败退避）
+- 后台定时 auto-fetch（viewer-based，180s 周期 + jitter + 失败退避，可后置）
+
+> 当前决策：stage / unstage / discard / commit / push / pull / branch checkout 等 Git 写操作 UI 不是近期核心。个人工作台场景下，这些操作可以先由 agent 在终端内完成；Cubby 优先补强审阅、验收和上下文展示。
 
 **验收标准：**
 - [ ] 修改文件后 git status 实时更新
-- [ ] stage → commit 流程完整
 - [ ] diff 正确展示
-- [ ] branch 切换正常
-- [ ] push/pull/fetch 可执行（需 remote 配置）
-- [ ] HTTP auth 失败时给出结构化错误
+- [ ] session review 能展示从 baseline 到当前 HEAD 的变更文件
+- [ ] PR 链接和 worktree 上下文展示正确
 
 #### F8: Settings 系统
 - 完整设置项：

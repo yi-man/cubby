@@ -6,6 +6,8 @@
 
 **测试策略：** 边开发边写测试，不攒到最后。每个阶段包含对应的单元测试和集成测试。
 
+> **当前路线更新（2026-06-11）：** Cubby 已重新定位为自托管的个人 AI 编码工作台，而不是浏览器版 VS Code。近期开发优先级以 `docs/ROADMAP.md` 为准：远程访问安全、CLI 服务管理、WebSocket 可靠重连、端口预览、session review、verification runs、workspace intelligence 和 runtime diagnostics。下面的阶段计划保留为历史完整规划，涉及内置文件写入、完整 Git 写操作 UI、多 Tab fencing、完整 IDE/LSP 的内容不再作为近期核心。
+
 ---
 
 ## Phase 0: 项目骨架 + 基础设施（3 天）
