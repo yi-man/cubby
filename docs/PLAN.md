@@ -6,7 +6,7 @@
 
 **测试策略：** 边开发边写测试，不攒到最后。每个阶段包含对应的单元测试和集成测试。
 
-> **当前路线更新（2026-06-11）：** Cubby 已重新定位为自托管的个人 AI 编码工作台，而不是浏览器版 VS Code。近期开发优先级以 `docs/ROADMAP.md` 为准：远程访问安全、CLI 服务管理、WebSocket 可靠重连、端口预览、Git diff、文件查看、Supervisor 检查和 runtime diagnostics。下面的阶段计划保留为历史完整规划，涉及内置文件写入、完整 Git 写操作 UI、多 Tab fencing、完整 IDE/LSP、workspace intelligence、session review 和 verification runs 的内容不再作为近期核心。
+> **当前路线更新（2026-06-11）：** Cubby 已重新定位为自托管的个人 AI 编码工作台，而不是浏览器版 VS Code。近期开发优先级以 `docs/ROADMAP.md` 为准：远程访问安全、CLI 服务管理、WebSocket 可靠重连、端口预览、Git diff、文件查看和 runtime diagnostics。下面的阶段计划保留为历史完整规划，涉及内置文件写入、完整 Git 写操作 UI、多 Tab fencing、完整 IDE/LSP、workspace intelligence、session review、verification runs 和 supervisor 的内容不再作为近期核心。
 
 ---
 
@@ -33,9 +33,8 @@
   - server 代理 `/ws` 和 API 路由到前端 dev server
 
 **core 包基础类型：**
-- [ ] Domain 类型定义：Workspace、Session、Terminal、Provider、Supervisor
+- [ ] Domain 类型定义：Workspace、Session、Terminal、Provider
 - [ ] Session 状态机类型：draft / starting / running / idle / ended
-- [ ] Supervisor 状态机类型：inactive / idle / evaluating / injecting / paused / error / stopped
 - [ ] WebSocket 协议消息类型（ClientMessage / ServerMessage）
 - [ ] 二进制帧格式定义（16 字节帧头：version, type, flags, meta, streamId, payloadSize）
   - 帧类型：Output(1)、Replay(2)、Input(3)、Snapshot(4)
@@ -545,7 +544,7 @@ CREATE TABLE provider_configs (
 - [ ] authAtom（authenticated 状态）
 
 **前端 — Settings UI：**
-- [ ] 设置面板（provider/supervisor/appearance/lsp/updates）
+- [ ] 设置面板（provider/appearance/lsp/updates）
 - [ ] 设置修改后实时生效
 
 **前端 — 响应式 Shell：**
@@ -606,7 +605,7 @@ CREATE TABLE provider_configs (
 
 **server — Workspace Manager：**
 - [ ] open(path)：路径验证 → 创建 Workspace → 启动 watcher → 水合
-- [ ] close(workspaceId)：级联销毁（sessions → terminals → LSP → supervisor → watcher）
+- [ ] close(workspaceId)：级联销毁（sessions → terminals → watcher）
 - [ ] list()：列出已打开工作区
 - [ ] browse(path)：浏览文件系统目录
 - [ ] UI state 持久化（面板宽度、focus mode、pane layout、展开目录）
@@ -683,7 +682,7 @@ CREATE TABLE provider_configs (
 - [ ] 测试覆盖率报告（目标：核心模块 > 80%）
 
 **集成测试补充：**
-- [ ] 跨模块流程：创建会话 → agent 执行 → 文件变更 → Git changes / File Explorer / Supervisor 检查
+- [ ] 跨模块流程：创建会话 → agent 执行 → 文件变更 → Git changes / File Explorer
 - [ ] 错误恢复：终端崩溃 → 自动清理 → 可重新创建
 - [ ] 并发场景：多终端同时写入、多会话并行
 

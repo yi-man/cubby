@@ -42,8 +42,9 @@ Cubby 是一个自托管的个人 AI 编码工作台。它不是浏览器版 VS 
 
 5. **Workspace / Review / Verification surfaces** — Removed
    - Workspace intelligence UI/API 已撤下，避免和 README/项目说明重复。
-   - Session review UI/API 已撤下，改由 Git Changes、File Explorer 和 Supervisor 承担验收入口。
+   - Session review UI/API 已撤下，改由 Git Changes 和 File Explorer 承担验收入口。
    - Verification runs UI/API 已撤下，验证命令继续由 agent 在终端内执行。
+   - Supervisor-lite UI/API 已撤下。
 
 8. **Runtime diagnostics** — ✅ Done ([#17](https://github.com/yi-man/cubby/issues/17))
    - 检查 Claude Code / Codex / OpenCode 是否可用。
@@ -61,11 +62,8 @@ Cubby 是一个自托管的个人 AI 编码工作台。它不是浏览器版 VS 
    - 图片预览。
    - 从 Git diff 跳转到文件。
 
-10. **Supervisor-lite** — ✅ Done ([#19](https://github.com/yi-man/cubby/issues/19))
-    - 给 session 绑定 objective。
-    - 检测长时间无输出或疑似卡住。
-    - 手动触发 Supervisor 检查当前状态。
-    - 保存检查建议，除非用户确认，否则不自动注入。
+10. **Supervisor-lite** — Removed ([#19](https://github.com/yi-man/cubby/issues/19))
+    - 该入口价值不足，已从工具栏和 HTTP API 中撤下。
 
 ## 降低优先级
 
@@ -89,4 +87,4 @@ Cubby 是一个自托管的个人 AI 编码工作台。它不是浏览器版 VS 
 7. ✅ [#16 feat(workspace): add project intelligence summary](https://github.com/yi-man/cubby/issues/16)
 8. ✅ [#17 feat(diagnostics): add runtime diagnostics page](https://github.com/yi-man/cubby/issues/17)
 9. ✅ [#18 feat(workspace): improve read-only file review](https://github.com/yi-man/cubby/issues/18)
-10. ✅ [#19 feat(supervisor): add supervisor-lite review workflow](https://github.com/yi-man/cubby/issues/19)
+10. Removed: [#19 feat(supervisor): add supervisor-lite review workflow](https://github.com/yi-man/cubby/issues/19)

@@ -6,6 +6,7 @@ import type { Database } from '../db/index.js';
 export const AUTH_COOKIE_NAME = 'cubby_auth';
 
 const AUTH_SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+const AUTH_SESSION_TTL_SECONDS = AUTH_SESSION_TTL_MS / 1000;
 const LOGIN_BLOCK_THRESHOLD = 5;
 const LOGIN_BLOCK_MS = 15 * 60 * 1000;
 
@@ -148,7 +149,7 @@ export class AuthService {
 }
 
 export function buildAuthCookie(token: string): string {
-  return `${AUTH_COOKIE_NAME}=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax`;
+  return `${AUTH_COOKIE_NAME}=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${AUTH_SESSION_TTL_SECONDS}`;
 }
 
 export function clearAuthCookie(): string {

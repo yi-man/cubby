@@ -63,29 +63,6 @@ CREATE TABLE IF NOT EXISTS session_reviews (
   FOREIGN KEY (session_id) REFERENCES sessions(id)
 );
 
-CREATE TABLE IF NOT EXISTS session_supervisors (
-  session_id TEXT PRIMARY KEY,
-  workspace_id TEXT NOT NULL,
-  objective TEXT NOT NULL,
-  updated_at TEXT NOT NULL,
-  FOREIGN KEY (session_id) REFERENCES sessions(id)
-);
-
-CREATE TABLE IF NOT EXISTS supervisor_reviews (
-  id TEXT PRIMARY KEY,
-  session_id TEXT NOT NULL,
-  workspace_id TEXT NOT NULL,
-  objective TEXT,
-  created_at TEXT NOT NULL,
-  summary TEXT NOT NULL,
-  suggestions_json TEXT NOT NULL,
-  terminal_tail TEXT NOT NULL,
-  FOREIGN KEY (session_id) REFERENCES sessions(id)
-);
-
-CREATE INDEX IF NOT EXISTS idx_supervisor_reviews_session_id_created_at
-  ON supervisor_reviews(session_id, created_at DESC);
-
 CREATE TABLE IF NOT EXISTS auth_sessions (
   token_hash TEXT PRIMARY KEY,
   created_at INTEGER NOT NULL,

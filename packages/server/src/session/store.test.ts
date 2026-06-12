@@ -230,49 +230,6 @@ describe('SessionStore', () => {
     expect(store.getSessionReview(session.id)).toBeNull();
   });
 
-  it('upserts, loads, and deletes supervisor objectives and reviews', () => {
-    const session = store.create({ workspaceId: '/tmp/test', provider: 'claude-code' });
-
-    const supervisor = store.setSessionObjective({
-      sessionId: session.id,
-      workspaceId: session.workspaceId,
-      objective: 'Finish roadmap item #19',
-    });
-    const review = store.recordSupervisorReview({
-      sessionId: session.id,
-      workspaceId: session.workspaceId,
-      objective: supervisor.objective,
-      summary: 'Reviewer found one follow-up.',
-      suggestions: ['Run bun test before accepting the result.'],
-      terminalTail: 'last terminal output',
-      createdAt: '2026-06-11T10:00:00.000Z',
-    });
-
-    expect(store.getSessionSupervisor(session.id)).toMatchObject({
-      sessionId: session.id,
-      workspaceId: session.workspaceId,
-      objective: 'Finish roadmap item #19',
-    });
-    expect(store.listSupervisorReviews(session.id)).toEqual([review]);
-
-    expect(store.delete(session.id)).toBe(true);
-    expect(store.getSessionSupervisor(session.id)).toBeNull();
-    expect(store.listSupervisorReviews(session.id)).toEqual([]);
-  });
-
-  it('returns the latest terminal output timestamp for idle detection', () => {
-    const session = store.create({ workspaceId: '/tmp/test', provider: 'claude-code' });
-
-    store.appendTerminalOutput(session.id, 'first output');
-    store.appendTerminalOutput(session.id, 'latest output');
-    db.prepare('UPDATE terminal_outputs SET created_at = ? WHERE data = ?').run(
-      '2026-06-11T10:01:00.000Z',
-      'latest output',
-    );
-
-    expect(store.getLatestTerminalOutputAt(session.id)).toBe('2026-06-11T10:01:00.000Z');
-  });
-
   it('returns only the latest terminal run when history contains shell initialization markers', () => {
     const session = store.create({ workspaceId: '/tmp/test', provider: 'claude-code' });
 

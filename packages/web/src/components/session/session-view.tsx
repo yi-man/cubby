@@ -1,5 +1,5 @@
 import type { Session, TerminalOutputChunk, WSEvent, WSResponse } from '@cubby/core';
-import { Folder, GitBranch, MonitorUp, Target } from 'lucide-react';
+import { Folder, GitBranch, MonitorUp } from 'lucide-react';
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { type TerminalHandle, TerminalView } from '../terminal/terminal.js';
 import { FileExplorer } from '../workspace/file-explorer.js';
@@ -17,7 +17,6 @@ import {
 } from '../workspace/port-preview-model.js';
 import { PortPreviews } from '../workspace/port-previews.js';
 import { resumeActionState, resumeErrorMessage } from './session-view-model.js';
-import { SupervisorLite } from './supervisor-lite.js';
 import {
   filterRenderableLiveChunks,
   isRecoveryReconcileData,
@@ -213,7 +212,6 @@ export function SessionView({
   const [fileExplorerTarget, setFileExplorerTarget] = useState<FileExplorerTarget | null>(null);
   const [showGitChanges, setShowGitChanges] = useState(false);
   const [showPortPreviews, setShowPortPreviews] = useState(false);
-  const [showSupervisorLite, setShowSupervisorLite] = useState(false);
   const [gitStatus, setGitStatus] = useState<GitStatusResponse | null>(null);
   const [gitStatusError, setGitStatusError] = useState(false);
   const [previewPorts, setPreviewPorts] = useState<PreviewPort[] | null>(null);
@@ -831,15 +829,6 @@ export function SessionView({
     [session.id, active, live, send, onPromptSubmitted],
   );
 
-  const handleInjectSupervisorSuggestion = useCallback(
-    (suggestion: string) => {
-      if (!active || !live) return;
-      termRef.current?.focus();
-      handleData(suggestion);
-    },
-    [active, live, handleData],
-  );
-
   const handleResize = useCallback(
     (cols: number, rows: number) => {
       terminalSizeRef.current = { cols, rows };
@@ -1314,30 +1303,6 @@ export function SessionView({
           <MonitorUp {...ACTION_ICON_PROPS} />
           <span>{previewSummaryLabel}</span>
         </button>
-        <button
-          type="button"
-          aria-label="Open supervisor"
-          title="Open supervisor"
-          onClick={() => setShowSupervisorLite(true)}
-          style={{
-            height: '30px',
-            border: '1px solid #2a2d2a',
-            borderRadius: '6px',
-            background: 'linear-gradient(180deg, #161918 0%, #0d0f0e 100%)',
-            color: '#d7d5ca',
-            cursor: 'pointer',
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: '8px',
-            padding: '0 10px',
-            fontSize: '12px',
-            fontWeight: 650,
-            flexShrink: 0,
-          }}
-        >
-          <Target {...ACTION_ICON_PROPS} />
-          <span>Supervisor</span>
-        </button>
         {gitPullRequest && gitPullRequestLabelText && (
           <a
             href={gitPullRequest.url}
@@ -1376,15 +1341,6 @@ export function SessionView({
           initialPorts={previewPorts}
           onClose={() => setShowPortPreviews(false)}
           onPortsChange={setPreviewPorts}
-        />
-      )}
-      {showSupervisorLite && (
-        <SupervisorLite
-          sessionId={session.id}
-          rootPath={session.workspaceId}
-          canInject={active && live}
-          onClose={() => setShowSupervisorLite(false)}
-          onInjectSuggestion={handleInjectSupervisorSuggestion}
         />
       )}
     </div>
