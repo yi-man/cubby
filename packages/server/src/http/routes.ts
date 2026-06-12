@@ -1,10 +1,12 @@
-import { open, readdir, realpath, stat } from 'node:fs/promises';
+import { open, readdir, readFile, realpath, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { isAbsolute, join, relative, resolve } from 'node:path';
 import type { Session } from '@cubby/core';
 import type { FastifyInstance, FastifyReply } from 'fastify';
-import { readGitDiff, readGitStatus } from '../git/git-service.js';
+import { readGitDiff, readGitHead, readGitStatus } from '../git/git-service.js';
 import type { SessionManager } from '../session/manager.js';
+import { readWorkspaceIntelligence } from '../workspace/intelligence.js';
+import { imageMimeTypeForPath, searchWorkspace } from '../workspace/review.js';
 
 export interface SessionRouteCallbacks {
   onSessionUpdated?: (session: Session) => void;
@@ -79,6 +81,61 @@ export function registerRoutes(
     }
   });
 
+  app.get('/api/file/raw', async (request, reply) => {
+    const { path, root } = request.query as { path?: string; root?: string };
+    if (!root) {
+      return reply.code(400).send({ error: 'Workspace root is required' });
+    }
+
+    try {
+      const target = await resolveWorkspacePath(path, root);
+      const targetStat = await stat(target.path);
+      if (!targetStat.isFile()) {
+        return reply.code(400).send({ error: 'Path is not a file' });
+      }
+
+      const mimeType = imageMimeTypeForPath(target.path);
+      if (!mimeType) {
+        return reply.code(415).send({ error: 'File is not previewable' });
+      }
+
+      return reply.type(mimeType).send(await readFile(target.path));
+    } catch (err) {
+      return sendFileSystemError(reply, err);
+    }
+  });
+
+  app.get('/api/workspace/search', async (request, reply) => {
+    const { query, root } = request.query as { query?: string; root?: string };
+    if (!root) {
+      return reply.code(400).send({ error: 'Workspace root is required' });
+    }
+    if (typeof query !== 'string') {
+      return reply.code(400).send({ error: 'Search query is required' });
+    }
+
+    try {
+      const target = await resolveWorkspacePath(undefined, root);
+      return await searchWorkspace(target.root ?? target.path, query);
+    } catch (err) {
+      return sendFileSystemError(reply, err);
+    }
+  });
+
+  app.get('/api/workspace/intelligence', async (request, reply) => {
+    const { root } = request.query as { root?: string };
+    if (!root) {
+      return reply.code(400).send({ error: 'Workspace root is required' });
+    }
+
+    try {
+      const target = await resolveWorkspacePath(undefined, root);
+      return await readWorkspaceIntelligence(target.root ?? target.path);
+    } catch (err) {
+      return sendFileSystemError(reply, err);
+    }
+  });
+
   app.get('/api/git/status', async (request, reply) => {
     const { root } = request.query as { root?: string };
     if (!root) {
@@ -115,6 +172,108 @@ export function registerRoutes(
     return sessionManager.listSessions();
   });
 
+  app.get('/api/sessions/:id/review', async (request, reply) => {
+    const { id } = request.params as { id: string };
+    try {
+      const review =
+        sessionManager.getSessionReview(id) ?? (await sessionManager.generateSessionReview(id));
+      return review;
+    } catch (err) {
+      if (isSessionNotFound(err)) {
+        return sendNotFound(reply);
+      }
+      throw err;
+    }
+  });
+
+  app.post('/api/sessions/:id/review', async (request, reply) => {
+    const { id } = request.params as { id: string };
+    try {
+      return await sessionManager.generateSessionReview(id);
+    } catch (err) {
+      if (isSessionNotFound(err)) {
+        return sendNotFound(reply);
+      }
+      throw err;
+    }
+  });
+
+  app.get('/api/sessions/:id/verification-runs', async (request, reply) => {
+    const { id } = request.params as { id: string };
+    try {
+      return sessionManager.listVerificationRuns(id);
+    } catch (err) {
+      if (isSessionNotFound(err)) {
+        return sendNotFound(reply);
+      }
+      throw err;
+    }
+  });
+
+  app.post('/api/sessions/:id/verification-runs', async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const body = request.body as { command?: unknown } | undefined;
+    if (typeof body?.command !== 'string' || !body.command.trim()) {
+      return reply.code(400).send({ error: 'Verification command is required' });
+    }
+
+    try {
+      return await sessionManager.runVerification(id, body.command);
+    } catch (err) {
+      if (isSessionNotFound(err)) {
+        return sendNotFound(reply);
+      }
+      if (isVerificationCommandError(err)) {
+        return reply.code(400).send({ error: err.message });
+      }
+      throw err;
+    }
+  });
+
+  app.get('/api/sessions/:id/supervisor', async (request, reply) => {
+    const { id } = request.params as { id: string };
+    try {
+      return sessionManager.getSupervisorState(id);
+    } catch (err) {
+      if (isSessionNotFound(err)) {
+        return sendNotFound(reply);
+      }
+      throw err;
+    }
+  });
+
+  app.put('/api/sessions/:id/supervisor/objective', async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const body = request.body as { objective?: unknown } | undefined;
+    if (typeof body?.objective !== 'string' || !body.objective.trim()) {
+      return reply.code(400).send({ error: 'Session objective is required' });
+    }
+
+    try {
+      return sessionManager.setSessionObjective(id, body.objective);
+    } catch (err) {
+      if (isSessionNotFound(err)) {
+        return sendNotFound(reply);
+      }
+      if (isSupervisorObjectiveError(err)) {
+        return reply.code(400).send({ error: err.message });
+      }
+      throw err;
+    }
+  });
+
+  app.post('/api/sessions/:id/supervisor/reviews', async (request, reply) => {
+    const { id } = request.params as { id: string };
+    try {
+      return await sessionManager.runSupervisorReview(id);
+    } catch (err) {
+      if (isSessionNotFound(err)) {
+        return sendNotFound(reply);
+      }
+      throw err;
+    }
+  });
+
   app.get('/api/sessions/:id', async (request) => {
     const { id } = request.params as { id: string };
     const session = sessionManager.getSession(id);
@@ -132,12 +291,14 @@ export function registerRoutes(
       title?: string;
       yolo?: unknown;
     };
+    const workspaceId = body.workspaceId ?? process.cwd();
     const session = sessionManager.createSession({
-      workspaceId: body.workspaceId ?? process.cwd(),
+      workspaceId,
       provider: body.provider ?? 'claude-code',
       model: body.model,
       title: body.title,
       yolo: typeof body.yolo === 'boolean' ? body.yolo : undefined,
+      baselineGitHead: await readGitHead(workspaceId),
     });
     return session;
   });
@@ -282,6 +443,14 @@ function isNodeError(err: unknown): err is NodeJS.ErrnoException {
 
 function isSessionNotFound(err: unknown): boolean {
   return err instanceof Error && err.message === 'Session not found';
+}
+
+function isVerificationCommandError(err: unknown): err is Error {
+  return err instanceof Error && err.message === 'Verification command is required';
+}
+
+function isSupervisorObjectiveError(err: unknown): err is Error {
+  return err instanceof Error && err.message === 'Session objective is required';
 }
 
 function normalizeTerminalDimension(

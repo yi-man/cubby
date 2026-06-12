@@ -1,6 +1,7 @@
 import type { WSCommand, WSRequest, WSResponse } from '@cubby/core';
 import { WS_COMMANDS, WS_EVENTS } from '@cubby/core';
 import type { WebSocket } from 'ws';
+import { readGitHead } from '../git/git-service.js';
 import type { SessionManager } from '../session/manager.js';
 import type { WebSocketHub } from './hub.js';
 
@@ -57,7 +58,7 @@ export class WSCommandHandler {
     }
   }
 
-  private sessionCreate(req: WSRequest): WSResponse {
+  private async sessionCreate(req: WSRequest): Promise<WSResponse> {
     const { workspaceId, provider, model, title, yolo } = req.args as {
       workspaceId: string;
       provider: string;
@@ -71,6 +72,7 @@ export class WSCommandHandler {
       model,
       title,
       yolo: typeof yolo === 'boolean' ? yolo : undefined,
+      baselineGitHead: await readGitHead(workspaceId),
     });
     return { id: req.id, ok: true, data: session };
   }

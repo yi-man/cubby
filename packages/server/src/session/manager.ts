@@ -1,15 +1,21 @@
 import { Buffer } from 'node:buffer';
+import { spawn } from 'node:child_process';
 import type {
   AgentProcess,
   AgentProvider,
   CreateSessionInput,
   RecoveryReconcileResult,
   Session,
+  SessionReview,
+  SessionSupervisorState,
   SpawnOptions,
+  SupervisorReview,
   TerminalOutputChunk,
   TerminalReplayResult,
   TerminalSnapshotResult,
+  VerificationRun,
 } from '@cubby/core';
+import { readGitSessionReview } from '../git/git-service.js';
 import { RingBuffer } from '../terminal/ring-buffer.js';
 import { HeadlessSnapshotBuffer } from '../terminal/terminal-snapshot-buffer.js';
 import type { SessionStore } from './store.js';
@@ -18,6 +24,19 @@ const OUTPUT_HISTORY_LIMIT = 5000;
 const SNAPSHOT_PERSIST_DEBOUNCE_MS = 250;
 const RESUME_UNSUPPORTED_REASON = 'Provider does not support resume';
 const RESUME_CONVERSATION_MISSING_REASON = 'Provider conversation not found';
+const MAX_VERIFICATION_OUTPUT_SUMMARY_CHARS = 12_000;
+const VERIFICATION_TIMEOUT_MS = 120_000;
+const SUPERVISOR_IDLE_THRESHOLD_MS = 5 * 60 * 1000;
+const SUPERVISOR_TERMINAL_TAIL_CHARS = 4000;
+const ESCAPE_CHAR = String.fromCharCode(0x1b);
+const BELL_CHAR = String.fromCharCode(0x07);
+const OSC_SEQUENCE_PATTERN = new RegExp(
+  `${ESCAPE_CHAR}\\][\\s\\S]*?(?:${BELL_CHAR}|${ESCAPE_CHAR}\\\\)`,
+  'g',
+);
+const CSI_SEQUENCE_PATTERN = new RegExp(`${ESCAPE_CHAR}\\[[0-?]*[ -/]*[@-~]`, 'g');
+const CHARSET_SEQUENCE_PATTERN = new RegExp(`${ESCAPE_CHAR}[()][A-Za-z0-9]`, 'g');
+const SINGLE_ESCAPE_PATTERN = new RegExp(`${ESCAPE_CHAR}[0-9A-Za-z=>]`, 'g');
 
 interface ResumeAvailability {
   resumable: boolean;
@@ -514,6 +533,133 @@ export class SessionManager {
     return [];
   }
 
+  async generateSessionReview(sessionId: string): Promise<SessionReview> {
+    const session = this.store.get(sessionId);
+    if (!session) throw new Error('Session not found');
+
+    const gitReview = await readGitSessionReview(session.workspaceId, session.baselineGitHead);
+    const review: SessionReview = {
+      sessionId,
+      workspaceId: session.workspaceId,
+      generatedAt: new Date().toISOString(),
+      baselineGitHead: gitReview.baselineGitHead,
+      currentGitHead: gitReview.currentGitHead,
+      changedFiles: gitReview.changedFiles,
+      summary: gitReview.summary,
+      verificationRuns: this.store.listVerificationRuns(sessionId),
+      lastOutput: this.getOutputHistory(sessionId).join(''),
+      exitCode: session.exitCode,
+    };
+    this.store.upsertSessionReview(review);
+    return review;
+  }
+
+  getSessionReview(sessionId: string): SessionReview | null {
+    return this.store.getSessionReview(sessionId);
+  }
+
+  listVerificationRuns(sessionId: string): VerificationRun[] {
+    const session = this.store.get(sessionId);
+    if (!session) throw new Error('Session not found');
+    return this.store.listVerificationRuns(sessionId);
+  }
+
+  async runVerification(sessionId: string, command: string): Promise<VerificationRun> {
+    const session = this.store.get(sessionId);
+    if (!session) throw new Error('Session not found');
+    const normalizedCommand = command.trim();
+    if (!normalizedCommand) throw new Error('Verification command is required');
+
+    const startedAt = new Date();
+    const startedMs = Date.now();
+    const result = await runVerificationCommand(session.workspaceId, normalizedCommand);
+    const completedAt = new Date();
+
+    return this.store.recordVerificationRun({
+      sessionId,
+      workspaceId: session.workspaceId,
+      command: normalizedCommand,
+      exitCode: result.exitCode,
+      durationMs: Math.max(0, Date.now() - startedMs),
+      outputSummary: result.outputSummary,
+      startedAt: startedAt.toISOString(),
+      completedAt: completedAt.toISOString(),
+    });
+  }
+
+  setSessionObjective(sessionId: string, objective: string): SessionSupervisorState {
+    const session = this.store.get(sessionId);
+    if (!session) throw new Error('Session not found');
+    const trimmedObjective = objective.trim();
+    if (!trimmedObjective) throw new Error('Session objective is required');
+
+    this.store.setSessionObjective({
+      sessionId,
+      workspaceId: session.workspaceId,
+      objective: trimmedObjective,
+    });
+    return this.getSupervisorState(sessionId);
+  }
+
+  getSupervisorState(sessionId: string): SessionSupervisorState {
+    const session = this.store.get(sessionId);
+    if (!session) throw new Error('Session not found');
+    const supervisor = this.store.getSessionSupervisor(sessionId);
+    const objective = supervisor?.objective ?? null;
+    const lastOutputAt = this.store.getLatestTerminalOutputAt(sessionId);
+    const idleForMs = lastOutputAt ? Math.max(0, Date.now() - new Date(lastOutputAt).getTime()) : 0;
+    const terminalTail = terminalTailFromHistory(this.getOutputHistory(sessionId));
+    const inputBlocked = isLiveSession(session.status) && terminalLooksInputBlocked(terminalTail);
+    const idle =
+      isLiveSession(session.status) &&
+      lastOutputAt !== null &&
+      idleForMs >= SUPERVISOR_IDLE_THRESHOLD_MS;
+    const stuckReasons: string[] = [];
+    if (inputBlocked) stuckReasons.push('Terminal appears to be waiting for input');
+    if (idle) stuckReasons.push(`No terminal output for ${formatIdleMinutes(idleForMs)}m`);
+
+    let status: SessionSupervisorState['status'];
+    if (!objective) {
+      status = 'unconfigured';
+    } else if (session.status === 'ended') {
+      status = 'ended';
+    } else if (inputBlocked) {
+      status = 'stuck';
+    } else if (idle) {
+      status = 'idle';
+    } else {
+      status = 'watching';
+    }
+
+    return {
+      sessionId,
+      workspaceId: session.workspaceId,
+      objective,
+      status,
+      lastOutputAt,
+      idleForMs,
+      stuckReasons,
+      reviews: this.store.listSupervisorReviews(sessionId),
+    };
+  }
+
+  async runSupervisorReview(sessionId: string): Promise<SupervisorReview> {
+    const session = this.store.get(sessionId);
+    if (!session) throw new Error('Session not found');
+    const state = this.getSupervisorState(sessionId);
+    const sessionReview = await this.generateSessionReview(sessionId);
+    const suggestions = buildSupervisorSuggestions(state, sessionReview);
+
+    return this.store.recordSupervisorReview({
+      sessionId,
+      workspaceId: session.workspaceId,
+      objective: state.objective,
+      summary: formatSupervisorReviewSummary(state, sessionReview),
+      suggestions,
+      terminalTail: terminalTailFromHistory(this.getOutputHistory(sessionId)),
+    });
+  }
+
   private getOutputHistoryChunks(session: Session): TerminalOutputChunk[] {
     const persistedHistory = this.store.getTerminalOutputChunks(
       session.id,
@@ -663,6 +809,150 @@ function synthesizeOutputChunks(history: string[]): { chunks: TerminalOutputChun
     return { data, seqStart, seq };
   });
   return { chunks, seq };
+}
+
+function terminalTailFromHistory(history: string[]): string {
+  return history.join('').slice(-SUPERVISOR_TERMINAL_TAIL_CHARS);
+}
+
+function terminalLooksInputBlocked(terminalTail: string): boolean {
+  const normalized = normalizeTerminalTextForDetection(terminalTail);
+  return [
+    'waiting for input',
+    'press enter',
+    'enter to confirm',
+    'esc to cancel',
+    'continue?',
+    'do you want to proceed',
+    'are you sure',
+    'select an option',
+    'y/n',
+    '[y/n]',
+  ].some((marker) => normalized.includes(marker));
+}
+
+function normalizeTerminalTextForDetection(text: string): string {
+  return replaceTerminalControlCharacters(
+    text
+      .replace(OSC_SEQUENCE_PATTERN, ' ')
+      .replace(CSI_SEQUENCE_PATTERN, ' ')
+      .replace(CHARSET_SEQUENCE_PATTERN, ' ')
+      .replace(SINGLE_ESCAPE_PATTERN, ' '),
+  )
+    .replace(/\s+/g, ' ')
+    .toLowerCase();
+}
+
+function replaceTerminalControlCharacters(text: string): string {
+  let normalized = '';
+  for (const char of text) {
+    const code = char.charCodeAt(0);
+    normalized += code <= 0x1f || code === 0x7f ? ' ' : char;
+  }
+  return normalized;
+}
+
+function formatIdleMinutes(idleForMs: number): number {
+  return Math.max(1, Math.round(idleForMs / 60_000));
+}
+
+function formatSupervisorReviewSummary(
+  state: SessionSupervisorState,
+  review: SessionReview,
+): string {
+  const objective = state.objective ?? 'No objective';
+  const fileCount =
+    review.summary.total === 1 ? '1 changed file' : `${review.summary.total} changed files`;
+  const verificationCount =
+    review.verificationRuns.length === 1
+      ? '1 verification run'
+      : `${review.verificationRuns.length} verification runs`;
+  return `Reviewer checked "${objective}": ${fileCount}, ${verificationCount}, supervisor status ${state.status}.`;
+}
+
+function buildSupervisorSuggestions(
+  state: SessionSupervisorState,
+  review: SessionReview,
+): string[] {
+  const suggestions: string[] = [];
+
+  if (!state.objective) {
+    suggestions.push('Set a session objective before accepting the result.');
+  }
+  if (state.status === 'stuck') {
+    suggestions.push('Respond to the waiting prompt or ask the agent for a concise status update.');
+  } else if (state.status === 'idle') {
+    suggestions.push('Ask the agent for a concise status update against the objective.');
+  }
+
+  for (const run of review.verificationRuns) {
+    if (run.exitCode === 0) continue;
+    suggestions.push(`Fix failing verification: ${run.command}.`);
+  }
+
+  if (review.verificationRuns.length === 0) {
+    suggestions.push('Run a verification command before accepting the result.');
+  }
+  if (review.summary.total > 0) {
+    suggestions.push('Review changed files against the objective before accepting.');
+  }
+  if (suggestions.length === 0) {
+    suggestions.push('Review the result against the objective before accepting.');
+  }
+
+  return Array.from(new Set(suggestions));
+}
+
+function runVerificationCommand(
+  cwd: string,
+  command: string,
+): Promise<{ exitCode: number | null; outputSummary: string }> {
+  return new Promise((resolve) => {
+    const child = spawn(command, {
+      cwd,
+      shell: true,
+      windowsHide: true,
+    });
+    let output = '';
+    let settled = false;
+    let timedOut = false;
+    let timeout: ReturnType<typeof setTimeout>;
+
+    const appendOutput = (chunk: unknown) => {
+      output += String(chunk);
+      if (output.length > MAX_VERIFICATION_OUTPUT_SUMMARY_CHARS) {
+        output = output.slice(-MAX_VERIFICATION_OUTPUT_SUMMARY_CHARS);
+      }
+    };
+    const finish = (exitCode: number | null, extraOutput = '') => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      if (extraOutput) appendOutput(extraOutput);
+      resolve({
+        exitCode,
+        outputSummary: output,
+      });
+    };
+
+    timeout = setTimeout(() => {
+      timedOut = true;
+      child.kill('SIGTERM');
+    }, VERIFICATION_TIMEOUT_MS);
+
+    child.stdout?.on('data', appendOutput);
+    child.stderr?.on('data', appendOutput);
+    child.once('error', (err) => {
+      finish(null, err instanceof Error ? err.message : String(err));
+    });
+    child.once('close', (code) => {
+      if (timedOut) {
+        finish(124, `\nCommand timed out after ${VERIFICATION_TIMEOUT_MS}ms\n`);
+        return;
+      }
+      finish(code);
+    });
+  });
 }
 
 function replayOutputChunks(

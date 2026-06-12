@@ -52,6 +52,37 @@ export interface GitDiffResponse {
   dataUrl?: string;
 }
 
+export type GitSessionReviewChangeStatus =
+  | 'added'
+  | 'modified'
+  | 'deleted'
+  | 'renamed'
+  | 'copied'
+  | 'untracked';
+
+export interface GitSessionReviewChange {
+  path: string;
+  originalPath?: string;
+  status: GitSessionReviewChangeStatus;
+}
+
+export interface GitSessionReviewSummary {
+  total: number;
+  added: number;
+  modified: number;
+  deleted: number;
+  renamed: number;
+  untracked: number;
+}
+
+export interface GitSessionReview {
+  isRepo: boolean;
+  baselineGitHead: string | null;
+  currentGitHead: string | null;
+  changedFiles: GitSessionReviewChange[];
+  summary: GitSessionReviewSummary;
+}
+
 interface RunGitResult {
   stdout: string;
   stderr: string;
@@ -93,6 +124,51 @@ export async function readGitStatus(
   };
 }
 
+export async function readGitHead(root: string): Promise<string | null> {
+  const result = await runGit(root, ['rev-parse', 'HEAD']);
+  if (!result.ok) return null;
+  const head = result.value.stdout.trim();
+  return head.length > 0 ? head : null;
+}
+
+export async function readGitSessionReview(
+  root: string,
+  baselineGitHead: string | null,
+): Promise<GitSessionReview> {
+  const currentGitHead = await readGitHead(root);
+  if (!currentGitHead || !baselineGitHead) {
+    return emptyGitSessionReview(Boolean(currentGitHead), baselineGitHead, currentGitHead);
+  }
+
+  const diffResult = await runGit(root, [
+    'diff',
+    '--name-status',
+    '--find-renames',
+    baselineGitHead,
+  ]);
+  if (!diffResult.ok) {
+    return emptyGitSessionReview(true, baselineGitHead, currentGitHead);
+  }
+
+  const changes = parseGitNameStatus(diffResult.value.stdout);
+  const untracked = await readUntrackedFiles(root);
+  const seenPaths = new Set(changes.map((change) => change.path));
+  for (const path of untracked) {
+    if (!seenPaths.has(path)) {
+      changes.push({ path, status: 'untracked' });
+    }
+  }
+
+  changes.sort((left, right) => left.path.localeCompare(right.path));
+  return {
+    isRepo: true,
+    baselineGitHead,
+    currentGitHead,
+    changedFiles: changes,
+    summary: summarizeGitSessionReviewChanges(changes),
+  };
+}
+
 export async function readGitDiff(
   root: string,
   relativePath: string,
@@ -127,6 +203,91 @@ export async function readGitDiff(
     content: chunks.join(''),
     language: 'diff',
   };
+}
+
+function emptyGitSessionReview(
+  isRepo: boolean,
+  baselineGitHead: string | null,
+  currentGitHead: string | null,
+): GitSessionReview {
+  return {
+    isRepo,
+    baselineGitHead,
+    currentGitHead,
+    changedFiles: [],
+    summary: summarizeGitSessionReviewChanges([]),
+  };
+}
+
+async function readUntrackedFiles(root: string): Promise<string[]> {
+  const result = await runGit(root, ['ls-files', '--others', '--exclude-standard']);
+  if (!result.ok) return [];
+  return result.value.stdout.split(/\r?\n/).filter(Boolean);
+}
+
+function parseGitNameStatus(output: string): GitSessionReviewChange[] {
+  return output
+    .split(/\r?\n/)
+    .filter(Boolean)
+    .map((line) => {
+      const parts = line.split('\t');
+      const status = parts[0] ?? '';
+      if (status.startsWith('R')) {
+        return {
+          originalPath: parts[1] ?? '',
+          path: parts[2] ?? parts[1] ?? '',
+          status: 'renamed' as const,
+        };
+      }
+      if (status.startsWith('C')) {
+        return {
+          originalPath: parts[1] ?? '',
+          path: parts[2] ?? parts[1] ?? '',
+          status: 'copied' as const,
+        };
+      }
+      return {
+        path: parts[1] ?? '',
+        status: gitSessionReviewStatus(status[0] ?? 'M'),
+      };
+    })
+    .filter((change) => change.path.length > 0);
+}
+
+function gitSessionReviewStatus(status: string): GitSessionReviewChangeStatus {
+  switch (status) {
+    case 'A':
+      return 'added';
+    case 'D':
+      return 'deleted';
+    case 'R':
+      return 'renamed';
+    case 'C':
+      return 'copied';
+    default:
+      return 'modified';
+  }
+}
+
+function summarizeGitSessionReviewChanges(
+  changes: GitSessionReviewChange[],
+): GitSessionReviewSummary {
+  const summary: GitSessionReviewSummary = {
+    total: changes.length,
+    added: 0,
+    modified: 0,
+    deleted: 0,
+    renamed: 0,
+    untracked: 0,
+  };
+  for (const change of changes) {
+    if (change.status === 'added') summary.added += 1;
+    if (change.status === 'modified') summary.modified += 1;
+    if (change.status === 'deleted') summary.deleted += 1;
+    if (change.status === 'renamed') summary.renamed += 1;
+    if (change.status === 'untracked') summary.untracked += 1;
+  }
+  return summary;
 }
 
 export function parseGitStatusPorcelain(output: string): GitStatusResponse {

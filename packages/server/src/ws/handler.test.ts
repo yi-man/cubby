@@ -35,6 +35,16 @@ describe('WSCommandHandler', () => {
     } catch {}
   });
 
+  function testWebSocket(send: (message: string) => void): WebSocket {
+    return {
+      readyState: 1,
+      send,
+      on: () => undefined,
+      ping: () => undefined,
+      terminate: () => undefined,
+    } as unknown as WebSocket;
+  }
+
   it('creates a session through websocket command with explicit yolo mode', async () => {
     const response = await handler.handle({} as WebSocket, {
       id: 'create-1',
@@ -66,10 +76,7 @@ describe('WSCommandHandler', () => {
       title: 'Draft',
     });
     const messages: string[] = [];
-    const client = {
-      readyState: 1,
-      send: (message: string) => messages.push(message),
-    } as unknown as WebSocket;
+    const client = testWebSocket((message) => messages.push(message));
     hub.addClient(client);
 
     const response = await handler.handle(client, {
@@ -133,10 +140,7 @@ describe('WSCommandHandler', () => {
       title: 'Delete me',
     });
     const messages: string[] = [];
-    const client = {
-      readyState: 1,
-      send: (message: string) => messages.push(message),
-    } as unknown as WebSocket;
+    const client = testWebSocket((message) => messages.push(message));
     hub.addClient(client);
 
     const response = await handler.handle(client, {
@@ -490,10 +494,7 @@ describe('WSCommandHandler', () => {
 
   it('subscribes the starting websocket before the first terminal output', async () => {
     const sent: unknown[] = [];
-    const ws = {
-      readyState: 1,
-      send: (message: string) => sent.push(JSON.parse(message)),
-    } as unknown as WebSocket;
+    const ws = testWebSocket((message) => sent.push(JSON.parse(message)));
     const provider: AgentProvider = {
       name: 'mock',
       async spawn(
@@ -675,10 +676,7 @@ describe('WSCommandHandler', () => {
       async kill() {},
     };
     const sent: unknown[] = [];
-    const ws = {
-      readyState: 1,
-      send: (message: string) => sent.push(JSON.parse(message)),
-    } as unknown as WebSocket;
+    const ws = testWebSocket((message) => sent.push(JSON.parse(message)));
     hub.addClient(ws);
     manager.registerProvider(provider);
     const session = manager.createSession({ workspaceId: '/tmp', provider: 'mock' });

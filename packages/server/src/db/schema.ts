@@ -7,6 +7,7 @@ CREATE TABLE IF NOT EXISTS sessions (
   provider_session_id TEXT,
   model TEXT,
   yolo INTEGER NOT NULL DEFAULT 1,
+  baseline_git_head TEXT,
   status TEXT NOT NULL DEFAULT 'draft',
   pid INTEGER,
   exit_code INTEGER,
@@ -48,6 +49,58 @@ CREATE TABLE IF NOT EXISTS terminal_snapshots (
   updated_at TEXT NOT NULL,
   FOREIGN KEY (session_id) REFERENCES sessions(id)
 );
+
+CREATE TABLE IF NOT EXISTS session_reviews (
+  session_id TEXT PRIMARY KEY,
+  workspace_id TEXT NOT NULL,
+  generated_at TEXT NOT NULL,
+  baseline_git_head TEXT,
+  current_git_head TEXT,
+  changed_files_json TEXT NOT NULL,
+  summary_json TEXT NOT NULL,
+  last_output TEXT NOT NULL,
+  exit_code INTEGER,
+  FOREIGN KEY (session_id) REFERENCES sessions(id)
+);
+
+CREATE TABLE IF NOT EXISTS verification_runs (
+  id TEXT PRIMARY KEY,
+  session_id TEXT NOT NULL,
+  workspace_id TEXT NOT NULL,
+  command TEXT NOT NULL,
+  exit_code INTEGER,
+  duration_ms INTEGER NOT NULL,
+  output_summary TEXT NOT NULL,
+  started_at TEXT NOT NULL,
+  completed_at TEXT NOT NULL,
+  FOREIGN KEY (session_id) REFERENCES sessions(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_verification_runs_session_id_started_at
+  ON verification_runs(session_id, started_at DESC);
+
+CREATE TABLE IF NOT EXISTS session_supervisors (
+  session_id TEXT PRIMARY KEY,
+  workspace_id TEXT NOT NULL,
+  objective TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY (session_id) REFERENCES sessions(id)
+);
+
+CREATE TABLE IF NOT EXISTS supervisor_reviews (
+  id TEXT PRIMARY KEY,
+  session_id TEXT NOT NULL,
+  workspace_id TEXT NOT NULL,
+  objective TEXT,
+  created_at TEXT NOT NULL,
+  summary TEXT NOT NULL,
+  suggestions_json TEXT NOT NULL,
+  terminal_tail TEXT NOT NULL,
+  FOREIGN KEY (session_id) REFERENCES sessions(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_supervisor_reviews_session_id_created_at
+  ON supervisor_reviews(session_id, created_at DESC);
 
 CREATE TABLE IF NOT EXISTS auth_sessions (
   token_hash TEXT PRIMARY KEY,

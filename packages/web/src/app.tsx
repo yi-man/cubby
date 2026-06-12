@@ -6,7 +6,7 @@ import {
   type WSResponse,
 } from '@cubby/core';
 import { useAtom } from 'jotai';
-import { LockKeyhole, Maximize2, PanelLeft, SlidersHorizontal } from 'lucide-react';
+import { Activity, LockKeyhole, Maximize2, PanelLeft, SlidersHorizontal } from 'lucide-react';
 import {
   type CSSProperties,
   type FormEvent,
@@ -17,6 +17,7 @@ import {
   useState,
 } from 'react';
 import { currentSessionIdAtom, sessionsAtom } from './atoms/session.js';
+import { RuntimeDiagnostics } from './components/diagnostics/runtime-diagnostics.js';
 import { SessionList } from './components/session/session-list.js';
 import { SessionView } from './components/session/session-view.js';
 import { DirPicker, type WorkspaceOpenSelection } from './components/workspace/dir-picker.js';
@@ -69,6 +70,17 @@ function sessionTitle(session: Session | null): string {
 function getWsUrl() {
   const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
   return `${proto}//${window.location.host}/ws`;
+}
+
+function connectionStatusMessage(
+  connected: boolean,
+  reconnecting: boolean,
+  connectionError: string | null,
+): string | null {
+  if (connectionError) return connectionError;
+  if (reconnecting) return 'Reconnecting';
+  if (!connected) return 'Disconnected';
+  return null;
 }
 
 function initialSidebarCollapsed(): boolean {
@@ -439,7 +451,9 @@ function authButtonStyle(enabled: boolean): CSSProperties {
 }
 
 function AuthenticatedApp() {
-  const { send, request, onMessage, connected } = useWebSocket(getWsUrl());
+  const { send, request, onMessage, connected, reconnecting, connectionError } = useWebSocket(
+    getWsUrl(),
+  );
   const [sessions, setSessions] = useAtom(sessionsAtom);
   const [currentId, setCurrentId] = useAtom(currentSessionIdAtom);
   const [pendingSession, setPendingSession] = useState<Session | null>(null);
@@ -447,6 +461,7 @@ function AuthenticatedApp() {
   const currentSession =
     listedCurrentSession ?? (pendingSession?.id === currentId ? pendingSession : null);
   const [showPicker, setShowPicker] = useState(false);
+  const [showRuntimeDiagnostics, setShowRuntimeDiagnostics] = useState(false);
   const [autoStartSessionId, setAutoStartSessionId] = useState<string | null>(null);
   const [terminalFocusRequest, setTerminalFocusRequest] = useState(0);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(initialSidebarCollapsed);
@@ -473,6 +488,7 @@ function AuthenticatedApp() {
       ? `min(${MOBILE_SIDEBAR_WIDTH}px, calc(100vw - 48px))`
       : `${desktopSidebarWidth}px`;
   const detailLayoutSignal = `${mobileLayout}:${sidebarCollapsed}:${desktopSidebarWidth}`;
+  const connectionStatus = connectionStatusMessage(connected, reconnecting, connectionError);
 
   const sessionById = useMemo(() => {
     const byId = new Map<string, Session>();
@@ -1031,6 +1047,60 @@ function AuthenticatedApp() {
           </span>
         </div>
         <div style={{ flex: 1 }} />
+        {connectionStatus && (
+          <div
+            data-testid="connection-status"
+            role="status"
+            title={connectionStatus}
+            style={{
+              maxWidth: 'min(260px, 36vw)',
+              minHeight: '26px',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '7px',
+              border: '1px solid #4a3c22',
+              borderRadius: '7px',
+              background: '#1c170d',
+              color: '#f3d58b',
+              padding: '0 9px',
+              fontSize: '12px',
+              fontWeight: 700,
+              overflow: 'hidden',
+              whiteSpace: 'nowrap',
+              textOverflow: 'ellipsis',
+            }}
+          >
+            <span
+              aria-hidden
+              style={{
+                width: '7px',
+                height: '7px',
+                borderRadius: '999px',
+                background: reconnecting || !connected ? '#f2c14e' : '#d87b6f',
+                flexShrink: 0,
+              }}
+            />
+            <span
+              style={{
+                minWidth: 0,
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+              }}
+            >
+              {connectionStatus}
+            </span>
+          </div>
+        )}
+        <button
+          type="button"
+          aria-label="Open runtime diagnostics"
+          className="header-icon-button"
+          title="Runtime diagnostics"
+          onClick={() => setShowRuntimeDiagnostics(true)}
+          style={ICON_BUTTON_STYLE}
+        >
+          <Activity {...HEADER_ICON_PROPS} />
+        </button>
         <button
           type="button"
           aria-label="Toggle fullscreen"
@@ -1057,6 +1127,9 @@ function AuthenticatedApp() {
           <SlidersHorizontal {...HEADER_ICON_PROPS} />
         </button>
       </header>
+      {showRuntimeDiagnostics && (
+        <RuntimeDiagnostics onClose={() => setShowRuntimeDiagnostics(false)} />
+      )}
       <div
         style={{
           overflow: 'hidden',

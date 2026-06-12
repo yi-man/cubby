@@ -17,10 +17,40 @@ export interface FilePreviewResponse {
   truncated: boolean;
 }
 
+export interface WorkspaceSearchResult {
+  path: string;
+  absolutePath: string;
+  line: number;
+  column: number;
+  excerpt: string;
+  matchType: 'path' | 'content';
+}
+
+export interface WorkspaceSearchResponse {
+  root: string;
+  query: string;
+  truncated: boolean;
+  results: WorkspaceSearchResult[];
+}
+
 export interface ImportTarget {
   candidates: string[];
   importPath: string;
   targetSymbol: string;
+}
+
+export type FilePreviewKind = 'text' | 'markdown' | 'image';
+
+export type MarkdownPreviewBlock =
+  | { kind: 'heading'; level: 1 | 2 | 3; text: string }
+  | { kind: 'paragraph'; text: string }
+  | { kind: 'list'; items: string[] }
+  | { kind: 'code'; language: string; text: string };
+
+export interface WorkspaceFileRef {
+  path: string;
+  displayPath: string;
+  line: number;
 }
 
 export type FileExplorerLayoutMode = 'compact' | 'split';
@@ -43,6 +73,18 @@ function isFileExplorerEntry(value: unknown): value is FileExplorerEntry {
   );
 }
 
+function isWorkspaceSearchResult(value: unknown): value is WorkspaceSearchResult {
+  return (
+    isRecord(value) &&
+    typeof value.path === 'string' &&
+    typeof value.absolutePath === 'string' &&
+    typeof value.line === 'number' &&
+    typeof value.column === 'number' &&
+    typeof value.excerpt === 'string' &&
+    (value.matchType === 'path' || value.matchType === 'content')
+  );
+}
+
 export function isFileBrowseResponse(value: unknown): value is FileBrowseResponse {
   return (
     isRecord(value) &&
@@ -50,6 +92,17 @@ export function isFileBrowseResponse(value: unknown): value is FileBrowseRespons
     (typeof value.root === 'string' || value.root === undefined) &&
     Array.isArray(value.entries) &&
     value.entries.every(isFileExplorerEntry)
+  );
+}
+
+export function isWorkspaceSearchResponse(value: unknown): value is WorkspaceSearchResponse {
+  return (
+    isRecord(value) &&
+    typeof value.root === 'string' &&
+    typeof value.query === 'string' &&
+    typeof value.truncated === 'boolean' &&
+    Array.isArray(value.results) &&
+    value.results.every(isWorkspaceSearchResult)
   );
 }
 
@@ -161,6 +214,114 @@ export function fileLanguageFromPath(path: string): string {
   }
 
   return 'plaintext';
+}
+
+export function filePreviewKind(path: string): FilePreviewKind {
+  const fileName = path.split(/[\\/]/).pop()?.toLowerCase() ?? '';
+  if (fileName.endsWith('.md') || fileName.endsWith('.markdown')) return 'markdown';
+  if (
+    fileName.endsWith('.png') ||
+    fileName.endsWith('.jpg') ||
+    fileName.endsWith('.jpeg') ||
+    fileName.endsWith('.gif') ||
+    fileName.endsWith('.webp')
+  ) {
+    return 'image';
+  }
+
+  return 'text';
+}
+
+export function markdownPreviewBlocks(content: string): MarkdownPreviewBlock[] {
+  const blocks: MarkdownPreviewBlock[] = [];
+  const lines = content.split(/\r?\n/);
+  let index = 0;
+
+  while (index < lines.length) {
+    const line = lines[index];
+    const trimmed = line.trim();
+    if (!trimmed) {
+      index += 1;
+      continue;
+    }
+
+    const fenceMatch = /^```([A-Za-z0-9_-]*)\s*$/.exec(trimmed);
+    if (fenceMatch) {
+      const codeLines: string[] = [];
+      index += 1;
+      while (index < lines.length && !lines[index].trim().startsWith('```')) {
+        codeLines.push(lines[index]);
+        index += 1;
+      }
+      if (index < lines.length) index += 1;
+      blocks.push({ kind: 'code', language: fenceMatch[1] ?? '', text: codeLines.join('\n') });
+      continue;
+    }
+
+    const headingMatch = /^(#{1,3})\s+(.+)$/.exec(trimmed);
+    if (headingMatch) {
+      blocks.push({
+        kind: 'heading',
+        level: headingMatch[1].length as 1 | 2 | 3,
+        text: headingMatch[2],
+      });
+      index += 1;
+      continue;
+    }
+
+    if (/^[-*]\s+/.test(trimmed)) {
+      const items: string[] = [];
+      while (index < lines.length) {
+        const itemMatch = /^[-*]\s+(.+)$/.exec(lines[index].trim());
+        if (!itemMatch) break;
+        items.push(itemMatch[1]);
+        index += 1;
+      }
+      blocks.push({ kind: 'list', items });
+      continue;
+    }
+
+    const paragraphLines: string[] = [];
+    while (index < lines.length) {
+      const paragraphLine = lines[index].trim();
+      if (
+        !paragraphLine ||
+        /^#{1,3}\s+/.test(paragraphLine) ||
+        /^[-*]\s+/.test(paragraphLine) ||
+        /^```/.test(paragraphLine)
+      ) {
+        break;
+      }
+      paragraphLines.push(paragraphLine);
+      index += 1;
+    }
+    blocks.push({ kind: 'paragraph', text: paragraphLines.join(' ') });
+  }
+
+  return blocks;
+}
+
+export function extractedWorkspaceFileRefs(output: string, rootPath: string): WorkspaceFileRef[] {
+  const refs: WorkspaceFileRef[] = [];
+  const seen = new Set<string>();
+  const normalizedRoot = normalizePath(rootPath);
+  const pattern = /(^|\s)([A-Za-z0-9_./-]+\.[A-Za-z0-9]+):(\d+)(?::\d+)?/g;
+
+  for (const match of output.matchAll(pattern)) {
+    const displayPath = match[2];
+    if (!displayPath || displayPath.startsWith('/') || displayPath.includes('..')) continue;
+
+    const line = Number(match[3]);
+    if (!Number.isInteger(line) || line < 1) continue;
+
+    const absolutePath = normalizePath(`${normalizedRoot}/${displayPath}`);
+    const key = `${absolutePath}:${line}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    refs.push({ path: absolutePath, displayPath, line });
+  }
+
+  return refs.slice(0, 8);
 }
 
 function normalizePath(value: string): string {

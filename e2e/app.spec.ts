@@ -187,6 +187,59 @@ async function runGit(cwd: string, args: string[]): Promise<void> {
   });
 }
 
+async function startWorkspaceHttpPreview(
+  cwd: string,
+): Promise<{ pid: number; port: number; stop: () => void }> {
+  const script = `
+    const { createServer } = require('node:http');
+    const server = createServer((request, response) => {
+      response.setHeader('content-type', 'text/plain');
+      response.end('preview:' + request.method + ':' + request.url);
+    });
+    server.listen(0, '127.0.0.1', () => {
+      const address = server.address();
+      console.log(String(address.port));
+    });
+    process.on('SIGTERM', () => server.close(() => process.exit(0)));
+  `;
+  const child = spawn('node', ['-e', script], { cwd });
+  const port = await new Promise<number>((resolve, reject) => {
+    let output = '';
+    let errorOutput = '';
+    const timeout = setTimeout(() => {
+      reject(new Error(`Preview server did not report a port: ${errorOutput}`));
+    }, 10000);
+
+    child.stdout?.on('data', (chunk) => {
+      output += String(chunk);
+      const line = output.split(/\r?\n/).find((item) => item.trim());
+      const parsedPort = Number(line);
+      if (!Number.isInteger(parsedPort)) return;
+      clearTimeout(timeout);
+      resolve(parsedPort);
+    });
+    child.stderr?.on('data', (chunk) => {
+      errorOutput += String(chunk);
+    });
+    child.once('error', (err) => {
+      clearTimeout(timeout);
+      reject(err);
+    });
+    child.once('exit', (code) => {
+      clearTimeout(timeout);
+      reject(new Error(`Preview server exited before ready with code ${code}: ${errorOutput}`));
+    });
+  });
+
+  return {
+    pid: child.pid ?? -1,
+    port,
+    stop: () => {
+      child.kill('SIGTERM');
+    },
+  };
+}
+
 async function installWebSocketRecorder(page: Page): Promise<void> {
   await page.addInitScript(() => {
     const socketWindow = window as typeof window & {
@@ -716,6 +769,322 @@ test.describe('Cubby MVP', () => {
     } finally {
       rmSync(workspaceDir, { recursive: true, force: true });
     }
+  });
+
+  test('terminal toolbar opens detected workspace port previews', async ({ page }) => {
+    const workspaceDir = mkdtempSync(join(tmpdir(), 'cubby-port-preview-'));
+    const previewServer = await startWorkspaceHttpPreview(workspaceDir);
+    try {
+      const session = await createSession(page, {
+        workspaceId: workspaceDir,
+        title: `Port Preview ${Date.now()}`,
+      });
+
+      await page.goto('/');
+      const group = page.getByTestId('workspace-group').filter({ hasText: workspaceDir });
+      await selectSessionTab(group, session.title);
+
+      await page.getByRole('button', { name: 'Open port previews' }).click();
+      const dialog = page.getByTestId('port-previews-dialog');
+      await expect(dialog).toBeVisible();
+      await expect(dialog).toContainText(String(previewServer.port));
+      await expect(dialog).toContainText(String(previewServer.pid));
+
+      const proxied = await page.request.get(`/preview/${previewServer.port}/from-cubby?ok=1`);
+      expect(proxied.ok()).toBeTruthy();
+      expect(await proxied.text()).toBe('preview:GET:/from-cubby?ok=1');
+
+      const openLink = dialog.getByRole('link', { name: `Open preview ${previewServer.port}` });
+      await expect(openLink).toHaveAttribute('href', `/preview/${previewServer.port}/`);
+      await expect(openLink).toHaveAttribute('target', '_blank');
+
+      await dialog.getByRole('button', { name: `Dismiss preview ${previewServer.port}` }).click();
+      await expect(dialog).toContainText('No active workspace ports');
+    } finally {
+      previewServer.stop();
+      rmSync(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
+  test('terminal toolbar opens session review for baseline git changes', async ({ page }) => {
+    const workspaceDir = mkdtempSync(join(tmpdir(), 'cubby-session-review-ui-'));
+    try {
+      writeFileSync(join(workspaceDir, 'README.md'), '# review\n');
+      await runGit(workspaceDir, ['init']);
+      await runGit(workspaceDir, ['config', 'user.email', 'cubby@example.test']);
+      await runGit(workspaceDir, ['config', 'user.name', 'Cubby Test']);
+      await runGit(workspaceDir, ['add', '.']);
+      await runGit(workspaceDir, ['commit', '-m', 'initial']);
+
+      const session = await createSession(page, {
+        workspaceId: workspaceDir,
+        title: `Session Review ${Date.now()}`,
+      });
+      writeFileSync(join(workspaceDir, 'notes.txt'), 'review me\n');
+
+      await page.goto('/');
+      const group = page.getByTestId('workspace-group').filter({ hasText: workspaceDir });
+      await selectSessionTab(group, session.title);
+
+      await page.getByRole('button', { name: 'Open session review' }).click();
+      const dialog = page.getByTestId('session-review-dialog');
+      await expect(dialog).toBeVisible();
+      await expect(dialog).toContainText('1 file changed');
+      await expect(dialog).toContainText('notes.txt');
+      await expect(dialog).toContainText('New');
+      await expect(dialog).toContainText('No terminal output');
+      await expect(dialog.getByTestId('verification-runs')).toContainText('No verification runs');
+
+      await dialog
+        .getByRole('textbox', { name: 'Verification command' })
+        .fill('printf "review verified\\n"');
+      await dialog.getByRole('button', { name: 'Run custom verification' }).click();
+      const verificationRuns = dialog.getByTestId('verification-runs');
+      await expect(verificationRuns).toContainText('printf "review verified\\n"');
+      await expect(verificationRuns).toContainText('Passed');
+      await expect(verificationRuns).toContainText('review verified');
+
+      writeFileSync(join(workspaceDir, 'todo.txt'), 'next review\n');
+      await dialog.getByRole('button', { name: 'Refresh session review' }).click();
+      await expect(dialog).toContainText('2 files changed');
+      await expect(dialog).toContainText('todo.txt');
+    } finally {
+      rmSync(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
+  test('supervisor-lite saves reviews and injects suggestions only after confirmation', async ({
+    page,
+  }) => {
+    test.skip(
+      !MOCK_CLAUDE_PROVIDER_ENABLED,
+      'Requires CUBBY_MOCK_CLAUDE_PROVIDER=1 for deterministic supervisor terminal output',
+    );
+
+    const workspaceDir = mkdtempSync(join(tmpdir(), 'cubby-supervisor-lite-'));
+    await installWebSocketRecorder(page);
+    const session = await createSession(page, {
+      workspaceId: workspaceDir,
+      title: `Supervisor Lite ${Date.now()}`,
+    });
+
+    try {
+      await page.goto('/');
+      const group = page.getByTestId('workspace-group').filter({ hasText: workspaceDir });
+      await selectSessionTab(group, session.title);
+      await activeSessionView(page).getByRole('button', { name: 'Start', exact: true }).click();
+      await assertActiveDetail(page, { title: session.title, status: 'running', action: 'Stop' });
+      await expect
+        .poll(() => terminalText(page), { timeout: 10000 })
+        .toContain('Mock Claude Code ready');
+      await sendTerminalInput(page, session.id, 'waiting for input\r\n');
+      await expect
+        .poll(() => terminalText(page), { timeout: 10000 })
+        .toContain('waiting for input');
+
+      await page.getByRole('button', { name: 'Open supervisor' }).click();
+      const dialog = page.getByTestId('supervisor-lite-dialog');
+      await expect(dialog).toBeVisible();
+      await dialog
+        .getByRole('textbox', { name: 'Session objective' })
+        .fill('Finish supervisor-lite validation');
+      await dialog.getByRole('button', { name: 'Save objective' }).click();
+      await expect(dialog.getByTestId('supervisor-status')).toContainText('Stuck');
+      await expect(dialog).toContainText('Terminal appears to be waiting for input');
+
+      const terminalBeforeReview = await terminalText(page);
+      await dialog.getByRole('button', { name: 'Run reviewer' }).click();
+      await expect(dialog.getByTestId('supervisor-reviews')).toContainText(
+        'Finish supervisor-lite validation',
+      );
+      await expect.poll(() => terminalText(page)).toBe(terminalBeforeReview);
+
+      const suggestion = dialog.getByTestId('supervisor-suggestion').first();
+      const suggestionText =
+        (await suggestion.getByTestId('supervisor-suggestion-text').textContent()) ?? '';
+      expect(suggestionText.length).toBeGreaterThan(0);
+      page.once('dialog', async (confirmDialog) => {
+        expect(confirmDialog.message()).toContain('Inject this suggestion');
+        await confirmDialog.accept();
+      });
+      await suggestion.getByRole('button', { name: 'Inject suggestion' }).click();
+      await expect.poll(() => terminalText(page), { timeout: 10000 }).toContain(suggestionText);
+    } finally {
+      await stopSession(page, session).catch(() => {});
+      rmSync(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
+  test('read-only workspace review searches previews and opens files from review surfaces', async ({
+    page,
+  }) => {
+    const workspaceDir = mkdtempSync(join(tmpdir(), 'cubby-readonly-review-'));
+    try {
+      mkdirSync(join(workspaceDir, 'assets'));
+      mkdirSync(join(workspaceDir, 'docs'));
+      mkdirSync(join(workspaceDir, 'src'));
+      writeFileSync(
+        join(workspaceDir, 'README.md'),
+        ['# Review Workspace', '', 'Searchable roadmap marker.', '', '- verify markdown'].join(
+          '\n',
+        ),
+      );
+      writeFileSync(join(workspaceDir, 'src/app.ts'), 'export const value = 1;\n');
+      writeFileSync(
+        join(workspaceDir, 'assets/logo.png'),
+        Buffer.from(
+          'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=',
+          'base64',
+        ),
+      );
+      await runGit(workspaceDir, ['init']);
+      await runGit(workspaceDir, ['config', 'user.email', 'cubby@example.test']);
+      await runGit(workspaceDir, ['config', 'user.name', 'Cubby Test']);
+      await runGit(workspaceDir, ['add', '.']);
+      await runGit(workspaceDir, ['commit', '-m', 'initial']);
+
+      const session = await createSession(page, {
+        workspaceId: workspaceDir,
+        title: `Readonly Review ${Date.now()}`,
+      });
+      writeFileSync(join(workspaceDir, 'src/app.ts'), 'export const value = 2;\n');
+      writeFileSync(join(workspaceDir, 'docs/todo.md'), '# Todo\n\nReview jump target.\n');
+
+      await page.goto('/');
+      const group = page.getByTestId('workspace-group').filter({ hasText: workspaceDir });
+      await selectSessionTab(group, session.title);
+
+      await page.getByRole('button', { name: 'Open file explorer' }).click();
+      let explorer = page.getByTestId('file-explorer-dialog');
+      await expect(explorer).toBeVisible();
+      await explorer.getByRole('searchbox', { name: 'Search workspace files' }).fill('roadmap');
+      await explorer.getByRole('button', { name: 'Search workspace' }).click();
+      await expect(explorer).toContainText('Searchable roadmap marker.');
+      await explorer.getByRole('button', { name: 'Open search result README.md line 3' }).click();
+      await expect(explorer.getByTestId('markdown-preview')).toContainText('Review Workspace');
+      await explorer.getByRole('searchbox', { name: 'Search workspace files' }).fill('logo');
+      await explorer.getByRole('button', { name: 'Search workspace' }).click();
+      await explorer
+        .getByRole('button', { name: 'Open search result assets/logo.png line 1' })
+        .click();
+      await expect(explorer.getByRole('img', { name: 'Preview assets/logo.png' })).toBeVisible();
+      await explorer.getByRole('button', { name: 'Close file explorer' }).click();
+
+      await page.getByRole('button', { name: 'Open session review' }).click();
+      let review = page.getByTestId('session-review-dialog');
+      await expect(review).toContainText('docs/todo.md');
+      await review.getByRole('button', { name: 'Open reviewed file docs/todo.md' }).click();
+      explorer = page.getByTestId('file-explorer-dialog');
+      await expect(explorer).toBeVisible();
+      await expect(explorer.getByTestId('markdown-preview')).toContainText('Todo');
+      await explorer.getByRole('button', { name: 'Close file explorer' }).click();
+
+      await page.getByRole('button', { name: 'Open git changes' }).click();
+      const gitDialog = page.getByTestId('git-changes-dialog');
+      await expect(gitDialog).toBeVisible();
+      await gitDialog
+        .getByRole('button', { name: 'Open workspace file src/app.ts' })
+        .first()
+        .click();
+      explorer = page.getByTestId('file-explorer-dialog');
+      await expect(explorer).toBeVisible();
+      await expect(explorer.getByTestId('file-preview-editor')).toContainText(
+        'export const value = 2;',
+      );
+      await explorer.getByRole('button', { name: 'Close file explorer' }).click();
+
+      await page.getByRole('button', { name: 'Open session review' }).click();
+      review = page.getByTestId('session-review-dialog');
+      await review
+        .getByRole('textbox', { name: 'Verification command' })
+        .fill('sh -c \'printf "src/app.ts:1:1 failed\\n"; exit 1\'');
+      await review.getByRole('button', { name: 'Run custom verification' }).click();
+      await expect(review.getByTestId('verification-runs')).toContainText('Failed 1');
+      await review
+        .getByRole('button', { name: 'Open verification file src/app.ts line 1' })
+        .click();
+      explorer = page.getByTestId('file-explorer-dialog');
+      await expect(explorer).toBeVisible();
+      await expect(explorer.getByTestId('file-preview-editor')).toContainText(
+        'export const value = 2;',
+      );
+    } finally {
+      rmSync(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
+  test('terminal toolbar opens workspace intelligence summary', async ({ page }) => {
+    const workspaceDir = mkdtempSync(join(tmpdir(), 'cubby-workspace-intelligence-ui-'));
+    try {
+      writeFileSync(join(workspaceDir, 'bun.lock'), '');
+      writeFileSync(
+        join(workspaceDir, 'package.json'),
+        JSON.stringify({
+          scripts: {
+            dev: 'vite --host 0.0.0.0',
+            test: 'vitest run',
+            build: 'bun run --filter "*" build',
+          },
+          dependencies: {
+            react: '^19.0.0',
+          },
+          devDependencies: {
+            vite: '^6.0.0',
+            vitest: '^3.0.0',
+          },
+        }),
+      );
+      writeFileSync(join(workspaceDir, 'Makefile'), ['check:', '\tbun test'].join('\n'));
+      writeFileSync(
+        join(workspaceDir, 'README.md'),
+        ['# Workspace Intelligence UI', '', 'Shows project metadata in Cubby.', ''].join('\n'),
+      );
+      writeFileSync(join(workspaceDir, 'AGENTS.md'), '# Agent Notes\n\nUse the repo checks.\n');
+      const session = await createSession(page, {
+        workspaceId: workspaceDir,
+        title: `Workspace Intelligence ${Date.now()}`,
+      });
+
+      await page.goto('/');
+      const group = page.getByTestId('workspace-group').filter({ hasText: workspaceDir });
+      await selectSessionTab(group, session.title);
+
+      const workspaceButton = page.getByRole('button', { name: 'Open workspace intelligence' });
+      await expect(workspaceButton).toContainText('bun workspace');
+      await workspaceButton.click();
+      const dialog = page.getByTestId('workspace-intelligence-dialog');
+      await expect(dialog).toBeVisible();
+      await expect(dialog).toContainText('Package manager');
+      await expect(dialog).toContainText('bun');
+      await expect(dialog).toContainText('bun.lock');
+      await expect(dialog).toContainText('Workspace Intelligence UI');
+      await expect(dialog).toContainText('Shows project metadata in Cubby.');
+      await expect(dialog).toContainText('React');
+      await expect(dialog).toContainText('Vite');
+      await expect(dialog).toContainText('bun run dev');
+      await expect(dialog).toContainText('vitest run');
+      await expect(dialog).toContainText('make check');
+      await expect(dialog).toContainText('AGENTS.md');
+      await expect(dialog).toContainText('Use the repo checks.');
+      await expect(dialog).toContainText('Context Prompt');
+      await expect(dialog).toContainText('Project docs: AGENTS.md');
+    } finally {
+      rmSync(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
+  test('app header opens runtime diagnostics', async ({ page }) => {
+    await page.goto('/');
+
+    await page.getByRole('button', { name: 'Open runtime diagnostics' }).click();
+    const dialog = page.getByTestId('runtime-diagnostics-dialog');
+    await expect(dialog).toBeVisible();
+    await expect(dialog).toContainText('Runtime Diagnostics');
+    await expect(dialog).toContainText('Server');
+    await expect(dialog).toContainText('Data directory writable');
+    await expect(dialog).toContainText('Free disk space');
+    await expect(dialog).toContainText('Remote bind address');
+    await expect(dialog).toContainText('git');
   });
 
   test('sidebar is expanded by default on desktop and remembers user collapse state', async ({
@@ -1651,6 +2020,52 @@ test.describe('Cubby MVP', () => {
     expect(subscribeIndex).toBeGreaterThanOrEqual(0);
     expect(reconcileIndex).toBeGreaterThanOrEqual(0);
     expect(subscribeIndex).toBeLessThan(reconcileIndex);
+  });
+
+  test('reconnect refreshes sessions and resubscribes running terminal', async ({ page }) => {
+    test.skip(
+      !MOCK_CLAUDE_PROVIDER_ENABLED,
+      'Requires CUBBY_MOCK_CLAUDE_PROVIDER=1 to start a deterministic running session',
+    );
+
+    await installWebSocketRecorder(page);
+
+    const stamp = Date.now();
+    const workspaceId = `/tmp/cubby-ws-reconnect-${stamp}`;
+    const running = await createSession(page, {
+      workspaceId,
+      title: `WS Reconnect ${stamp}`,
+    });
+    await startSession(page, running);
+
+    await page.goto('/');
+    await assertActiveDetail(page, { title: running.title, status: 'running', action: 'Stop' });
+    await expect.poll(() => terminalText(page), { timeout: 10000 }).toContain('Mock Claude Code');
+    await expect.poll(() => wsCommandCount(page, 'terminal.subscribe'), { timeout: 10000 }).toBe(1);
+
+    await page.evaluate(() => {
+      (window as typeof window & { __wsCommands?: unknown[] }).__wsCommands = [];
+      (window as typeof window & { __cubbyWs?: WebSocket }).__cubbyWs?.close();
+    });
+
+    await expect(page.getByTestId('connection-status')).toBeVisible({ timeout: 5000 });
+    await expect
+      .poll(
+        () =>
+          page.evaluate(() => {
+            const commands =
+              (window as typeof window & { __wsCommands?: Array<{ cmd?: string }> }).__wsCommands ??
+              [];
+            return (
+              commands.some((command) => command.cmd === 'session.list') &&
+              commands.some((command) => command.cmd === 'terminal.subscribe')
+            );
+          }),
+        { timeout: 10000 },
+      )
+      .toBe(true);
+    await expect(page.getByTestId('connection-status')).toHaveCount(0, { timeout: 10000 });
+    await expect(activeTerminal(page)).toContainText('Mock Claude Code', { timeout: 10000 });
   });
 
   test('new session button opens workspace picker', async ({ page }) => {

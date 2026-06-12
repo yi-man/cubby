@@ -83,7 +83,19 @@ cubby auth set-password your-new-password
 启动服务：
 
 ```bash
-bun packages/server/src/index.ts
+cubby serve
+cubby open
+```
+
+服务管理：
+
+```bash
+cubby status
+cubby logs --tail 100
+cubby stop
+cubby config show
+cubby config set host 127.0.0.1
+cubby config set port 6310
 ```
 
 环境变量只作为显式覆盖项：

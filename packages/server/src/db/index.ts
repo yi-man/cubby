@@ -62,6 +62,17 @@ function ensureSessionYoloColumn(db: SqliteDb): void {
   }
 }
 
+function ensureSessionBaselineGitHeadColumn(db: SqliteDb): void {
+  const columns = db.prepare('PRAGMA table_info(sessions)').all() as Array<{
+    name?: unknown;
+  }>;
+  const names = new Set(columns.map((column) => String(column.name)));
+
+  if (!names.has('baseline_git_head')) {
+    db.exec('ALTER TABLE sessions ADD COLUMN baseline_git_head TEXT');
+  }
+}
+
 export class Database {
   private db: SqliteDb;
 
@@ -70,6 +81,7 @@ export class Database {
     this.db.exec(SCHEMA_SQL);
     ensureSessionProviderSessionIdColumn(this.db);
     ensureSessionYoloColumn(this.db);
+    ensureSessionBaselineGitHeadColumn(this.db);
     ensureTerminalOutputSequenceColumns(this.db);
   }
 
