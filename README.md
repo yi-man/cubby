@@ -6,7 +6,7 @@ Cubby 是一个自托管的个人 AI 编码工作台。你可以把它部署在�
 
 ## 产品定位
 
-Cubby 不是浏览器版 VS Code，也不是多人协作 IDE。代码写入、重构、测试命令和 Git 操作优先交给 agent session 在终端内完成；Cubby 本身优先提供远程访问安全、会话控制、终端连续性、运行预览、结果审阅、验证记录和环境诊断。
+Cubby 不是浏览器版 VS Code，也不是多人协作 IDE。代码写入、重构、测试命令和 Git 操作优先交给 agent session 在终端内完成；Cubby 本身优先提供远程访问安全、会话控制、终端连续性、运行预览、Git diff、文件查看、Supervisor 检查和环境诊断。
 
 ## 当前优先级
 
@@ -14,7 +14,7 @@ Cubby 不是浏览器版 VS Code，也不是多人协作 IDE。代码写入、�
 - CLI 服务管理：启动、停止、状态、日志和配置。
 - 连接可靠性：WebSocket 自动重连、重新订阅、终端恢复。
 - 端口预览：查看 agent 启动的 Vite、Next.js、API 或文档服务。
-- Agent 工作流闭环：session review、verification runs、workspace intelligence、runtime diagnostics。
+- Agent 工作流闭环：Git changes、file explorer、port previews、Supervisor checks、runtime diagnostics。
 
 ## 非目标
 

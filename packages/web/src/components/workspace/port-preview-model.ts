@@ -66,5 +66,26 @@ export function formatPreviewLastActivity(lastActivityAt: string, now = Date.now
 }
 
 export function previewAbsoluteUrl(path: string, origin: string): string {
+  const port = previewPortFromPath(path);
+  const originUrl = new URL(origin);
+  if (port !== null && isLocalPreviewHost(originUrl.hostname)) {
+    originUrl.port = String(port);
+    originUrl.pathname = '/';
+    originUrl.search = '';
+    originUrl.hash = '';
+    return originUrl.href;
+  }
   return new URL(path, origin).href;
+}
+
+function previewPortFromPath(path: string): number | null {
+  const match = path.match(/^\/preview\/(\d{1,5})(?:\/|$)/);
+  if (!match) return null;
+  const port = Number(match[1]);
+  if (!Number.isInteger(port) || port < 1 || port > 65_535) return null;
+  return port;
+}
+
+function isLocalPreviewHost(hostname: string): boolean {
+  return hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '[::1]';
 }

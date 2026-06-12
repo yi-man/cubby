@@ -1,5 +1,5 @@
 import type { Session, TerminalOutputChunk, WSEvent, WSResponse } from '@cubby/core';
-import { Boxes, ClipboardList, Folder, GitBranch, MonitorUp, Target } from 'lucide-react';
+import { Folder, GitBranch, MonitorUp, Target } from 'lucide-react';
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { type TerminalHandle, TerminalView } from '../terminal/terminal.js';
 import { FileExplorer } from '../workspace/file-explorer.js';
@@ -16,13 +16,6 @@ import {
   previewButtonLabel,
 } from '../workspace/port-preview-model.js';
 import { PortPreviews } from '../workspace/port-previews.js';
-import { WorkspaceIntelligence } from '../workspace/workspace-intelligence.js';
-import {
-  isWorkspaceIntelligenceResponse,
-  type WorkspaceIntelligenceResponse,
-  workspaceIntelligenceButtonLabel,
-} from '../workspace/workspace-intelligence-model.js';
-import { SessionReview } from './session-review.js';
 import { resumeActionState, resumeErrorMessage } from './session-view-model.js';
 import { SupervisorLite } from './supervisor-lite.js';
 import {
@@ -218,14 +211,9 @@ export function SessionView({
   const [resizeAuthority, setResizeAuthority] = useState(false);
   const [showFileExplorer, setShowFileExplorer] = useState(false);
   const [fileExplorerTarget, setFileExplorerTarget] = useState<FileExplorerTarget | null>(null);
-  const [showWorkspaceIntelligence, setShowWorkspaceIntelligence] = useState(false);
   const [showGitChanges, setShowGitChanges] = useState(false);
   const [showPortPreviews, setShowPortPreviews] = useState(false);
-  const [showSessionReview, setShowSessionReview] = useState(false);
   const [showSupervisorLite, setShowSupervisorLite] = useState(false);
-  const [workspaceIntelligence, setWorkspaceIntelligence] =
-    useState<WorkspaceIntelligenceResponse | null>(null);
-  const [workspaceIntelligenceError, setWorkspaceIntelligenceError] = useState(false);
   const [gitStatus, setGitStatus] = useState<GitStatusResponse | null>(null);
   const [gitStatusError, setGitStatusError] = useState(false);
   const [previewPorts, setPreviewPorts] = useState<PreviewPort[] | null>(null);
@@ -239,7 +227,6 @@ export function SessionView({
   const openWorkspaceFile = useCallback((path: string, line?: number) => {
     setFileExplorerTarget({ path, line });
     setShowGitChanges(false);
-    setShowSessionReview(false);
     setShowFileExplorer(true);
   }, []);
 
@@ -866,33 +853,6 @@ export function SessionView({
     [session.id, active, live, send],
   );
 
-  const loadWorkspaceIntelligence = useCallback(async () => {
-    setWorkspaceIntelligenceError(false);
-    try {
-      const query = new URLSearchParams({ root: session.workspaceId });
-      const response = await fetch(`/api/workspace/intelligence?${query.toString()}`);
-      if (!response.ok) {
-        setWorkspaceIntelligenceError(true);
-        return;
-      }
-
-      const data = await response.json();
-      if (!isWorkspaceIntelligenceResponse(data)) {
-        setWorkspaceIntelligenceError(true);
-        return;
-      }
-
-      setWorkspaceIntelligence(data);
-    } catch {
-      setWorkspaceIntelligenceError(true);
-    }
-  }, [session.workspaceId]);
-
-  useEffect(() => {
-    if (!active) return;
-    void loadWorkspaceIntelligence();
-  }, [active, loadWorkspaceIntelligence]);
-
   const loadGitStatus = useCallback(async () => {
     setGitStatusError(false);
     try {
@@ -970,9 +930,6 @@ export function SessionView({
         ? 'This view controls terminal size'
         : 'Use this view to control terminal size';
   const resumeAction = resumeActionState(session);
-  const workspaceSummaryLabel = workspaceIntelligenceError
-    ? 'Workspace unavailable'
-    : workspaceIntelligenceButtonLabel(workspaceIntelligence);
   const gitSummaryLabel = gitStatusError ? 'Git unavailable' : gitContextSummaryLabel(gitStatus);
   const gitPullRequest = gitStatus?.context?.pullRequest ?? null;
   const gitPullRequestLabelText = gitPullRequestLabel(gitPullRequest);
@@ -1289,35 +1246,6 @@ export function SessionView({
         </button>
         <button
           type="button"
-          aria-label="Open workspace intelligence"
-          title={workspaceIntelligenceError ? 'Workspace summary unavailable' : 'Open workspace'}
-          onClick={() => {
-            setShowWorkspaceIntelligence(true);
-            void loadWorkspaceIntelligence();
-          }}
-          style={{
-            height: '30px',
-            border: `1px solid ${workspaceIntelligenceError ? '#3c2220' : '#2a2d2a'}`,
-            borderRadius: '6px',
-            background: workspaceIntelligenceError
-              ? '#1b0d0c'
-              : 'linear-gradient(180deg, #161918 0%, #0d0f0e 100%)',
-            color: workspaceIntelligenceError ? '#f1b4aa' : '#d7d5ca',
-            cursor: 'pointer',
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: '8px',
-            padding: '0 10px',
-            fontSize: '12px',
-            fontWeight: 650,
-            flexShrink: 0,
-          }}
-        >
-          <Boxes {...ACTION_ICON_PROPS} />
-          <span>{workspaceSummaryLabel}</span>
-        </button>
-        <button
-          type="button"
           aria-label="Open git changes"
           title={gitSummaryLabel}
           onClick={() => {
@@ -1388,30 +1316,6 @@ export function SessionView({
         </button>
         <button
           type="button"
-          aria-label="Open session review"
-          title="Open session review"
-          onClick={() => setShowSessionReview(true)}
-          style={{
-            height: '30px',
-            border: '1px solid #2a2d2a',
-            borderRadius: '6px',
-            background: 'linear-gradient(180deg, #161918 0%, #0d0f0e 100%)',
-            color: '#d7d5ca',
-            cursor: 'pointer',
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: '8px',
-            padding: '0 10px',
-            fontSize: '12px',
-            fontWeight: 650,
-            flexShrink: 0,
-          }}
-        >
-          <ClipboardList {...ACTION_ICON_PROPS} />
-          <span>Review</span>
-        </button>
-        <button
-          type="button"
           aria-label="Open supervisor"
           title="Open supervisor"
           onClick={() => setShowSupervisorLite(true)}
@@ -1457,14 +1361,6 @@ export function SessionView({
           }}
         />
       )}
-      {showWorkspaceIntelligence && (
-        <WorkspaceIntelligence
-          rootPath={session.workspaceId}
-          initialIntelligence={workspaceIntelligence}
-          onClose={() => setShowWorkspaceIntelligence(false)}
-          onIntelligenceChange={setWorkspaceIntelligence}
-        />
-      )}
       {showGitChanges && gitStatus?.isRepo && (
         <GitChanges
           rootPath={session.workspaceId}
@@ -1480,14 +1376,6 @@ export function SessionView({
           initialPorts={previewPorts}
           onClose={() => setShowPortPreviews(false)}
           onPortsChange={setPreviewPorts}
-        />
-      )}
-      {showSessionReview && (
-        <SessionReview
-          sessionId={session.id}
-          rootPath={session.workspaceId}
-          onClose={() => setShowSessionReview(false)}
-          onOpenWorkspaceFile={openWorkspaceFile}
         />
       )}
       {showSupervisorLite && (

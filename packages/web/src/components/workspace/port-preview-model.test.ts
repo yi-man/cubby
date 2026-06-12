@@ -48,9 +48,18 @@ describe('port preview model', () => {
     expect(formatPreviewLastActivity('bad-date', now)).toBe('Activity unknown');
   });
 
-  it('resolves preview links against the current origin', () => {
+  it('opens local preview links directly instead of through the Cubby path proxy', () => {
     expect(previewAbsoluteUrl('/preview/5173/', 'http://127.0.0.1:7420')).toBe(
-      'http://127.0.0.1:7420/preview/5173/',
+      'http://127.0.0.1:5173/',
+    );
+    expect(previewAbsoluteUrl('/preview/5173/', 'http://localhost:7420')).toBe(
+      'http://localhost:5173/',
+    );
+  });
+
+  it('keeps proxy preview links for non-local Cubby origins', () => {
+    expect(previewAbsoluteUrl('/preview/5173/', 'https://cubby.example.test')).toBe(
+      'https://cubby.example.test/preview/5173/',
     );
   });
 });

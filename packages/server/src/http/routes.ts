@@ -5,7 +5,6 @@ import type { Session } from '@cubby/core';
 import type { FastifyInstance, FastifyReply } from 'fastify';
 import { readGitDiff, readGitHead, readGitStatus } from '../git/git-service.js';
 import type { SessionManager } from '../session/manager.js';
-import { readWorkspaceIntelligence } from '../workspace/intelligence.js';
 import { imageMimeTypeForPath, searchWorkspace } from '../workspace/review.js';
 
 export interface SessionRouteCallbacks {
@@ -122,20 +121,6 @@ export function registerRoutes(
     }
   });
 
-  app.get('/api/workspace/intelligence', async (request, reply) => {
-    const { root } = request.query as { root?: string };
-    if (!root) {
-      return reply.code(400).send({ error: 'Workspace root is required' });
-    }
-
-    try {
-      const target = await resolveWorkspacePath(undefined, root);
-      return await readWorkspaceIntelligence(target.root ?? target.path);
-    } catch (err) {
-      return sendFileSystemError(reply, err);
-    }
-  });
-
   app.get('/api/git/status', async (request, reply) => {
     const { root } = request.query as { root?: string };
     if (!root) {
@@ -170,64 +155,6 @@ export function registerRoutes(
 
   app.get('/api/sessions', async () => {
     return sessionManager.listSessions();
-  });
-
-  app.get('/api/sessions/:id/review', async (request, reply) => {
-    const { id } = request.params as { id: string };
-    try {
-      const review =
-        sessionManager.getSessionReview(id) ?? (await sessionManager.generateSessionReview(id));
-      return review;
-    } catch (err) {
-      if (isSessionNotFound(err)) {
-        return sendNotFound(reply);
-      }
-      throw err;
-    }
-  });
-
-  app.post('/api/sessions/:id/review', async (request, reply) => {
-    const { id } = request.params as { id: string };
-    try {
-      return await sessionManager.generateSessionReview(id);
-    } catch (err) {
-      if (isSessionNotFound(err)) {
-        return sendNotFound(reply);
-      }
-      throw err;
-    }
-  });
-
-  app.get('/api/sessions/:id/verification-runs', async (request, reply) => {
-    const { id } = request.params as { id: string };
-    try {
-      return sessionManager.listVerificationRuns(id);
-    } catch (err) {
-      if (isSessionNotFound(err)) {
-        return sendNotFound(reply);
-      }
-      throw err;
-    }
-  });
-
-  app.post('/api/sessions/:id/verification-runs', async (request, reply) => {
-    const { id } = request.params as { id: string };
-    const body = request.body as { command?: unknown } | undefined;
-    if (typeof body?.command !== 'string' || !body.command.trim()) {
-      return reply.code(400).send({ error: 'Verification command is required' });
-    }
-
-    try {
-      return await sessionManager.runVerification(id, body.command);
-    } catch (err) {
-      if (isSessionNotFound(err)) {
-        return sendNotFound(reply);
-      }
-      if (isVerificationCommandError(err)) {
-        return reply.code(400).send({ error: err.message });
-      }
-      throw err;
-    }
   });
 
   app.get('/api/sessions/:id/supervisor', async (request, reply) => {
@@ -443,10 +370,6 @@ function isNodeError(err: unknown): err is NodeJS.ErrnoException {
 
 function isSessionNotFound(err: unknown): boolean {
   return err instanceof Error && err.message === 'Session not found';
-}
-
-function isVerificationCommandError(err: unknown): err is Error {
-  return err instanceof Error && err.message === 'Verification command is required';
 }
 
 function isSupervisorObjectiveError(err: unknown): err is Error {

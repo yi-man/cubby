@@ -1,5 +1,4 @@
 import { Buffer } from 'node:buffer';
-import { spawn } from 'node:child_process';
 import type {
   AgentProcess,
   AgentProvider,
@@ -13,7 +12,6 @@ import type {
   TerminalOutputChunk,
   TerminalReplayResult,
   TerminalSnapshotResult,
-  VerificationRun,
 } from '@cubby/core';
 import { readGitSessionReview } from '../git/git-service.js';
 import { RingBuffer } from '../terminal/ring-buffer.js';
@@ -24,8 +22,6 @@ const OUTPUT_HISTORY_LIMIT = 5000;
 const SNAPSHOT_PERSIST_DEBOUNCE_MS = 250;
 const RESUME_UNSUPPORTED_REASON = 'Provider does not support resume';
 const RESUME_CONVERSATION_MISSING_REASON = 'Provider conversation not found';
-const MAX_VERIFICATION_OUTPUT_SUMMARY_CHARS = 12_000;
-const VERIFICATION_TIMEOUT_MS = 120_000;
 const SUPERVISOR_IDLE_THRESHOLD_MS = 5 * 60 * 1000;
 const SUPERVISOR_TERMINAL_TAIL_CHARS = 4000;
 const ESCAPE_CHAR = String.fromCharCode(0x1b);
@@ -546,7 +542,6 @@ export class SessionManager {
       currentGitHead: gitReview.currentGitHead,
       changedFiles: gitReview.changedFiles,
       summary: gitReview.summary,
-      verificationRuns: this.store.listVerificationRuns(sessionId),
       lastOutput: this.getOutputHistory(sessionId).join(''),
       exitCode: session.exitCode,
     };
@@ -556,35 +551,6 @@ export class SessionManager {
 
   getSessionReview(sessionId: string): SessionReview | null {
     return this.store.getSessionReview(sessionId);
-  }
-
-  listVerificationRuns(sessionId: string): VerificationRun[] {
-    const session = this.store.get(sessionId);
-    if (!session) throw new Error('Session not found');
-    return this.store.listVerificationRuns(sessionId);
-  }
-
-  async runVerification(sessionId: string, command: string): Promise<VerificationRun> {
-    const session = this.store.get(sessionId);
-    if (!session) throw new Error('Session not found');
-    const normalizedCommand = command.trim();
-    if (!normalizedCommand) throw new Error('Verification command is required');
-
-    const startedAt = new Date();
-    const startedMs = Date.now();
-    const result = await runVerificationCommand(session.workspaceId, normalizedCommand);
-    const completedAt = new Date();
-
-    return this.store.recordVerificationRun({
-      sessionId,
-      workspaceId: session.workspaceId,
-      command: normalizedCommand,
-      exitCode: result.exitCode,
-      durationMs: Math.max(0, Date.now() - startedMs),
-      outputSummary: result.outputSummary,
-      startedAt: startedAt.toISOString(),
-      completedAt: completedAt.toISOString(),
-    });
   }
 
   setSessionObjective(sessionId: string, objective: string): SessionSupervisorState {
@@ -863,11 +829,7 @@ function formatSupervisorReviewSummary(
   const objective = state.objective ?? 'No objective';
   const fileCount =
     review.summary.total === 1 ? '1 changed file' : `${review.summary.total} changed files`;
-  const verificationCount =
-    review.verificationRuns.length === 1
-      ? '1 verification run'
-      : `${review.verificationRuns.length} verification runs`;
-  return `Reviewer checked "${objective}": ${fileCount}, ${verificationCount}, supervisor status ${state.status}.`;
+  return `Supervisor checked "${objective}": ${fileCount}, status ${state.status}.`;
 }
 
 function buildSupervisorSuggestions(
@@ -885,74 +847,14 @@ function buildSupervisorSuggestions(
     suggestions.push('Ask the agent for a concise status update against the objective.');
   }
 
-  for (const run of review.verificationRuns) {
-    if (run.exitCode === 0) continue;
-    suggestions.push(`Fix failing verification: ${run.command}.`);
-  }
-
-  if (review.verificationRuns.length === 0) {
-    suggestions.push('Run a verification command before accepting the result.');
-  }
   if (review.summary.total > 0) {
-    suggestions.push('Review changed files against the objective before accepting.');
+    suggestions.push('Inspect changed files against the objective before accepting.');
   }
   if (suggestions.length === 0) {
-    suggestions.push('Review the result against the objective before accepting.');
+    suggestions.push('Inspect the result against the objective before accepting.');
   }
 
   return Array.from(new Set(suggestions));
-}
-
-function runVerificationCommand(
-  cwd: string,
-  command: string,
-): Promise<{ exitCode: number | null; outputSummary: string }> {
-  return new Promise((resolve) => {
-    const child = spawn(command, {
-      cwd,
-      shell: true,
-      windowsHide: true,
-    });
-    let output = '';
-    let settled = false;
-    let timedOut = false;
-    let timeout: ReturnType<typeof setTimeout>;
-
-    const appendOutput = (chunk: unknown) => {
-      output += String(chunk);
-      if (output.length > MAX_VERIFICATION_OUTPUT_SUMMARY_CHARS) {
-        output = output.slice(-MAX_VERIFICATION_OUTPUT_SUMMARY_CHARS);
-      }
-    };
-    const finish = (exitCode: number | null, extraOutput = '') => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timeout);
-      if (extraOutput) appendOutput(extraOutput);
-      resolve({
-        exitCode,
-        outputSummary: output,
-      });
-    };
-
-    timeout = setTimeout(() => {
-      timedOut = true;
-      child.kill('SIGTERM');
-    }, VERIFICATION_TIMEOUT_MS);
-
-    child.stdout?.on('data', appendOutput);
-    child.stderr?.on('data', appendOutput);
-    child.once('error', (err) => {
-      finish(null, err instanceof Error ? err.message : String(err));
-    });
-    child.once('close', (code) => {
-      if (timedOut) {
-        finish(124, `\nCommand timed out after ${VERIFICATION_TIMEOUT_MS}ms\n`);
-        return;
-      }
-      finish(code);
-    });
-  });
 }
 
 function replayOutputChunks(

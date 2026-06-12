@@ -795,7 +795,7 @@ test.describe('Cubby MVP', () => {
       expect(await proxied.text()).toBe('preview:GET:/from-cubby?ok=1');
 
       const openLink = dialog.getByRole('link', { name: `Open preview ${previewServer.port}` });
-      await expect(openLink).toHaveAttribute('href', `/preview/${previewServer.port}/`);
+      await expect(openLink).toHaveAttribute('href', `http://127.0.0.1:${previewServer.port}/`);
       await expect(openLink).toHaveAttribute('target', '_blank');
 
       await dialog.getByRole('button', { name: `Dismiss preview ${previewServer.port}` }).click();
@@ -806,48 +806,28 @@ test.describe('Cubby MVP', () => {
     }
   });
 
-  test('terminal toolbar opens session review for baseline git changes', async ({ page }) => {
-    const workspaceDir = mkdtempSync(join(tmpdir(), 'cubby-session-review-ui-'));
+  test('terminal toolbar keeps previews and omits workspace and review actions', async ({
+    page,
+  }) => {
+    const workspaceDir = mkdtempSync(join(tmpdir(), 'cubby-trimmed-toolbar-'));
     try {
-      writeFileSync(join(workspaceDir, 'README.md'), '# review\n');
-      await runGit(workspaceDir, ['init']);
-      await runGit(workspaceDir, ['config', 'user.email', 'cubby@example.test']);
-      await runGit(workspaceDir, ['config', 'user.name', 'Cubby Test']);
-      await runGit(workspaceDir, ['add', '.']);
-      await runGit(workspaceDir, ['commit', '-m', 'initial']);
-
       const session = await createSession(page, {
         workspaceId: workspaceDir,
-        title: `Session Review ${Date.now()}`,
+        title: `Trimmed Toolbar ${Date.now()}`,
       });
-      writeFileSync(join(workspaceDir, 'notes.txt'), 'review me\n');
 
       await page.goto('/');
       const group = page.getByTestId('workspace-group').filter({ hasText: workspaceDir });
       await selectSessionTab(group, session.title);
 
-      await page.getByRole('button', { name: 'Open session review' }).click();
-      const dialog = page.getByTestId('session-review-dialog');
-      await expect(dialog).toBeVisible();
-      await expect(dialog).toContainText('1 file changed');
-      await expect(dialog).toContainText('notes.txt');
-      await expect(dialog).toContainText('New');
-      await expect(dialog).toContainText('No terminal output');
-      await expect(dialog.getByTestId('verification-runs')).toContainText('No verification runs');
-
-      await dialog
-        .getByRole('textbox', { name: 'Verification command' })
-        .fill('printf "review verified\\n"');
-      await dialog.getByRole('button', { name: 'Run custom verification' }).click();
-      const verificationRuns = dialog.getByTestId('verification-runs');
-      await expect(verificationRuns).toContainText('printf "review verified\\n"');
-      await expect(verificationRuns).toContainText('Passed');
-      await expect(verificationRuns).toContainText('review verified');
-
-      writeFileSync(join(workspaceDir, 'todo.txt'), 'next review\n');
-      await dialog.getByRole('button', { name: 'Refresh session review' }).click();
-      await expect(dialog).toContainText('2 files changed');
-      await expect(dialog).toContainText('todo.txt');
+      await expect(page.getByRole('button', { name: 'Open file explorer' })).toBeVisible();
+      await expect(page.getByRole('button', { name: 'Open git changes' })).toBeVisible();
+      await expect(page.getByRole('button', { name: 'Open port previews' })).toBeVisible();
+      await expect(page.getByRole('button', { name: 'Open supervisor' })).toBeVisible();
+      await expect(page.getByRole('button', { name: 'Open workspace intelligence' })).toHaveCount(
+        0,
+      );
+      await expect(page.getByRole('button', { name: 'Open session review' })).toHaveCount(0);
     } finally {
       rmSync(workspaceDir, { recursive: true, force: true });
     }
@@ -892,12 +872,13 @@ test.describe('Cubby MVP', () => {
       await expect(dialog.getByTestId('supervisor-status')).toContainText('Stuck');
       await expect(dialog).toContainText('Terminal appears to be waiting for input');
 
-      const terminalBeforeReview = await terminalText(page);
-      await dialog.getByRole('button', { name: 'Run reviewer' }).click();
+      const terminalBeforeCheck = await terminalText(page);
+      await dialog.getByRole('button', { name: 'Check status' }).click();
       await expect(dialog.getByTestId('supervisor-reviews')).toContainText(
         'Finish supervisor-lite validation',
       );
-      await expect.poll(() => terminalText(page)).toBe(terminalBeforeReview);
+      await expect(dialog.getByTestId('supervisor-reviews')).not.toContainText('verification');
+      await expect.poll(() => terminalText(page)).toBe(terminalBeforeCheck);
 
       const suggestion = dialog.getByTestId('supervisor-suggestion').first();
       const suggestionText =
@@ -915,7 +896,7 @@ test.describe('Cubby MVP', () => {
     }
   });
 
-  test('read-only workspace review searches previews and opens files from review surfaces', async ({
+  test('read-only workspace files can be searched and opened from git changes', async ({
     page,
   }) => {
     const workspaceDir = mkdtempSync(join(tmpdir(), 'cubby-readonly-review-'));
@@ -970,18 +951,10 @@ test.describe('Cubby MVP', () => {
       await expect(explorer.getByRole('img', { name: 'Preview assets/logo.png' })).toBeVisible();
       await explorer.getByRole('button', { name: 'Close file explorer' }).click();
 
-      await page.getByRole('button', { name: 'Open session review' }).click();
-      let review = page.getByTestId('session-review-dialog');
-      await expect(review).toContainText('docs/todo.md');
-      await review.getByRole('button', { name: 'Open reviewed file docs/todo.md' }).click();
-      explorer = page.getByTestId('file-explorer-dialog');
-      await expect(explorer).toBeVisible();
-      await expect(explorer.getByTestId('markdown-preview')).toContainText('Todo');
-      await explorer.getByRole('button', { name: 'Close file explorer' }).click();
-
       await page.getByRole('button', { name: 'Open git changes' }).click();
       const gitDialog = page.getByTestId('git-changes-dialog');
       await expect(gitDialog).toBeVisible();
+      await expect(gitDialog).toContainText('docs/todo.md');
       await gitDialog
         .getByRole('button', { name: 'Open workspace file src/app.ts' })
         .first()
@@ -991,83 +964,6 @@ test.describe('Cubby MVP', () => {
       await expect(explorer.getByTestId('file-preview-editor')).toContainText(
         'export const value = 2;',
       );
-      await explorer.getByRole('button', { name: 'Close file explorer' }).click();
-
-      await page.getByRole('button', { name: 'Open session review' }).click();
-      review = page.getByTestId('session-review-dialog');
-      await review
-        .getByRole('textbox', { name: 'Verification command' })
-        .fill('sh -c \'printf "src/app.ts:1:1 failed\\n"; exit 1\'');
-      await review.getByRole('button', { name: 'Run custom verification' }).click();
-      await expect(review.getByTestId('verification-runs')).toContainText('Failed 1');
-      await review
-        .getByRole('button', { name: 'Open verification file src/app.ts line 1' })
-        .click();
-      explorer = page.getByTestId('file-explorer-dialog');
-      await expect(explorer).toBeVisible();
-      await expect(explorer.getByTestId('file-preview-editor')).toContainText(
-        'export const value = 2;',
-      );
-    } finally {
-      rmSync(workspaceDir, { recursive: true, force: true });
-    }
-  });
-
-  test('terminal toolbar opens workspace intelligence summary', async ({ page }) => {
-    const workspaceDir = mkdtempSync(join(tmpdir(), 'cubby-workspace-intelligence-ui-'));
-    try {
-      writeFileSync(join(workspaceDir, 'bun.lock'), '');
-      writeFileSync(
-        join(workspaceDir, 'package.json'),
-        JSON.stringify({
-          scripts: {
-            dev: 'vite --host 0.0.0.0',
-            test: 'vitest run',
-            build: 'bun run --filter "*" build',
-          },
-          dependencies: {
-            react: '^19.0.0',
-          },
-          devDependencies: {
-            vite: '^6.0.0',
-            vitest: '^3.0.0',
-          },
-        }),
-      );
-      writeFileSync(join(workspaceDir, 'Makefile'), ['check:', '\tbun test'].join('\n'));
-      writeFileSync(
-        join(workspaceDir, 'README.md'),
-        ['# Workspace Intelligence UI', '', 'Shows project metadata in Cubby.', ''].join('\n'),
-      );
-      writeFileSync(join(workspaceDir, 'AGENTS.md'), '# Agent Notes\n\nUse the repo checks.\n');
-      const session = await createSession(page, {
-        workspaceId: workspaceDir,
-        title: `Workspace Intelligence ${Date.now()}`,
-      });
-
-      await page.goto('/');
-      const group = page.getByTestId('workspace-group').filter({ hasText: workspaceDir });
-      await selectSessionTab(group, session.title);
-
-      const workspaceButton = page.getByRole('button', { name: 'Open workspace intelligence' });
-      await expect(workspaceButton).toContainText('bun workspace');
-      await workspaceButton.click();
-      const dialog = page.getByTestId('workspace-intelligence-dialog');
-      await expect(dialog).toBeVisible();
-      await expect(dialog).toContainText('Package manager');
-      await expect(dialog).toContainText('bun');
-      await expect(dialog).toContainText('bun.lock');
-      await expect(dialog).toContainText('Workspace Intelligence UI');
-      await expect(dialog).toContainText('Shows project metadata in Cubby.');
-      await expect(dialog).toContainText('React');
-      await expect(dialog).toContainText('Vite');
-      await expect(dialog).toContainText('bun run dev');
-      await expect(dialog).toContainText('vitest run');
-      await expect(dialog).toContainText('make check');
-      await expect(dialog).toContainText('AGENTS.md');
-      await expect(dialog).toContainText('Use the repo checks.');
-      await expect(dialog).toContainText('Context Prompt');
-      await expect(dialog).toContainText('Project docs: AGENTS.md');
     } finally {
       rmSync(workspaceDir, { recursive: true, force: true });
     }

@@ -265,26 +265,6 @@ describe('SessionManager', () => {
     expect(store.getSessionReview(session.id)).toEqual(review);
   });
 
-  it('runs and records a verification command in the session workspace', async () => {
-    const workspace = mkdtempSync(join(tmpdir(), 'cubby-verification-run-'));
-    const session = manager.createSession({
-      workspaceId: workspace,
-      provider: 'mock',
-    });
-
-    const run = await manager.runVerification(session.id, 'printf "verification ok\\n"');
-
-    expect(run).toMatchObject({
-      sessionId: session.id,
-      workspaceId: workspace,
-      command: 'printf "verification ok\\n"',
-      exitCode: 0,
-      outputSummary: 'verification ok\n',
-    });
-    expect(run.durationMs).toBeGreaterThanOrEqual(0);
-    expect(store.listVerificationRuns(session.id)).toEqual([run]);
-  });
-
   it('binds a supervisor objective and reports watching state', () => {
     const session = manager.createSession({ workspaceId: '/tmp', provider: 'mock' });
 
@@ -380,7 +360,6 @@ describe('SessionManager', () => {
     manager.setSessionObjective(session.id, 'Implement the roadmap supervisor workflow');
     store.appendTerminalOutput(session.id, 'waiting for input\n');
     writeFileSync(join(workspace, 'notes.txt'), 'needs review\n');
-    await manager.runVerification(session.id, 'sh -c "echo failing verification; exit 3"');
 
     const beforeHistory = manager.getOutputHistory(session.id).join('');
     const review = await manager.runSupervisorReview(session.id);
@@ -393,8 +372,15 @@ describe('SessionManager', () => {
       terminalTail: 'waiting for input\n',
     });
     expect(review.summary).toContain('Implement the roadmap supervisor workflow');
+    expect(review.summary).not.toContain('verification');
+    expect(review.suggestions).not.toContain(
+      'Run a verification command before accepting the result.',
+    );
+    expect(review.suggestions.some((suggestion) => suggestion.includes('verification'))).toBe(
+      false,
+    );
     expect(review.suggestions).toContain(
-      'Fix failing verification: sh -c "echo failing verification; exit 3".',
+      'Inspect changed files against the objective before accepting.',
     );
     expect(store.listSupervisorReviews(session.id)).toEqual([review]);
     expect(afterHistory).toBe(beforeHistory);

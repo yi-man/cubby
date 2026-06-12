@@ -52,29 +52,6 @@ export interface SessionReviewSummary {
   untracked: number;
 }
 
-export interface VerificationRun {
-  id: string;
-  sessionId: string;
-  workspaceId: string;
-  command: string;
-  exitCode: number | null;
-  durationMs: number;
-  outputSummary: string;
-  startedAt: string;
-  completedAt: string;
-}
-
-export interface CreateVerificationRunInput {
-  sessionId: string;
-  workspaceId: string;
-  command: string;
-  exitCode: number | null;
-  durationMs: number;
-  outputSummary: string;
-  startedAt: string;
-  completedAt: string;
-}
-
 export interface SessionReview {
   sessionId: string;
   workspaceId: string;
@@ -83,7 +60,6 @@ export interface SessionReview {
   currentGitHead: string | null;
   changedFiles: SessionReviewChange[];
   summary: SessionReviewSummary;
-  verificationRuns: VerificationRun[];
   lastOutput: string;
   exitCode: number | null;
 }

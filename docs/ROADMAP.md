@@ -40,25 +40,10 @@ Cubby 是一个自托管的个人 AI 编码工作台。它不是浏览器版 VS 
 
 ### P1 — Agent 工作流闭环
 
-5. **Session review** — ✅ Done ([#14](https://github.com/yi-man/cubby/issues/14))
-   - 创建 session 时记录 baseline git HEAD。
-   - 会话结束或手动触发时生成 changed files 列表。
-   - 展示 baseline → current 的 diff 摘要。
-   - 标记新增、修改、删除、重命名文件。
-   - 展示 agent 最后一轮输出和退出状态。
-
-6. **Verification runs** — ✅ Done ([#15](https://github.com/yi-man/cubby/issues/15))
-   - 为 session 记录验证命令。
-   - 支持手动运行测试、lint、build 等命令。
-   - 保存命令、退出码、耗时、输出摘要和时间。
-   - 在 session review 中展示验证结果。
-
-7. **Workspace intelligence** — ✅ Done ([#16](https://github.com/yi-man/cubby/issues/16))
-   - 检测 package manager。
-   - 读取 package.json scripts / Makefile / README。
-   - 识别常见框架和推荐 dev/test/build 命令。
-   - 检查 AGENTS.md / CLAUDE.md / 项目文档。
-   - 在新建 session 时提供上下文提示。
+5. **Workspace / Review / Verification surfaces** — Removed
+   - Workspace intelligence UI/API 已撤下，避免和 README/项目说明重复。
+   - Session review UI/API 已撤下，改由 Git Changes、File Explorer 和 Supervisor 承担验收入口。
+   - Verification runs UI/API 已撤下，验证命令继续由 agent 在终端内执行。
 
 8. **Runtime diagnostics** — ✅ Done ([#17](https://github.com/yi-man/cubby/issues/17))
    - 检查 Claude Code / Codex / OpenCode 是否可用。
@@ -74,13 +59,13 @@ Cubby 是一个自托管的个人 AI 编码工作台。它不是浏览器版 VS 
    - 快速打开文件。
    - Markdown 预览。
    - 图片预览。
-   - 从 diff、验证失败和 session review 跳转到文件。
+   - 从 Git diff 跳转到文件。
 
 10. **Supervisor-lite** — ✅ Done ([#19](https://github.com/yi-man/cubby/issues/19))
     - 给 session 绑定 objective。
     - 检测长时间无输出或疑似卡住。
-    - 手动触发 reviewer agent 检查当前结果。
-    - 保存 review 建议，除非用户确认，否则不自动注入。
+    - 手动触发 Supervisor 检查当前状态。
+    - 保存检查建议，除非用户确认，否则不自动注入。
 
 ## 降低优先级
 
