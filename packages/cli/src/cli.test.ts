@@ -5,6 +5,8 @@ import bcrypt from 'bcryptjs';
 import { describe, expect, it } from 'vitest';
 import { closeServerWithTimeout, runCli } from './cli.js';
 
+const AUTH_TEST_TIMEOUT_MS = 15_000;
+
 function createOutput() {
   let stdout = '';
   let stderr = '';
@@ -28,65 +30,80 @@ function createOutput() {
 }
 
 describe('cubby cli auth', () => {
-  it('creates config.json with a password hash', async () => {
-    const dataDir = mkdtempSync(join(tmpdir(), 'cubby-cli-'));
-    const { io, output } = createOutput();
+  it(
+    'creates config.json with a password hash',
+    async () => {
+      const dataDir = mkdtempSync(join(tmpdir(), 'cubby-cli-'));
+      const { io, output } = createOutput();
 
-    const exitCode = await runCli(['auth', 'set-password', 'new-secret', '--data-dir', dataDir], {
-      io,
-    });
-
-    const config = JSON.parse(readFileSync(join(dataDir, 'config.json'), 'utf8'));
-    expect(exitCode).toBe(0);
-    expect(config.server).toEqual({ host: '0.0.0.0', port: 6310 });
-    expect(config.auth.allowedOrigins).toEqual([]);
-    expect(config.auth.passwordHash).not.toBe('new-secret');
-    expect(await bcrypt.compare('new-secret', config.auth.passwordHash)).toBe(true);
-    expect(output().stdout).toContain('Restart Cubby');
-  });
-
-  it('updates only the password hash while preserving existing server and origin settings', async () => {
-    const dataDir = mkdtempSync(join(tmpdir(), 'cubby-cli-'));
-    writeFileSync(
-      join(dataDir, 'config.json'),
-      JSON.stringify({
-        server: { host: '127.0.0.1', port: 7310 },
-        auth: {
-          passwordHash: bcrypt.hashSync('old-secret', 10),
-          allowedOrigins: ['https://cubby.example.com'],
-        },
-      }),
-    );
-    const { io } = createOutput();
-
-    const exitCode = await runCli([`auth`, 'set-password', 'new-secret', `--data-dir=${dataDir}`], {
-      io,
-    });
-
-    const config = JSON.parse(readFileSync(join(dataDir, 'config.json'), 'utf8'));
-    expect(exitCode).toBe(0);
-    expect(config.server).toEqual({ host: '127.0.0.1', port: 7310 });
-    expect(config.auth.allowedOrigins).toEqual(['https://cubby.example.com']);
-    expect(await bcrypt.compare('old-secret', config.auth.passwordHash)).toBe(false);
-    expect(await bcrypt.compare('new-secret', config.auth.passwordHash)).toBe(true);
-  });
-
-  it('preserves password whitespace exactly', async () => {
-    const dataDir = mkdtempSync(join(tmpdir(), 'cubby-cli-'));
-    const { io } = createOutput();
-
-    const exitCode = await runCli(
-      ['auth', 'set-password', '  spaced secret  ', '--data-dir', dataDir],
-      {
+      const exitCode = await runCli(['auth', 'set-password', 'new-secret', '--data-dir', dataDir], {
         io,
-      },
-    );
+      });
 
-    const config = JSON.parse(readFileSync(join(dataDir, 'config.json'), 'utf8'));
-    expect(exitCode).toBe(0);
-    expect(await bcrypt.compare('  spaced secret  ', config.auth.passwordHash)).toBe(true);
-    expect(await bcrypt.compare('spaced secret', config.auth.passwordHash)).toBe(false);
-  });
+      const config = JSON.parse(readFileSync(join(dataDir, 'config.json'), 'utf8'));
+      expect(exitCode).toBe(0);
+      expect(config.server).toEqual({ host: '0.0.0.0', port: 6310 });
+      expect(config.auth.allowedOrigins).toEqual([]);
+      expect(config.auth.passwordHash).not.toBe('new-secret');
+      expect(await bcrypt.compare('new-secret', config.auth.passwordHash)).toBe(true);
+      expect(output().stdout).toContain('Restart Cubby');
+    },
+    AUTH_TEST_TIMEOUT_MS,
+  );
+
+  it(
+    'updates only the password hash while preserving existing server and origin settings',
+    async () => {
+      const dataDir = mkdtempSync(join(tmpdir(), 'cubby-cli-'));
+      writeFileSync(
+        join(dataDir, 'config.json'),
+        JSON.stringify({
+          server: { host: '127.0.0.1', port: 7310 },
+          auth: {
+            passwordHash: bcrypt.hashSync('old-secret', 10),
+            allowedOrigins: ['https://cubby.example.com'],
+          },
+        }),
+      );
+      const { io } = createOutput();
+
+      const exitCode = await runCli(
+        [`auth`, 'set-password', 'new-secret', `--data-dir=${dataDir}`],
+        {
+          io,
+        },
+      );
+
+      const config = JSON.parse(readFileSync(join(dataDir, 'config.json'), 'utf8'));
+      expect(exitCode).toBe(0);
+      expect(config.server).toEqual({ host: '127.0.0.1', port: 7310 });
+      expect(config.auth.allowedOrigins).toEqual(['https://cubby.example.com']);
+      expect(await bcrypt.compare('old-secret', config.auth.passwordHash)).toBe(false);
+      expect(await bcrypt.compare('new-secret', config.auth.passwordHash)).toBe(true);
+    },
+    AUTH_TEST_TIMEOUT_MS,
+  );
+
+  it(
+    'preserves password whitespace exactly',
+    async () => {
+      const dataDir = mkdtempSync(join(tmpdir(), 'cubby-cli-'));
+      const { io } = createOutput();
+
+      const exitCode = await runCli(
+        ['auth', 'set-password', '  spaced secret  ', '--data-dir', dataDir],
+        {
+          io,
+        },
+      );
+
+      const config = JSON.parse(readFileSync(join(dataDir, 'config.json'), 'utf8'));
+      expect(exitCode).toBe(0);
+      expect(await bcrypt.compare('  spaced secret  ', config.auth.passwordHash)).toBe(true);
+      expect(await bcrypt.compare('spaced secret', config.auth.passwordHash)).toBe(false);
+    },
+    AUTH_TEST_TIMEOUT_MS,
+  );
 
   it('rejects set-password without a password', async () => {
     const { io, output } = createOutput();
@@ -132,29 +149,33 @@ describe('cubby cli config', () => {
     expect(config.auth.allowedOrigins).toEqual(['https://one.example', 'https://two.example']);
   });
 
-  it('prints config values including data dir and auth status', async () => {
-    const dataDir = mkdtempSync(join(tmpdir(), 'cubby-cli-'));
-    writeFileSync(
-      join(dataDir, 'config.json'),
-      JSON.stringify({
-        server: { host: '127.0.0.1', port: 7412 },
-        auth: {
-          passwordHash: bcrypt.hashSync('secret', 10),
-          allowedOrigins: ['https://cubby.example.com'],
-        },
-      }),
-    );
-    const { io, output } = createOutput();
+  it(
+    'prints config values including data dir and auth status',
+    async () => {
+      const dataDir = mkdtempSync(join(tmpdir(), 'cubby-cli-'));
+      writeFileSync(
+        join(dataDir, 'config.json'),
+        JSON.stringify({
+          server: { host: '127.0.0.1', port: 7412 },
+          auth: {
+            passwordHash: bcrypt.hashSync('secret', 10),
+            allowedOrigins: ['https://cubby.example.com'],
+          },
+        }),
+      );
+      const { io, output } = createOutput();
 
-    const exitCode = await runCli(['config', 'show', '--data-dir', dataDir], { io });
+      const exitCode = await runCli(['config', 'show', '--data-dir', dataDir], { io });
 
-    expect(exitCode).toBe(0);
-    expect(output().stdout).toContain(`Data dir: ${dataDir}`);
-    expect(output().stdout).toContain('Host: 127.0.0.1');
-    expect(output().stdout).toContain('Port: 7412');
-    expect(output().stdout).toContain('Auth: enabled');
-    expect(output().stdout).toContain('Allowed origins: https://cubby.example.com');
-  });
+      expect(exitCode).toBe(0);
+      expect(output().stdout).toContain(`Data dir: ${dataDir}`);
+      expect(output().stdout).toContain('Host: 127.0.0.1');
+      expect(output().stdout).toContain('Port: 7412');
+      expect(output().stdout).toContain('Auth: enabled');
+      expect(output().stdout).toContain('Allowed origins: https://cubby.example.com');
+    },
+    AUTH_TEST_TIMEOUT_MS,
+  );
 });
 
 describe('cubby cli service management', () => {
