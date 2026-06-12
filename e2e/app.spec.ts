@@ -1133,6 +1133,66 @@ test.describe('Cubby MVP', () => {
     await expect(page.getByTestId('mobile-sidebar-scrim')).toHaveCount(0);
   });
 
+  test('mobile terminal action bars keep icons only while preserving button names', async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    const workspaceDir = mkdtempSync(join(tmpdir(), 'cubby-mobile-icon-actions-'));
+    try {
+      const session = await createSession(page, {
+        workspaceId: workspaceDir,
+        title: 'Mobile Icon Actions',
+      });
+      await page.route('**/api/git/status?**', async (route) => {
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            isRepo: true,
+            branch: 'feature/mobile-actions',
+            entries: [],
+            context: {
+              repoRoot: workspaceDir,
+              worktreeRoot: workspaceDir,
+              worktreeName: null,
+              gitDir: `${workspaceDir}/.git`,
+              gitCommonDir: `${workspaceDir}/.git`,
+              isLinkedWorktree: false,
+              headDetached: false,
+              commit: 'abc1234',
+              remoteUrl: 'git@github.com:yi-man/cubby.git',
+              pullRequest: {
+                provider: 'github',
+                number: 8,
+                title: 'Compact mobile terminal actions',
+                url: 'https://github.com/yi-man/cubby/pull/8',
+              },
+            },
+          }),
+        });
+      });
+
+      await page.goto('/');
+      await assertActiveDetail(page, { title: session.title, status: 'draft', action: 'Start' });
+
+      const startButton = activeSessionView(page).getByRole('button', {
+        name: 'Start',
+        exact: true,
+      });
+      await expect(startButton).toBeVisible();
+      await expect.poll(() => startButton.evaluate((button) => button.innerText.trim())).toBe('');
+
+      const toolBar = activeSessionView(page).getByTestId('terminal-tools');
+      await expect(toolBar.getByRole('button', { name: 'Open file explorer' })).toBeVisible();
+      await expect(toolBar.getByRole('button', { name: 'Open git changes' })).toBeVisible();
+      await expect(toolBar.getByRole('button', { name: 'Open port previews' })).toBeVisible();
+      await expect(toolBar.getByRole('link', { name: 'PR #8' })).toBeVisible();
+      await expect.poll(() => toolBar.evaluate((bar) => bar.innerText.trim())).toBe('');
+    } finally {
+      rmSync(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
   test('switching sessions resets the right terminal pane', async ({ page }) => {
     const firstTitle = `Switch First ${Date.now()}`;
     const secondTitle = `Switch Second ${Date.now()}`;

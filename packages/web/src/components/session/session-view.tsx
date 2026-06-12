@@ -1,5 +1,5 @@
 import type { Session, TerminalOutputChunk, WSEvent, WSResponse } from '@cubby/core';
-import { Folder, GitBranch, MonitorUp } from 'lucide-react';
+import { ExternalLink, Folder, GitBranch, MonitorUp, Play, RotateCcw, Square } from 'lucide-react';
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { type TerminalHandle, TerminalView } from '../terminal/terminal.js';
 import { FileExplorer } from '../workspace/file-explorer.js';
@@ -1049,6 +1049,9 @@ export function SessionView({
           {session.status === 'draft' && (
             <button
               type="button"
+              aria-label="Start"
+              title="Start"
+              className="terminal-icon-only-mobile"
               onClick={startSession}
               style={{
                 padding: '5px 12px',
@@ -1057,15 +1060,23 @@ export function SessionView({
                 background: '#172114',
                 color: '#cfe5c4',
                 cursor: 'pointer',
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: '7px',
                 fontWeight: 650,
               }}
             >
-              Start
+              <Play {...ACTION_ICON_PROPS} />
+              <span className="terminal-mobile-label">Start</span>
             </button>
           )}
           {(session.status === 'running' || session.status === 'starting') && (
             <button
               type="button"
+              aria-label="Stop"
+              title="Stop"
+              className="terminal-icon-only-mobile"
               onClick={handleStop}
               style={{
                 padding: '5px 12px',
@@ -1074,15 +1085,23 @@ export function SessionView({
                 background: '#2a1514',
                 color: '#f0c1b8',
                 cursor: 'pointer',
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: '7px',
                 fontWeight: 650,
               }}
             >
-              Stop
+              <Square {...ACTION_ICON_PROPS} />
+              <span className="terminal-mobile-label">Stop</span>
             </button>
           )}
           {resumeAction.kind === 'enabled' && (
             <button
               type="button"
+              aria-label="Resume"
+              title="Resume"
+              className="terminal-icon-only-mobile"
               onClick={handleResume}
               style={{
                 padding: '5px 12px',
@@ -1091,15 +1110,22 @@ export function SessionView({
                 background: '#171717',
                 color: '#ffffff',
                 cursor: 'pointer',
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: '7px',
                 fontWeight: 650,
               }}
             >
-              Resume
+              <RotateCcw {...ACTION_ICON_PROPS} />
+              <span className="terminal-mobile-label">Resume</span>
             </button>
           )}
           {resumeAction.kind === 'unavailable' && (
             <button
               type="button"
+              aria-label={resumeAction.label}
+              className="terminal-icon-only-mobile"
               disabled
               title={resumeAction.reason}
               style={{
@@ -1109,10 +1135,15 @@ export function SessionView({
                 background: '#101010',
                 color: '#777c76',
                 cursor: 'not-allowed',
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: '7px',
                 fontWeight: 650,
               }}
             >
-              {resumeAction.label}
+              <RotateCcw {...ACTION_ICON_PROPS} />
+              <span className="terminal-mobile-label">{resumeAction.label}</span>
             </button>
           )}
         </div>
@@ -1211,6 +1242,7 @@ export function SessionView({
           type="button"
           aria-label="Open file explorer"
           title="Open file explorer"
+          className="terminal-icon-only-mobile"
           onClick={() => {
             setFileExplorerTarget(null);
             setShowFileExplorer(true);
@@ -1231,12 +1263,13 @@ export function SessionView({
           }}
         >
           <Folder {...ACTION_ICON_PROPS} />
-          <span>File Explorer</span>
+          <span className="terminal-mobile-label">File Explorer</span>
         </button>
         <button
           type="button"
           aria-label="Open git changes"
           title={gitSummaryLabel}
+          className="terminal-icon-only-mobile"
           onClick={() => {
             if (!gitButtonEnabled) return;
             setShowGitChanges(true);
@@ -1264,6 +1297,7 @@ export function SessionView({
         >
           <GitBranch {...ACTION_ICON_PROPS} />
           <span
+            className="terminal-mobile-label"
             style={{
               minWidth: 0,
               overflow: 'hidden',
@@ -1278,6 +1312,7 @@ export function SessionView({
           type="button"
           aria-label="Open port previews"
           title={previewPortsError ? 'Port previews unavailable' : 'Open port previews'}
+          className="terminal-icon-only-mobile"
           onClick={() => {
             setShowPortPreviews(true);
             void loadPreviewPorts();
@@ -1301,17 +1336,20 @@ export function SessionView({
           }}
         >
           <MonitorUp {...ACTION_ICON_PROPS} />
-          <span>{previewSummaryLabel}</span>
+          <span className="terminal-mobile-label">{previewSummaryLabel}</span>
         </button>
         {gitPullRequest && gitPullRequestLabelText && (
           <a
             href={gitPullRequest.url}
             target="_blank"
             rel="noreferrer noopener"
+            aria-label={gitPullRequestLabelText}
             title={gitPullRequest.title}
+            className="terminal-icon-only-mobile"
             style={gitPullRequestLinkStyle()}
           >
-            {gitPullRequestLabelText}
+            <ExternalLink {...ACTION_ICON_PROPS} />
+            <span className="terminal-mobile-label">{gitPullRequestLabelText}</span>
           </a>
         )}
       </div>
@@ -1357,6 +1395,8 @@ function gitPullRequestLinkStyle() {
     cursor: 'pointer',
     display: 'inline-flex',
     alignItems: 'center',
+    justifyContent: 'center',
+    gap: '7px',
     padding: '0 10px',
     fontSize: '12px',
     fontWeight: 800,
