@@ -192,6 +192,22 @@ body.sidebar-resizing {
   outline: none;
 }
 
+@media (max-width: 767px) {
+  .terminal-mobile-label {
+    display: none;
+  }
+
+  .terminal-icon-only-mobile {
+    width: 32px !important;
+    min-width: 32px !important;
+    max-width: 32px !important;
+    padding: 0 !important;
+    gap: 0 !important;
+    justify-content: center !important;
+    flex: 0 0 32px;
+  }
+}
+
 @keyframes cubby-live-pulse {
   0%,
   100% {
