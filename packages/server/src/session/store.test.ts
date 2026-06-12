@@ -40,6 +40,17 @@ describe('SessionStore', () => {
     expect(session.provider).toBe('claude-code');
   });
 
+  it('persists the baseline git head for a session', () => {
+    const session = store.create({
+      workspaceId: '/tmp/test',
+      provider: 'claude-code',
+      baselineGitHead: 'abc123',
+    });
+
+    expect(session.baselineGitHead).toBe('abc123');
+    expect(store.get(session.id)?.baselineGitHead).toBe('abc123');
+  });
+
   it('defaults new sessions to yolo mode', () => {
     const session = store.create({ workspaceId: '/tmp/test', provider: 'claude-code' });
 
@@ -178,6 +189,120 @@ describe('SessionStore', () => {
         .get(session.id) as Record<string, number>,
     ).toEqual({ count: 0 });
     expect(store.delete(session.id)).toBe(false);
+  });
+
+  it('upserts, loads, and deletes session reviews', () => {
+    const session = store.create({
+      workspaceId: '/tmp/test',
+      provider: 'claude-code',
+      baselineGitHead: 'base',
+    });
+
+    store.upsertSessionReview({
+      sessionId: session.id,
+      workspaceId: session.workspaceId,
+      generatedAt: '2026-06-11T10:00:00.000Z',
+      baselineGitHead: 'base',
+      currentGitHead: 'head',
+      changedFiles: [{ path: 'README.md', status: 'modified' }],
+      summary: {
+        total: 1,
+        added: 0,
+        modified: 1,
+        deleted: 0,
+        renamed: 0,
+        untracked: 0,
+      },
+      verificationRuns: [],
+      lastOutput: 'finished',
+      exitCode: 0,
+    });
+
+    expect(store.getSessionReview(session.id)).toMatchObject({
+      sessionId: session.id,
+      baselineGitHead: 'base',
+      currentGitHead: 'head',
+      changedFiles: [{ path: 'README.md', status: 'modified' }],
+      lastOutput: 'finished',
+      exitCode: 0,
+    });
+
+    expect(store.delete(session.id)).toBe(true);
+    expect(store.getSessionReview(session.id)).toBeNull();
+  });
+
+  it('records, lists, and deletes verification runs', () => {
+    const session = store.create({ workspaceId: '/tmp/test', provider: 'claude-code' });
+
+    const run = store.recordVerificationRun({
+      sessionId: session.id,
+      workspaceId: session.workspaceId,
+      command: 'bun test',
+      exitCode: 0,
+      durationMs: 1234,
+      outputSummary: '1 test passed',
+      startedAt: '2026-06-11T10:00:00.000Z',
+      completedAt: '2026-06-11T10:00:01.234Z',
+    });
+
+    expect(run).toMatchObject({
+      sessionId: session.id,
+      workspaceId: session.workspaceId,
+      command: 'bun test',
+      exitCode: 0,
+      durationMs: 1234,
+      outputSummary: '1 test passed',
+      startedAt: '2026-06-11T10:00:00.000Z',
+      completedAt: '2026-06-11T10:00:01.234Z',
+    });
+    expect(run.id).toBeTruthy();
+    expect(store.listVerificationRuns(session.id)).toEqual([run]);
+
+    expect(store.delete(session.id)).toBe(true);
+    expect(store.listVerificationRuns(session.id)).toEqual([]);
+  });
+
+  it('upserts, loads, and deletes supervisor objectives and reviews', () => {
+    const session = store.create({ workspaceId: '/tmp/test', provider: 'claude-code' });
+
+    const supervisor = store.setSessionObjective({
+      sessionId: session.id,
+      workspaceId: session.workspaceId,
+      objective: 'Finish roadmap item #19',
+    });
+    const review = store.recordSupervisorReview({
+      sessionId: session.id,
+      workspaceId: session.workspaceId,
+      objective: supervisor.objective,
+      summary: 'Reviewer found one follow-up.',
+      suggestions: ['Run bun test before accepting the result.'],
+      terminalTail: 'last terminal output',
+      createdAt: '2026-06-11T10:00:00.000Z',
+    });
+
+    expect(store.getSessionSupervisor(session.id)).toMatchObject({
+      sessionId: session.id,
+      workspaceId: session.workspaceId,
+      objective: 'Finish roadmap item #19',
+    });
+    expect(store.listSupervisorReviews(session.id)).toEqual([review]);
+
+    expect(store.delete(session.id)).toBe(true);
+    expect(store.getSessionSupervisor(session.id)).toBeNull();
+    expect(store.listSupervisorReviews(session.id)).toEqual([]);
+  });
+
+  it('returns the latest terminal output timestamp for idle detection', () => {
+    const session = store.create({ workspaceId: '/tmp/test', provider: 'claude-code' });
+
+    store.appendTerminalOutput(session.id, 'first output');
+    store.appendTerminalOutput(session.id, 'latest output');
+    db.prepare('UPDATE terminal_outputs SET created_at = ? WHERE data = ?').run(
+      '2026-06-11T10:01:00.000Z',
+      'latest output',
+    );
+
+    expect(store.getLatestTerminalOutputAt(session.id)).toBe('2026-06-11T10:01:00.000Z');
   });
 
   it('returns only the latest terminal run when history contains shell initialization markers', () => {

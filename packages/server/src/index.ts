@@ -2,7 +2,7 @@
 import { loadRuntimeConfig } from './config/runtime.js';
 import { createServer } from './server.js';
 
-export { createServer };
+export { createServer, loadRuntimeConfig };
 
 // Start if run directly
 const isMain = import.meta.url === `file://${process.argv[1]}`;

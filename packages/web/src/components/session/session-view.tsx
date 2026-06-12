@@ -1,5 +1,5 @@
 import type { Session, TerminalOutputChunk, WSEvent, WSResponse } from '@cubby/core';
-import { Folder, GitBranch, MonitorUp } from 'lucide-react';
+import { Boxes, ClipboardList, Folder, GitBranch, MonitorUp, Target } from 'lucide-react';
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { type TerminalHandle, TerminalView } from '../terminal/terminal.js';
 import { FileExplorer } from '../workspace/file-explorer.js';
@@ -10,7 +10,21 @@ import {
   gitPullRequestLabel,
   isGitStatusResponse,
 } from '../workspace/git-status-model.js';
+import {
+  isPreviewListResponse,
+  type PreviewPort,
+  previewButtonLabel,
+} from '../workspace/port-preview-model.js';
+import { PortPreviews } from '../workspace/port-previews.js';
+import { WorkspaceIntelligence } from '../workspace/workspace-intelligence.js';
+import {
+  isWorkspaceIntelligenceResponse,
+  type WorkspaceIntelligenceResponse,
+  workspaceIntelligenceButtonLabel,
+} from '../workspace/workspace-intelligence-model.js';
+import { SessionReview } from './session-review.js';
 import { resumeActionState, resumeErrorMessage } from './session-view-model.js';
+import { SupervisorLite } from './supervisor-lite.js';
 import {
   filterRenderableLiveChunks,
   isRecoveryReconcileData,
@@ -34,8 +48,13 @@ interface SessionViewProps {
     id: string;
     cmd: string;
     args?: Record<string, unknown>;
-  }) => Promise<{ ok: boolean; data?: unknown }>;
+  }) => Promise<WSResponse>;
   onMessage: (handler: (msg: WSResponse | WSEvent) => void) => () => void;
+}
+
+interface FileExplorerTarget {
+  path: string;
+  line?: number;
 }
 
 function isLiveStatus(status: Session['status']): boolean {
@@ -198,14 +217,31 @@ export function SessionView({
   const [endedReplayFitToContainer, setEndedReplayFitToContainer] = useState(false);
   const [resizeAuthority, setResizeAuthority] = useState(false);
   const [showFileExplorer, setShowFileExplorer] = useState(false);
+  const [fileExplorerTarget, setFileExplorerTarget] = useState<FileExplorerTarget | null>(null);
+  const [showWorkspaceIntelligence, setShowWorkspaceIntelligence] = useState(false);
   const [showGitChanges, setShowGitChanges] = useState(false);
+  const [showPortPreviews, setShowPortPreviews] = useState(false);
+  const [showSessionReview, setShowSessionReview] = useState(false);
+  const [showSupervisorLite, setShowSupervisorLite] = useState(false);
+  const [workspaceIntelligence, setWorkspaceIntelligence] =
+    useState<WorkspaceIntelligenceResponse | null>(null);
+  const [workspaceIntelligenceError, setWorkspaceIntelligenceError] = useState(false);
   const [gitStatus, setGitStatus] = useState<GitStatusResponse | null>(null);
   const [gitStatusError, setGitStatusError] = useState(false);
+  const [previewPorts, setPreviewPorts] = useState<PreviewPort[] | null>(null);
+  const [previewPortsError, setPreviewPortsError] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const live = isLiveStatus(session.status);
   const canReplayHistory = terminalReady && (live || session.status === 'ended');
   const fitTerminalToContainer =
     session.status === 'ended' ? endedReplayFitToContainer : !live || resizeAuthority;
+
+  const openWorkspaceFile = useCallback((path: string, line?: number) => {
+    setFileExplorerTarget({ path, line });
+    setShowGitChanges(false);
+    setShowSessionReview(false);
+    setShowFileExplorer(true);
+  }, []);
 
   useEffect(() => {
     const scope = actionErrorScopeRef.current;
@@ -679,12 +715,21 @@ export function SessionView({
     const rows = term?.rows ?? terminalSizeRef.current.rows;
     terminalSizeRef.current = { cols, rows };
     setResizeAuthorityState(true);
-    const res = await request({
-      id: `start-${Date.now()}`,
-      cmd: 'session.start',
-      args: { sessionId: session.id, cwd: session.workspaceId, cols, rows },
-    });
-    if (!res.ok) {
+    try {
+      const res = await request({
+        id: `start-${Date.now()}`,
+        cmd: 'session.start',
+        args: { sessionId: session.id, cwd: session.workspaceId, cols, rows },
+      });
+      if (!res.ok) {
+        const message = res.error?.message?.trim();
+        setActionError(message ? `Start failed: ${message}` : 'Start failed');
+        setResizeAuthorityState(false);
+        return;
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Request failed';
+      setActionError(`Start failed: ${message}`);
       setResizeAuthorityState(false);
       return;
     }
@@ -799,6 +844,15 @@ export function SessionView({
     [session.id, active, live, send, onPromptSubmitted],
   );
 
+  const handleInjectSupervisorSuggestion = useCallback(
+    (suggestion: string) => {
+      if (!active || !live) return;
+      termRef.current?.focus();
+      handleData(suggestion);
+    },
+    [active, live, handleData],
+  );
+
   const handleResize = useCallback(
     (cols: number, rows: number) => {
       terminalSizeRef.current = { cols, rows };
@@ -811,6 +865,33 @@ export function SessionView({
     },
     [session.id, active, live, send],
   );
+
+  const loadWorkspaceIntelligence = useCallback(async () => {
+    setWorkspaceIntelligenceError(false);
+    try {
+      const query = new URLSearchParams({ root: session.workspaceId });
+      const response = await fetch(`/api/workspace/intelligence?${query.toString()}`);
+      if (!response.ok) {
+        setWorkspaceIntelligenceError(true);
+        return;
+      }
+
+      const data = await response.json();
+      if (!isWorkspaceIntelligenceResponse(data)) {
+        setWorkspaceIntelligenceError(true);
+        return;
+      }
+
+      setWorkspaceIntelligence(data);
+    } catch {
+      setWorkspaceIntelligenceError(true);
+    }
+  }, [session.workspaceId]);
+
+  useEffect(() => {
+    if (!active) return;
+    void loadWorkspaceIntelligence();
+  }, [active, loadWorkspaceIntelligence]);
 
   const loadGitStatus = useCallback(async () => {
     setGitStatusError(false);
@@ -839,6 +920,33 @@ export function SessionView({
     void loadGitStatus();
   }, [active, loadGitStatus]);
 
+  const loadPreviewPorts = useCallback(async () => {
+    setPreviewPortsError(false);
+    try {
+      const query = new URLSearchParams({ root: session.workspaceId });
+      const response = await fetch(`/api/previews?${query.toString()}`);
+      if (!response.ok) {
+        setPreviewPortsError(true);
+        return;
+      }
+
+      const data = await response.json();
+      if (!isPreviewListResponse(data)) {
+        setPreviewPortsError(true);
+        return;
+      }
+
+      setPreviewPorts(data.ports);
+    } catch {
+      setPreviewPortsError(true);
+    }
+  }, [session.workspaceId]);
+
+  useEffect(() => {
+    if (!active) return;
+    void loadPreviewPorts();
+  }, [active, loadPreviewPorts]);
+
   const showEmptyEndedHistory =
     session.status === 'ended' && replayState.loaded && !replayState.hasHistory;
   const showRecoveryError = live && recoveryError !== null;
@@ -862,10 +970,16 @@ export function SessionView({
         ? 'This view controls terminal size'
         : 'Use this view to control terminal size';
   const resumeAction = resumeActionState(session);
+  const workspaceSummaryLabel = workspaceIntelligenceError
+    ? 'Workspace unavailable'
+    : workspaceIntelligenceButtonLabel(workspaceIntelligence);
   const gitSummaryLabel = gitStatusError ? 'Git unavailable' : gitContextSummaryLabel(gitStatus);
   const gitPullRequest = gitStatus?.context?.pullRequest ?? null;
   const gitPullRequestLabelText = gitPullRequestLabel(gitPullRequest);
   const gitButtonEnabled = Boolean(gitStatus?.isRepo);
+  const previewSummaryLabel = previewPortsError
+    ? 'Previews unavailable'
+    : previewButtonLabel(previewPorts);
 
   return (
     <div
@@ -1151,7 +1265,10 @@ export function SessionView({
           type="button"
           aria-label="Open file explorer"
           title="Open file explorer"
-          onClick={() => setShowFileExplorer(true)}
+          onClick={() => {
+            setFileExplorerTarget(null);
+            setShowFileExplorer(true);
+          }}
           style={{
             height: '30px',
             border: '1px solid #2a2d2a',
@@ -1169,6 +1286,35 @@ export function SessionView({
         >
           <Folder {...ACTION_ICON_PROPS} />
           <span>File Explorer</span>
+        </button>
+        <button
+          type="button"
+          aria-label="Open workspace intelligence"
+          title={workspaceIntelligenceError ? 'Workspace summary unavailable' : 'Open workspace'}
+          onClick={() => {
+            setShowWorkspaceIntelligence(true);
+            void loadWorkspaceIntelligence();
+          }}
+          style={{
+            height: '30px',
+            border: `1px solid ${workspaceIntelligenceError ? '#3c2220' : '#2a2d2a'}`,
+            borderRadius: '6px',
+            background: workspaceIntelligenceError
+              ? '#1b0d0c'
+              : 'linear-gradient(180deg, #161918 0%, #0d0f0e 100%)',
+            color: workspaceIntelligenceError ? '#f1b4aa' : '#d7d5ca',
+            cursor: 'pointer',
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: '8px',
+            padding: '0 10px',
+            fontSize: '12px',
+            fontWeight: 650,
+            flexShrink: 0,
+          }}
+        >
+          <Boxes {...ACTION_ICON_PROPS} />
+          <span>{workspaceSummaryLabel}</span>
         </button>
         <button
           type="button"
@@ -1211,6 +1357,83 @@ export function SessionView({
             {gitSummaryLabel}
           </span>
         </button>
+        <button
+          type="button"
+          aria-label="Open port previews"
+          title={previewPortsError ? 'Port previews unavailable' : 'Open port previews'}
+          onClick={() => {
+            setShowPortPreviews(true);
+            void loadPreviewPorts();
+          }}
+          style={{
+            height: '30px',
+            border: `1px solid ${previewPortsError ? '#3c2220' : '#2a2d2a'}`,
+            borderRadius: '6px',
+            background: previewPortsError
+              ? '#1b0d0c'
+              : 'linear-gradient(180deg, #161918 0%, #0d0f0e 100%)',
+            color: previewPortsError ? '#f1b4aa' : '#d7d5ca',
+            cursor: 'pointer',
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: '8px',
+            padding: '0 10px',
+            fontSize: '12px',
+            fontWeight: 650,
+            flexShrink: 0,
+          }}
+        >
+          <MonitorUp {...ACTION_ICON_PROPS} />
+          <span>{previewSummaryLabel}</span>
+        </button>
+        <button
+          type="button"
+          aria-label="Open session review"
+          title="Open session review"
+          onClick={() => setShowSessionReview(true)}
+          style={{
+            height: '30px',
+            border: '1px solid #2a2d2a',
+            borderRadius: '6px',
+            background: 'linear-gradient(180deg, #161918 0%, #0d0f0e 100%)',
+            color: '#d7d5ca',
+            cursor: 'pointer',
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: '8px',
+            padding: '0 10px',
+            fontSize: '12px',
+            fontWeight: 650,
+            flexShrink: 0,
+          }}
+        >
+          <ClipboardList {...ACTION_ICON_PROPS} />
+          <span>Review</span>
+        </button>
+        <button
+          type="button"
+          aria-label="Open supervisor"
+          title="Open supervisor"
+          onClick={() => setShowSupervisorLite(true)}
+          style={{
+            height: '30px',
+            border: '1px solid #2a2d2a',
+            borderRadius: '6px',
+            background: 'linear-gradient(180deg, #161918 0%, #0d0f0e 100%)',
+            color: '#d7d5ca',
+            cursor: 'pointer',
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: '8px',
+            padding: '0 10px',
+            fontSize: '12px',
+            fontWeight: 650,
+            flexShrink: 0,
+          }}
+        >
+          <Target {...ACTION_ICON_PROPS} />
+          <span>Supervisor</span>
+        </button>
         {gitPullRequest && gitPullRequestLabelText && (
           <a
             href={gitPullRequest.url}
@@ -1224,14 +1447,56 @@ export function SessionView({
         )}
       </div>
       {showFileExplorer && (
-        <FileExplorer rootPath={session.workspaceId} onClose={() => setShowFileExplorer(false)} />
+        <FileExplorer
+          rootPath={session.workspaceId}
+          initialPath={fileExplorerTarget?.path}
+          initialLine={fileExplorerTarget?.line}
+          onClose={() => {
+            setShowFileExplorer(false);
+            setFileExplorerTarget(null);
+          }}
+        />
+      )}
+      {showWorkspaceIntelligence && (
+        <WorkspaceIntelligence
+          rootPath={session.workspaceId}
+          initialIntelligence={workspaceIntelligence}
+          onClose={() => setShowWorkspaceIntelligence(false)}
+          onIntelligenceChange={setWorkspaceIntelligence}
+        />
       )}
       {showGitChanges && gitStatus?.isRepo && (
         <GitChanges
           rootPath={session.workspaceId}
           status={gitStatus}
           onClose={() => setShowGitChanges(false)}
+          onOpenWorkspaceFile={openWorkspaceFile}
           onRefresh={loadGitStatus}
+        />
+      )}
+      {showPortPreviews && (
+        <PortPreviews
+          rootPath={session.workspaceId}
+          initialPorts={previewPorts}
+          onClose={() => setShowPortPreviews(false)}
+          onPortsChange={setPreviewPorts}
+        />
+      )}
+      {showSessionReview && (
+        <SessionReview
+          sessionId={session.id}
+          rootPath={session.workspaceId}
+          onClose={() => setShowSessionReview(false)}
+          onOpenWorkspaceFile={openWorkspaceFile}
+        />
+      )}
+      {showSupervisorLite && (
+        <SupervisorLite
+          sessionId={session.id}
+          rootPath={session.workspaceId}
+          canInject={active && live}
+          onClose={() => setShowSupervisorLite(false)}
+          onInjectSuggestion={handleInjectSupervisorSuggestion}
         />
       )}
     </div>

@@ -1,5 +1,15 @@
 import Editor from '@monaco-editor/react';
-import { ArrowLeft, ArrowUp, FileText, Folder, Loader2, RefreshCw, X } from 'lucide-react';
+import {
+  ArrowLeft,
+  ArrowUp,
+  FileText,
+  Folder,
+  Image as ImageIcon,
+  Loader2,
+  RefreshCw,
+  Search,
+  X,
+} from 'lucide-react';
 import { type ComponentProps, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   definitionLineForSymbol,
@@ -7,16 +17,22 @@ import {
   type FilePreviewResponse,
   fileExplorerLayoutMode,
   fileLanguageFromPath,
+  filePreviewKind,
   type ImportTarget,
   importTargetForSymbol,
   isFileBrowseResponse,
   isFilePreviewResponse,
+  isWorkspaceSearchResponse,
+  markdownPreviewBlocks,
   parentPathWithinRoot,
   relativePathFromRoot,
+  type WorkspaceSearchResult,
 } from './file-explorer-model.js';
 
 interface FileExplorerProps {
   rootPath: string;
+  initialPath?: string | null;
+  initialLine?: number | null;
   onClose: () => void;
 }
 
@@ -25,6 +41,7 @@ interface SelectedFile {
   path: string;
   content: string;
   truncated: boolean;
+  kind: ReturnType<typeof filePreviewKind>;
 }
 
 type CompactPanel = 'files' | 'preview';
@@ -44,7 +61,12 @@ type FilePreviewLoadResult =
 const ICON_PROPS = { size: 15, strokeWidth: 2.1, 'aria-hidden': true } as const;
 const FILE_EXPLORER_Z_INDEX = 1000;
 
-export function FileExplorer({ rootPath, onClose }: FileExplorerProps) {
+export function FileExplorer({
+  rootPath,
+  initialPath = null,
+  initialLine = null,
+  onClose,
+}: FileExplorerProps) {
   const viewportWidth = useViewportWidth();
   const editorRef = useRef<MonacoEditorInstance | null>(null);
   const rootRef = useRef(rootPath);
@@ -59,6 +81,11 @@ export function FileExplorer({ rootPath, onClose }: FileExplorerProps) {
   const [selectedFile, setSelectedFile] = useState<SelectedFile | null>(null);
   const [previewLoadingPath, setPreviewLoadingPath] = useState<string | null>(null);
   const [previewError, setPreviewError] = useState('');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchResults, setSearchResults] = useState<WorkspaceSearchResult[] | null>(null);
+  const [searchTruncated, setSearchTruncated] = useState(false);
+  const [searchLoading, setSearchLoading] = useState(false);
+  const [searchError, setSearchError] = useState('');
   const [wordWrap, setWordWrap] = useState(true);
   const [compactPanel, setCompactPanel] = useState<CompactPanel>('files');
   const [pendingReveal, setPendingReveal] = useState<PendingReveal | null>(null);
@@ -75,6 +102,7 @@ export function FileExplorer({ rootPath, onClose }: FileExplorerProps) {
     () => (selectedFile ? fileLanguageFromPath(selectedFile.path) : 'plaintext'),
     [selectedFile],
   );
+  const selectedPreviewKind = selectedFile?.kind ?? 'text';
 
   useEffect(() => {
     rootRef.current = root;
@@ -146,11 +174,61 @@ export function FileExplorer({ rootPath, onClose }: FileExplorerProps) {
     [rootPath],
   );
 
+  const runSearch = useCallback(
+    async (query: string) => {
+      const trimmedQuery = query.trim();
+      setSearchError('');
+      if (!trimmedQuery) {
+        setSearchResults(null);
+        setSearchTruncated(false);
+        return;
+      }
+
+      setSearchLoading(true);
+      try {
+        const params = new URLSearchParams({ root: rootPath, query: trimmedQuery });
+        const response = await fetch(`/api/workspace/search?${params.toString()}`);
+        if (!response.ok) {
+          setSearchError('Search unavailable');
+          return;
+        }
+
+        const data = await response.json();
+        if (!isWorkspaceSearchResponse(data)) {
+          setSearchError('Search unavailable');
+          return;
+        }
+
+        setSearchResults(data.results);
+        setSearchTruncated(data.truncated);
+      } catch {
+        setSearchError('Search unavailable');
+      } finally {
+        setSearchLoading(false);
+      }
+    },
+    [rootPath],
+  );
+
   const openFilePath = useCallback(
-    async (path: string, name: string) => {
+    async (path: string, name = fileNameFromPath(path), line?: number | null) => {
       setPreviewLoadingPath(path);
       setPreviewError('');
       setPendingReveal(null);
+      const previewKind = filePreviewKind(path);
+      if (previewKind === 'image') {
+        setSelectedFile({
+          name,
+          path: absoluteWorkspacePath(path, rootRef.current),
+          content: '',
+          truncated: false,
+          kind: 'image',
+        });
+        setCompactPanel('preview');
+        setPreviewLoadingPath(null);
+        return;
+      }
+
       try {
         const result = await loadFilePreview(path);
         if (result.kind === 'not-previewable') {
@@ -172,7 +250,11 @@ export function FileExplorer({ rootPath, onClose }: FileExplorerProps) {
           path: preview.path,
           content: preview.content,
           truncated: preview.truncated,
+          kind: filePreviewKind(preview.path),
         });
+        if (line && line > 0) {
+          setPendingReveal({ path: preview.path, line });
+        }
         setCompactPanel('preview');
       } catch {
         setSelectedFile(null);
@@ -209,6 +291,7 @@ export function FileExplorer({ rootPath, onClose }: FileExplorerProps) {
             path: preview.path,
             content: preview.content,
             truncated: preview.truncated,
+            kind: filePreviewKind(preview.path),
           });
           setPendingReveal({
             path: preview.path,
@@ -233,6 +316,11 @@ export function FileExplorer({ rootPath, onClose }: FileExplorerProps) {
       void openImportTarget(target);
     };
   }, [openImportTarget]);
+
+  useEffect(() => {
+    if (!initialPath) return;
+    void openFilePath(initialPath, fileNameFromPath(initialPath), initialLine);
+  }, [initialLine, initialPath, openFilePath]);
 
   const handleEditorMount: EditorMount = useCallback((editor) => {
     editorRef.current = editor;
@@ -436,7 +524,65 @@ export function FileExplorer({ rootPath, onClose }: FileExplorerProps) {
                 {currentDisplayPath}
               </div>
             </div>
+            <form
+              onSubmit={(event) => {
+                event.preventDefault();
+                void runSearch(searchQuery);
+              }}
+              style={{
+                flexShrink: 0,
+                borderBottom: '1px solid #202320',
+                display: 'grid',
+                gridTemplateColumns: 'minmax(0, 1fr) 34px',
+                gap: '8px',
+                padding: '8px',
+              }}
+            >
+              <input
+                type="search"
+                aria-label="Search workspace files"
+                placeholder="Search files"
+                value={searchQuery}
+                onChange={(event) => setSearchQuery(event.currentTarget.value)}
+                disabled={searchLoading}
+                style={{
+                  minWidth: 0,
+                  height: '32px',
+                  border: '1px solid #303331',
+                  borderRadius: '6px',
+                  background: '#050606',
+                  color: '#f4f3ea',
+                  padding: '0 9px',
+                  fontFamily: 'monospace',
+                  fontSize: '12px',
+                  outline: 'none',
+                }}
+              />
+              <button
+                type="submit"
+                aria-label="Search workspace"
+                title="Search workspace"
+                disabled={searchLoading || !searchQuery.trim()}
+                style={iconButtonStyle(!searchLoading && Boolean(searchQuery.trim()))}
+              >
+                {searchLoading ? <Loader2 {...ICON_PROPS} /> : <Search {...ICON_PROPS} />}
+              </button>
+            </form>
             <div style={{ minHeight: 0, flex: 1, overflowY: 'auto', padding: '8px' }}>
+              {searchResults && (
+                <SearchResultsPanel
+                  results={searchResults}
+                  truncated={searchTruncated}
+                  onOpenResult={(result) =>
+                    void openFilePath(
+                      result.absolutePath,
+                      fileNameFromPath(result.path),
+                      result.line,
+                    )
+                  }
+                />
+              )}
+              {searchError && <InlineSearchError>{searchError}</InlineSearchError>}
               {loading && entries.length === 0 ? (
                 <EmptyState label="Loading directory" />
               ) : entries.length === 0 ? (
@@ -492,6 +638,8 @@ export function FileExplorer({ rootPath, onClose }: FileExplorerProps) {
                           <Loader2 {...ICON_PROPS} />
                         ) : entry.isDir ? (
                           <Folder {...ICON_PROPS} />
+                        ) : filePreviewKind(entry.path) === 'image' ? (
+                          <ImageIcon {...ICON_PROPS} />
                         ) : (
                           <FileText {...ICON_PROPS} />
                         )}
@@ -611,29 +759,31 @@ export function FileExplorer({ rootPath, onClose }: FileExplorerProps) {
                       fontWeight: 700,
                     }}
                   >
-                    {selectedLanguage}
+                    {selectedPreviewKind === 'image' ? 'image' : selectedLanguage}
                   </span>
-                  <button
-                    type="button"
-                    aria-label="Toggle line wrap"
-                    aria-pressed={wordWrap}
-                    title="Toggle line wrap"
-                    onClick={() => setWordWrap((wrapped) => !wrapped)}
-                    style={{
-                      flexShrink: 0,
-                      height: '28px',
-                      border: `1px solid ${wordWrap ? '#315f6b' : '#303331'}`,
-                      borderRadius: '6px',
-                      background: wordWrap ? '#071a1f' : '#141715',
-                      color: wordWrap ? '#9ce8f8' : '#d7d5ca',
-                      cursor: 'pointer',
-                      padding: '0 9px',
-                      fontSize: '11px',
-                      fontWeight: 700,
-                    }}
-                  >
-                    Wrap
-                  </button>
+                  {selectedPreviewKind !== 'image' && (
+                    <button
+                      type="button"
+                      aria-label="Toggle line wrap"
+                      aria-pressed={wordWrap}
+                      title="Toggle line wrap"
+                      onClick={() => setWordWrap((wrapped) => !wrapped)}
+                      style={{
+                        flexShrink: 0,
+                        height: '28px',
+                        border: `1px solid ${wordWrap ? '#315f6b' : '#303331'}`,
+                        borderRadius: '6px',
+                        background: wordWrap ? '#071a1f' : '#141715',
+                        color: wordWrap ? '#9ce8f8' : '#d7d5ca',
+                        cursor: 'pointer',
+                        padding: '0 9px',
+                        fontSize: '11px',
+                        fontWeight: 700,
+                      }}
+                    >
+                      Wrap
+                    </button>
+                  )}
                 </>
               )}
             </div>
@@ -656,51 +806,299 @@ export function FileExplorer({ rootPath, onClose }: FileExplorerProps) {
                     Preview truncated
                   </div>
                 )}
-                <div
-                  data-testid="file-preview-editor"
-                  style={{
-                    flex: 1,
-                    minHeight: 0,
-                    background: '#050606',
-                    overflow: 'hidden',
-                  }}
-                >
-                  <Editor
-                    height="100%"
-                    path={selectedFile.path}
-                    language={selectedLanguage}
-                    value={selectedFile.content}
-                    theme="vs-dark"
-                    onMount={handleEditorMount}
-                    options={{
-                      readOnly: true,
-                      domReadOnly: true,
-                      automaticLayout: true,
-                      minimap: { enabled: false },
-                      fontSize: 12,
-                      lineHeight: 20,
-                      lineNumbers: 'on',
-                      renderLineHighlight: 'line',
-                      scrollBeyondLastLine: false,
-                      smoothScrolling: true,
-                      wordWrap: wordWrap ? 'on' : 'off',
-                      wrappingIndent: 'same',
-                      tabSize: 2,
-                      detectIndentation: true,
-                      readOnlyMessage: { value: 'File preview is read-only' },
-                      bracketPairColorization: { enabled: true },
-                      guides: { indentation: true, bracketPairs: true },
-                      overviewRulerBorder: false,
-                      padding: { top: 12, bottom: 12 },
-                    }}
+                {selectedPreviewKind === 'image' ? (
+                  <ImagePreview
+                    rootPath={rootPath}
+                    file={selectedFile}
+                    displayPath={selectedDisplayPath}
                   />
-                </div>
+                ) : selectedPreviewKind === 'markdown' ? (
+                  <MarkdownPreview content={selectedFile.content} />
+                ) : (
+                  <div
+                    data-testid="file-preview-editor"
+                    style={{
+                      flex: 1,
+                      minHeight: 0,
+                      background: '#050606',
+                      overflow: 'hidden',
+                    }}
+                  >
+                    <Editor
+                      height="100%"
+                      path={selectedFile.path}
+                      language={selectedLanguage}
+                      value={selectedFile.content}
+                      theme="vs-dark"
+                      loading={<CodePreviewFallback content={selectedFile.content} />}
+                      onMount={handleEditorMount}
+                      options={{
+                        readOnly: true,
+                        domReadOnly: true,
+                        automaticLayout: true,
+                        minimap: { enabled: false },
+                        fontSize: 12,
+                        lineHeight: 20,
+                        lineNumbers: 'on',
+                        renderLineHighlight: 'line',
+                        scrollBeyondLastLine: false,
+                        smoothScrolling: true,
+                        wordWrap: wordWrap ? 'on' : 'off',
+                        wrappingIndent: 'same',
+                        tabSize: 2,
+                        detectIndentation: true,
+                        readOnlyMessage: { value: 'File preview is read-only' },
+                        bracketPairColorization: { enabled: true },
+                        guides: { indentation: true, bracketPairs: true },
+                        overviewRulerBorder: false,
+                        padding: { top: 12, bottom: 12 },
+                      }}
+                    />
+                  </div>
+                )}
               </>
             ) : (
               <EmptyState label="No file selected" />
             )}
           </section>
         </div>
+      </div>
+    </div>
+  );
+}
+
+function CodePreviewFallback({ content }: { content: string }) {
+  return (
+    <pre
+      style={{
+        height: '100%',
+        margin: 0,
+        overflow: 'auto',
+        background: '#050606',
+        color: '#f5f4ec',
+        padding: '12px',
+        fontFamily: 'monospace',
+        fontSize: '12px',
+        lineHeight: '20px',
+        whiteSpace: 'pre-wrap',
+      }}
+    >
+      {content}
+    </pre>
+  );
+}
+
+function SearchResultsPanel({
+  results,
+  truncated,
+  onOpenResult,
+}: {
+  results: WorkspaceSearchResult[];
+  truncated: boolean;
+  onOpenResult: (result: WorkspaceSearchResult) => void;
+}) {
+  return (
+    <div
+      style={{
+        border: '1px solid #242a26',
+        borderRadius: '6px',
+        background: '#070808',
+        marginBottom: '10px',
+        overflow: 'hidden',
+      }}
+    >
+      <div
+        style={{
+          minHeight: '30px',
+          borderBottom: '1px solid #202320',
+          color: '#d7d5ca',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: '8px',
+          padding: '0 8px',
+          fontSize: '11px',
+          fontWeight: 800,
+        }}
+      >
+        <span>Search results</span>
+        <span style={{ color: '#777c76' }}>
+          {results.length}
+          {truncated ? '+' : ''}
+        </span>
+      </div>
+      {results.length === 0 ? (
+        <div style={{ color: '#777c76', fontSize: '12px', padding: '10px' }}>No matches</div>
+      ) : (
+        <div style={{ display: 'grid', gap: '4px', padding: '6px' }}>
+          {results.map((result) => (
+            <button
+              key={`${result.path}:${result.line}:${result.matchType}`}
+              type="button"
+              aria-label={`Open search result ${result.path} line ${result.line}`}
+              onClick={() => onOpenResult(result)}
+              style={{
+                width: '100%',
+                border: '1px solid transparent',
+                borderRadius: '5px',
+                background: 'transparent',
+                color: '#f3f1e7',
+                cursor: 'pointer',
+                display: 'grid',
+                gap: '3px',
+                padding: '6px',
+                textAlign: 'left',
+              }}
+            >
+              <span
+                style={{
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                  fontFamily: 'monospace',
+                  fontSize: '12px',
+                  fontWeight: 750,
+                }}
+              >
+                {result.path}
+                {result.matchType === 'content' ? `:${result.line}` : ''}
+              </span>
+              <span
+                style={{
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                  color: '#8d928b',
+                  fontFamily: result.matchType === 'path' ? 'monospace' : undefined,
+                  fontSize: '11px',
+                }}
+              >
+                {result.excerpt}
+              </span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function MarkdownPreview({ content }: { content: string }) {
+  const blocks = markdownPreviewBlocks(content);
+  return (
+    <div
+      data-testid="markdown-preview"
+      style={{
+        flex: 1,
+        minHeight: 0,
+        overflow: 'auto',
+        background: '#080a09',
+        color: '#eeeade',
+        padding: '18px 20px',
+        fontSize: '14px',
+        lineHeight: '22px',
+      }}
+    >
+      {blocks.length === 0 ? (
+        <EmptyState label="Empty markdown file" />
+      ) : (
+        blocks.map((block, index) => {
+          const key = `${block.kind}:${index}`;
+          if (block.kind === 'heading') {
+            const Tag = `h${block.level}` as 'h1' | 'h2' | 'h3';
+            return (
+              <Tag
+                key={key}
+                style={{
+                  margin: index === 0 ? '0 0 12px' : '18px 0 10px',
+                  color: '#ffffff',
+                  fontSize: block.level === 1 ? '22px' : block.level === 2 ? '18px' : '15px',
+                  lineHeight: 1.25,
+                }}
+              >
+                {block.text}
+              </Tag>
+            );
+          }
+          if (block.kind === 'list') {
+            return (
+              <ul key={key} style={{ margin: '0 0 14px', paddingLeft: '22px' }}>
+                {block.items.map((item) => (
+                  <li key={item} style={{ margin: '4px 0' }}>
+                    {item}
+                  </li>
+                ))}
+              </ul>
+            );
+          }
+          if (block.kind === 'code') {
+            return (
+              <pre
+                key={key}
+                style={{
+                  border: '1px solid #242a26',
+                  borderRadius: '6px',
+                  background: '#050606',
+                  color: '#f5f4ec',
+                  margin: '0 0 14px',
+                  overflow: 'auto',
+                  padding: '10px',
+                  fontFamily: 'monospace',
+                  fontSize: '12px',
+                  lineHeight: '20px',
+                }}
+              >
+                {block.text || ' '}
+              </pre>
+            );
+          }
+          return (
+            <p key={key} style={{ margin: '0 0 14px', color: '#d7d5ca' }}>
+              {block.text}
+            </p>
+          );
+        })
+      )}
+    </div>
+  );
+}
+
+function ImagePreview({
+  rootPath,
+  file,
+  displayPath,
+}: {
+  rootPath: string;
+  file: SelectedFile;
+  displayPath: string;
+}) {
+  return (
+    <div
+      style={{
+        flex: 1,
+        minHeight: 0,
+        overflow: 'auto',
+        background: '#050606',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        padding: '18px',
+      }}
+    >
+      <div
+        style={{
+          maxWidth: '100%',
+          border: '1px solid #252b27',
+          borderRadius: '6px',
+          background: '#101310',
+          padding: '12px',
+        }}
+      >
+        <img
+          alt={`Preview ${displayPath}`}
+          src={rawFilePreviewUrl(rootPath, file.path)}
+          style={{ display: 'block', maxWidth: '100%', maxHeight: '520px' }}
+        />
       </div>
     </div>
   );
@@ -722,6 +1120,25 @@ function EmptyState({ label }: { label: string }) {
       }}
     >
       {label}
+    </div>
+  );
+}
+
+function InlineSearchError({ children }: { children: string }) {
+  return (
+    <div
+      style={{
+        border: '1px solid #3c2220',
+        borderRadius: '6px',
+        background: '#1b0d0c',
+        color: '#f1b4aa',
+        marginBottom: '10px',
+        padding: '8px',
+        fontSize: '12px',
+        fontWeight: 650,
+      }}
+    >
+      {children}
     </div>
   );
 }
@@ -763,6 +1180,16 @@ function iconButtonStyle(enabled: boolean) {
 
 function fileNameFromPath(path: string): string {
   return path.split(/[\\/]/).pop() || path;
+}
+
+function absoluteWorkspacePath(path: string, rootPath: string): string {
+  if (path.startsWith('/')) return path;
+  return `${rootPath.replace(/\/+$/, '')}/${path.replace(/^\/+/, '')}`;
+}
+
+function rawFilePreviewUrl(rootPath: string, path: string): string {
+  const params = new URLSearchParams({ root: rootPath, path });
+  return `/api/file/raw?${params.toString()}`;
 }
 
 function useViewportWidth(): number {

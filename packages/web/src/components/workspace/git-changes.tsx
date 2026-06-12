@@ -28,6 +28,7 @@ interface GitChangesProps {
   rootPath: string;
   status: GitStatusResponse;
   onClose: () => void;
+  onOpenWorkspaceFile?: (path: string, line?: number) => void;
   onRefresh: () => Promise<void>;
 }
 
@@ -40,7 +41,13 @@ type DiffLoadState =
 const ICON_PROPS = { size: 15, strokeWidth: 2.1, 'aria-hidden': true } as const;
 const GIT_CHANGES_Z_INDEX = 1000;
 
-export function GitChanges({ rootPath, status, onClose, onRefresh }: GitChangesProps) {
+export function GitChanges({
+  rootPath,
+  status,
+  onClose,
+  onOpenWorkspaceFile,
+  onRefresh,
+}: GitChangesProps) {
   const viewportWidth = useViewportWidth();
   const compact = fileExplorerLayoutMode(viewportWidth) === 'compact';
   const contextSummary = gitContextSummaryLabel(status);
@@ -366,6 +373,7 @@ export function GitChanges({ rootPath, status, onClose, onRefresh }: GitChangesP
               diffsByPath={diffsByPath}
               selectedPath={selectedEntry?.path ?? null}
               onOpenEntry={openEntry}
+              onOpenWorkspaceFile={onOpenWorkspaceFile}
             />
           </section>
         </div>
@@ -440,11 +448,13 @@ function GitDiffPreviewStack({
   diffsByPath,
   selectedPath,
   onOpenEntry,
+  onOpenWorkspaceFile,
 }: {
   entries: GitStatusEntry[];
   diffsByPath: Record<string, DiffLoadState>;
   selectedPath: string | null;
   onOpenEntry: (entry: GitStatusEntry) => void;
+  onOpenWorkspaceFile?: (path: string, line?: number) => void;
 }) {
   if (entries.length === 0) {
     return <EmptyState label="No Git changes in this directory" />;
@@ -467,6 +477,7 @@ function GitDiffPreviewStack({
           diffState={diffsByPath[entry.path]}
           selected={selectedPath === entry.path}
           onOpenEntry={onOpenEntry}
+          onOpenWorkspaceFile={onOpenWorkspaceFile}
         />
       ))}
     </div>
@@ -478,11 +489,13 @@ function GitDiffSection({
   diffState,
   selected,
   onOpenEntry,
+  onOpenWorkspaceFile,
 }: {
   entry: GitStatusEntry;
   diffState: DiffLoadState | undefined;
   selected: boolean;
   onOpenEntry: (entry: GitStatusEntry) => void;
+  onOpenWorkspaceFile?: (path: string, line?: number) => void;
 }) {
   return (
     <article
@@ -506,6 +519,17 @@ function GitDiffSection({
         </span>
         <StatusChip status={entry.status} />
       </button>
+      {onOpenWorkspaceFile && (
+        <button
+          type="button"
+          aria-label={`Open workspace file ${entry.path}`}
+          onClick={() => onOpenWorkspaceFile(entry.path)}
+          style={openWorkspaceFileButtonStyle()}
+        >
+          <FileCode2 {...ICON_PROPS} />
+          Open file
+        </button>
+      )}
       {diffState?.state === 'loaded' ? (
         diffState.preview.mode === 'binary' ? (
           <BinaryPreview preview={diffState.preview} />
@@ -816,6 +840,25 @@ function iconButtonStyle(enabled: boolean) {
     justifyContent: 'center',
     padding: 0,
     flexShrink: 0,
+  } as const;
+}
+
+function openWorkspaceFileButtonStyle() {
+  return {
+    width: '100%',
+    minHeight: '32px',
+    border: '0',
+    borderTop: '1px solid #1b201d',
+    background: '#070908',
+    color: '#cfd5cc',
+    cursor: 'pointer',
+    display: 'flex',
+    alignItems: 'center',
+    gap: '7px',
+    padding: '7px 12px',
+    textAlign: 'left',
+    fontSize: '11px',
+    fontWeight: 800,
   } as const;
 }
 

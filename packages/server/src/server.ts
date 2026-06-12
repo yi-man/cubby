@@ -9,7 +9,9 @@ import Fastify from 'fastify';
 import { AuthService, buildAuthCookie, clearAuthCookie } from './auth/service.js';
 import { DEFAULT_SERVER_PORT, loadRuntimeConfig, type RuntimeConfig } from './config/runtime.js';
 import { Database } from './db/index.js';
+import { readRuntimeDiagnostics } from './diagnostics/runtime.js';
 import { registerRoutes } from './http/routes.js';
+import { registerPreviewRoutes } from './preview/routes.js';
 import { ClaudeCodeProvider } from './provider/claude-code.js';
 import { CodexProvider } from './provider/codex.js';
 import { MockClaudeCodeProvider } from './provider/mock-claude-code.js';
@@ -71,6 +73,7 @@ export async function createServer(
   sessionManager.reconcileDetachedLiveSessions();
 
   const hub = new WebSocketHub();
+  const stopWebSocketKeepAlive = hub.startKeepAlive();
   const wsHandler = new WSCommandHandler(sessionManager, hub);
 
   // Broadcast session status changes
@@ -79,6 +82,11 @@ export async function createServer(
       evt: 'session.status',
       data: { sessionId, status },
     });
+    if (status === 'ended') {
+      void sessionManager.generateSessionReview(sessionId).catch((err) => {
+        app.log.warn({ err, sessionId }, 'Failed to generate session review');
+      });
+    }
   });
   sessionManager.onSessionUpdate((session) => {
     hub.broadcastToAll({ evt: WS_EVENTS.SESSION_UPDATED, data: session });
@@ -93,6 +101,8 @@ export async function createServer(
       hub.broadcastToAll({ evt: WS_EVENTS.SESSION_DELETED, data: { sessionId } });
     },
   });
+  registerPreviewRoutes(app);
+  app.get('/api/diagnostics/runtime', async () => readRuntimeDiagnostics(runtimeConfig));
   registerAuthRoutes(app, authService);
   app.get('/healthz', async () => ({ status: 'ok' }));
 
@@ -136,7 +146,12 @@ export async function createServer(
   });
 
   // Graceful shutdown
+  app.addHook('preClose', async () => {
+    hub.closeAll();
+  });
+
   app.addHook('onClose', async () => {
+    stopWebSocketKeepAlive();
     try {
       await sessionManager.shutdown();
     } finally {

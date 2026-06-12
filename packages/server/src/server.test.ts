@@ -96,6 +96,31 @@ function waitForExit(
   });
 }
 
+async function waitForPersistedSessionReview(
+  dbPath: string,
+  sessionId: string,
+  timeoutMs = 2000,
+): Promise<unknown> {
+  const startedAt = Date.now();
+  let lastError: unknown;
+
+  while (Date.now() - startedAt < timeoutMs) {
+    const db = new Database(dbPath);
+    const store = new SessionStore(db);
+    try {
+      const review = store.getSessionReview(sessionId);
+      if (review) return review;
+    } catch (err) {
+      lastError = err;
+    } finally {
+      db.close();
+    }
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+
+  throw new Error(`Timed out waiting for persisted session review: ${String(lastError)}`);
+}
+
 describe('createServer', () => {
   const previousDataDir = process.env.CUBBY_DATA_DIR;
   const previousMockClaudeProvider = process.env.CUBBY_MOCK_CLAUDE_PROVIDER;
@@ -179,6 +204,31 @@ describe('createServer', () => {
     expect(statusResponse.statusCode).toBe(200);
     expect(statusResponse.json()).toEqual({ enabled: false, authenticated: true });
     expect(sessionsResponse.statusCode).toBe(200);
+  });
+
+  it('returns runtime diagnostics through the HTTP API', async () => {
+    const { app } = await createServer(0);
+
+    const response = await app.inject({ method: 'GET', url: '/api/diagnostics/runtime' });
+    await app.close();
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      server: {
+        dataDir: process.env.CUBBY_DATA_DIR,
+      },
+    });
+    expect(response.json().checks.map((check: { id: string }) => check.id)).toEqual(
+      expect.arrayContaining([
+        'tool.git',
+        'tool.node',
+        'tool.bun',
+        'dataDir.writable',
+        'disk.free',
+        'remote.bind',
+        'remote.auth',
+      ]),
+    );
   });
 
   it('requires login for protected HTTP routes when password auth is configured', async () => {
@@ -390,6 +440,60 @@ describe('createServer', () => {
     expect(response.json()).toEqual({ error: 'Path is outside workspace root' });
   });
 
+  it('returns workspace intelligence for a workspace root', async () => {
+    const workspaceDir = mkdtempSync(join(tmpdir(), 'cubby-workspace-intelligence-route-'));
+    dataDirs.push(workspaceDir);
+    writeFileSync(join(workspaceDir, 'pnpm-lock.yaml'), '');
+    writeFileSync(
+      join(workspaceDir, 'package.json'),
+      JSON.stringify({ scripts: { test: 'vitest run', build: 'tsc -b' } }),
+    );
+    writeFileSync(join(workspaceDir, 'Makefile'), ['check:', '\tpnpm test'].join('\n'));
+    writeFileSync(join(workspaceDir, 'README.md'), '# Intelligence Route\n\nRoute summary.\n');
+    const { app } = await createServer(0);
+
+    const response = await app.inject({
+      method: 'GET',
+      url: `/api/workspace/intelligence?root=${encodeURIComponent(workspaceDir)}`,
+    });
+    await app.close();
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      root: realpathSync(workspaceDir),
+      packageManager: 'pnpm',
+      packageManagerEvidence: 'pnpm-lock.yaml',
+      scripts: [
+        { name: 'test', command: 'vitest run' },
+        { name: 'build', command: 'tsc -b' },
+      ],
+      makeTargets: [{ name: 'check', command: 'make check' }],
+      readme: {
+        path: 'README.md',
+        title: 'Intelligence Route',
+        excerpt: 'Route summary.',
+      },
+    });
+  });
+
+  it('registers workspace preview port discovery routes', async () => {
+    const workspaceDir = mkdtempSync(join(tmpdir(), 'cubby-preview-workspace-'));
+    dataDirs.push(workspaceDir);
+    const { app } = await createServer(0);
+
+    const response = await app.inject({
+      method: 'GET',
+      url: `/api/previews?root=${encodeURIComponent(workspaceDir)}`,
+    });
+    await app.close();
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      root: realpathSync(workspaceDir),
+      ports: expect.any(Array),
+    });
+  });
+
   it('reads a text file inside a workspace root', async () => {
     const workspaceDir = mkdtempSync(join(tmpdir(), 'cubby-workspace-'));
     dataDirs.push(workspaceDir);
@@ -412,6 +516,99 @@ describe('createServer', () => {
       content: 'hello workspace\n',
       truncated: false,
     });
+  });
+
+  it('searches text files inside a workspace root and reports path matches', async () => {
+    const workspaceDir = mkdtempSync(join(tmpdir(), 'cubby-search-workspace-'));
+    dataDirs.push(workspaceDir);
+    mkdirSync(join(workspaceDir, 'src'));
+    mkdirSync(join(workspaceDir, 'node_modules'));
+    writeFileSync(join(workspaceDir, 'README.md'), '# Cubby\n\nSearchable roadmap note.\n');
+    writeFileSync(join(workspaceDir, 'src/app.ts'), 'export const marker = "roadmap";\n');
+    writeFileSync(join(workspaceDir, 'src/quick-open.ts'), 'export const value = 1;\n');
+    writeFileSync(join(workspaceDir, 'node_modules/skip.ts'), 'roadmap should be skipped\n');
+    const { app } = await createServer(0);
+
+    const contentResponse = await app.inject({
+      method: 'GET',
+      url: `/api/workspace/search?root=${encodeURIComponent(workspaceDir)}&query=${encodeURIComponent(
+        'roadmap',
+      )}`,
+    });
+    const pathResponse = await app.inject({
+      method: 'GET',
+      url: `/api/workspace/search?root=${encodeURIComponent(workspaceDir)}&query=${encodeURIComponent(
+        'quick',
+      )}`,
+    });
+    await app.close();
+
+    expect(contentResponse.statusCode).toBe(200);
+    expect(contentResponse.json()).toEqual({
+      root: realpathSync(workspaceDir),
+      query: 'roadmap',
+      truncated: false,
+      results: [
+        {
+          path: 'README.md',
+          absolutePath: realpathSync(join(workspaceDir, 'README.md')),
+          line: 3,
+          column: 12,
+          excerpt: 'Searchable roadmap note.',
+          matchType: 'content',
+        },
+        {
+          path: 'src/app.ts',
+          absolutePath: realpathSync(join(workspaceDir, 'src/app.ts')),
+          line: 1,
+          column: 24,
+          excerpt: 'export const marker = "roadmap";',
+          matchType: 'content',
+        },
+      ],
+    });
+    expect(pathResponse.statusCode).toBe(200);
+    expect(pathResponse.json()).toMatchObject({
+      root: realpathSync(workspaceDir),
+      query: 'quick',
+      truncated: false,
+      results: [
+        {
+          path: 'src/quick-open.ts',
+          absolutePath: realpathSync(join(workspaceDir, 'src/quick-open.ts')),
+          line: 1,
+          column: 1,
+          excerpt: 'src/quick-open.ts',
+          matchType: 'path',
+        },
+      ],
+    });
+  });
+
+  it('serves image previews inside a workspace root', async () => {
+    const workspaceDir = mkdtempSync(join(tmpdir(), 'cubby-image-workspace-'));
+    dataDirs.push(workspaceDir);
+    const filePath = join(workspaceDir, 'logo.png');
+    writeFileSync(
+      filePath,
+      Buffer.from(
+        'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=',
+        'base64',
+      ),
+    );
+    const { app } = await createServer(0);
+
+    const response = await app.inject({
+      method: 'GET',
+      url: `/api/file/raw?root=${encodeURIComponent(workspaceDir)}&path=${encodeURIComponent(
+        filePath,
+      )}`,
+    });
+    await app.close();
+
+    expect(response.statusCode).toBe(200);
+    expect(response.headers['content-type']).toBe('image/png');
+    expect(Buffer.from(response.rawPayload).length).toBeGreaterThan(0);
   });
 
   it('rejects binary file previews', async () => {
@@ -709,6 +906,186 @@ describe('createServer', () => {
     expect(defaultResponse.json()).toMatchObject({ title: 'Default yolo', yolo: true });
     expect(explicitResponse.statusCode).toBe(200);
     expect(explicitResponse.json()).toMatchObject({ title: 'No yolo', yolo: false });
+  });
+
+  it('creates HTTP sessions with a git baseline and generates session reviews', async () => {
+    const workspaceDir = mkdtempSync(join(tmpdir(), 'cubby-session-review-route-'));
+    dataDirs.push(workspaceDir);
+    writeFileSync(join(workspaceDir, 'README.md'), '# review\n');
+    await runGit(workspaceDir, ['init']);
+    await runGit(workspaceDir, ['config', 'user.email', 'cubby@example.test']);
+    await runGit(workspaceDir, ['config', 'user.name', 'Cubby Test']);
+    await runGit(workspaceDir, ['add', '.']);
+    await runGit(workspaceDir, ['commit', '-m', 'initial']);
+    const { app } = await createServer(0);
+
+    const createResponse = await app.inject({
+      method: 'POST',
+      url: '/api/sessions',
+      payload: { workspaceId: workspaceDir, provider: 'claude-code', title: 'Review route' },
+    });
+    const session = createResponse.json();
+    writeFileSync(join(workspaceDir, 'notes.txt'), 'review me\n');
+    const reviewResponse = await app.inject({
+      method: 'POST',
+      url: `/api/sessions/${session.id}/review`,
+    });
+    const getReviewResponse = await app.inject({
+      method: 'GET',
+      url: `/api/sessions/${session.id}/review`,
+    });
+    await app.close();
+
+    expect(createResponse.statusCode).toBe(200);
+    expect(session.baselineGitHead).toMatch(/^[0-9a-f]{40}$/);
+    expect(reviewResponse.statusCode).toBe(200);
+    expect(reviewResponse.json()).toMatchObject({
+      sessionId: session.id,
+      baselineGitHead: session.baselineGitHead,
+      changedFiles: [{ path: 'notes.txt', status: 'untracked' }],
+      summary: { total: 1, untracked: 1 },
+      lastOutput: '',
+      exitCode: null,
+    });
+    expect(getReviewResponse.json()).toEqual(reviewResponse.json());
+  });
+
+  it('generates a persisted session review when a session ends', async () => {
+    const dataDir = useTempDataDir('cubby-session-review-ended-');
+    const workspaceDir = mkdtempSync(join(tmpdir(), 'cubby-session-review-ended-workspace-'));
+    dataDirs.push(workspaceDir);
+    process.env.CUBBY_MOCK_CLAUDE_PROVIDER = '1';
+    writeFileSync(join(workspaceDir, 'README.md'), '# review\n');
+    await runGit(workspaceDir, ['init']);
+    await runGit(workspaceDir, ['config', 'user.email', 'cubby@example.test']);
+    await runGit(workspaceDir, ['config', 'user.name', 'Cubby Test']);
+    await runGit(workspaceDir, ['add', '.']);
+    await runGit(workspaceDir, ['commit', '-m', 'initial']);
+
+    const { app } = await createServer(0);
+    const createResponse = await app.inject({
+      method: 'POST',
+      url: '/api/sessions',
+      payload: { workspaceId: workspaceDir, provider: 'claude-code', title: 'Auto review' },
+    });
+    const session = createResponse.json();
+    await app.inject({
+      method: 'POST',
+      url: `/api/sessions/${session.id}/start`,
+      payload: { cwd: workspaceDir },
+    });
+    writeFileSync(join(workspaceDir, 'README.md'), '# review changed\n');
+
+    const killResponse = await app.inject({
+      method: 'POST',
+      url: `/api/sessions/${session.id}/kill`,
+    });
+    const review = await waitForPersistedSessionReview(join(dataDir, 'cubby.db'), session.id);
+    await app.close();
+
+    expect(killResponse.statusCode).toBe(200);
+    expect(review).toMatchObject({
+      sessionId: session.id,
+      baselineGitHead: session.baselineGitHead,
+      changedFiles: [{ path: 'README.md', status: 'modified' }],
+      summary: { total: 1, modified: 1 },
+    });
+  });
+
+  it('runs verification commands through the HTTP API and lists saved runs', async () => {
+    const workspaceDir = mkdtempSync(join(tmpdir(), 'cubby-verification-route-'));
+    dataDirs.push(workspaceDir);
+    const { app } = await createServer(0);
+    const createResponse = await app.inject({
+      method: 'POST',
+      url: '/api/sessions',
+      payload: { workspaceId: workspaceDir, provider: 'claude-code', title: 'Verify route' },
+    });
+    const session = createResponse.json();
+
+    const runResponse = await app.inject({
+      method: 'POST',
+      url: `/api/sessions/${session.id}/verification-runs`,
+      payload: { command: 'printf "api verification ok\\n"' },
+    });
+    const listResponse = await app.inject({
+      method: 'GET',
+      url: `/api/sessions/${session.id}/verification-runs`,
+    });
+    await app.close();
+
+    expect(runResponse.statusCode).toBe(200);
+    expect(runResponse.json()).toMatchObject({
+      sessionId: session.id,
+      workspaceId: workspaceDir,
+      command: 'printf "api verification ok\\n"',
+      exitCode: 0,
+      outputSummary: 'api verification ok\n',
+    });
+    expect(listResponse.statusCode).toBe(200);
+    expect(listResponse.json()).toEqual([runResponse.json()]);
+  });
+
+  it('manages supervisor objective and manual reviews through the HTTP API', async () => {
+    const workspaceDir = mkdtempSync(join(tmpdir(), 'cubby-supervisor-route-'));
+    dataDirs.push(workspaceDir);
+    writeFileSync(join(workspaceDir, 'README.md'), '# supervisor\n');
+    await runGit(workspaceDir, ['init']);
+    await runGit(workspaceDir, ['config', 'user.email', 'cubby@example.test']);
+    await runGit(workspaceDir, ['config', 'user.name', 'Cubby Test']);
+    await runGit(workspaceDir, ['add', '.']);
+    await runGit(workspaceDir, ['commit', '-m', 'initial']);
+    const { app } = await createServer(0);
+    const createResponse = await app.inject({
+      method: 'POST',
+      url: '/api/sessions',
+      payload: { workspaceId: workspaceDir, provider: 'claude-code', title: 'Supervisor route' },
+    });
+    const session = createResponse.json();
+    writeFileSync(join(workspaceDir, 'todo.txt'), 'review this\n');
+
+    const objectiveResponse = await app.inject({
+      method: 'PUT',
+      url: `/api/sessions/${session.id}/supervisor/objective`,
+      payload: { objective: 'Finish the supervisor workflow' },
+    });
+    const getResponse = await app.inject({
+      method: 'GET',
+      url: `/api/sessions/${session.id}/supervisor`,
+    });
+    const reviewResponse = await app.inject({
+      method: 'POST',
+      url: `/api/sessions/${session.id}/supervisor/reviews`,
+    });
+    const emptyObjectiveResponse = await app.inject({
+      method: 'PUT',
+      url: `/api/sessions/${session.id}/supervisor/objective`,
+      payload: { objective: '   ' },
+    });
+    await app.close();
+
+    expect(objectiveResponse.statusCode).toBe(200);
+    expect(objectiveResponse.json()).toMatchObject({
+      sessionId: session.id,
+      objective: 'Finish the supervisor workflow',
+      status: 'watching',
+    });
+    expect(getResponse.statusCode).toBe(200);
+    expect(getResponse.json()).toMatchObject({
+      sessionId: session.id,
+      objective: 'Finish the supervisor workflow',
+      reviews: [],
+    });
+    expect(reviewResponse.statusCode).toBe(200);
+    expect(reviewResponse.json()).toMatchObject({
+      sessionId: session.id,
+      objective: 'Finish the supervisor workflow',
+    });
+    expect(reviewResponse.json().summary).toContain('Finish the supervisor workflow');
+    expect(reviewResponse.json().suggestions).toContain(
+      'Run a verification command before accepting the result.',
+    );
+    expect(emptyObjectiveResponse.statusCode).toBe(400);
   });
 
   it('renames a session through the HTTP API', async () => {

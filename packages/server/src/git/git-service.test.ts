@@ -7,6 +7,8 @@ import {
   diffModeForEntry,
   parseGitHubRemoteUrl,
   parseGitStatusPorcelain,
+  readGitHead,
+  readGitSessionReview,
   readGitStatus,
   statusLabelForEntry,
 } from './git-service.js';
@@ -129,6 +131,71 @@ describe('git service model', () => {
     });
     expect(status.context?.gitDir).toBe(join(repoRoot, '.git'));
     expect(status.context?.gitCommonDir).toBe(join(repoRoot, '.git'));
+  });
+
+  it('reads session review changes from a baseline commit', async () => {
+    const root = createCommittedRepo('cubby-git-session-review-');
+    const baseline = await readGitHead(root);
+    expect(baseline).toBeTruthy();
+
+    runGit(root, ['mv', 'README.md', 'GUIDE.md']);
+    runGit(root, ['commit', '-am', 'rename guide']);
+    writeFileSync(join(root, 'notes.txt'), 'untracked notes\n');
+
+    const review = await readGitSessionReview(root, baseline);
+
+    expect(review).toMatchObject({
+      isRepo: true,
+      baselineGitHead: baseline,
+      summary: {
+        total: 2,
+        added: 0,
+        modified: 0,
+        deleted: 0,
+        renamed: 1,
+        untracked: 1,
+      },
+    });
+    expect(review.currentGitHead).not.toBe(baseline);
+    expect(review.changedFiles).toEqual([
+      {
+        originalPath: 'README.md',
+        path: 'GUIDE.md',
+        status: 'renamed',
+      },
+      {
+        path: 'notes.txt',
+        status: 'untracked',
+      },
+    ]);
+  });
+
+  it('includes uncommitted tracked changes in session review changes', async () => {
+    const root = createCommittedRepo('cubby-git-session-review-working-tree-');
+    const baseline = await readGitHead(root);
+    expect(baseline).toBeTruthy();
+
+    writeFileSync(join(root, 'README.md'), '# changed\n');
+    writeFileSync(join(root, 'staged.txt'), 'staged file\n');
+    runGit(root, ['add', 'staged.txt']);
+
+    const review = await readGitSessionReview(root, baseline);
+
+    expect(review.changedFiles).toEqual([
+      {
+        path: 'README.md',
+        status: 'modified',
+      },
+      {
+        path: 'staged.txt',
+        status: 'added',
+      },
+    ]);
+    expect(review.summary).toMatchObject({
+      total: 2,
+      added: 1,
+      modified: 1,
+    });
   });
 
   it('returns linked worktree context for a session workspace inside a worktree', async () => {

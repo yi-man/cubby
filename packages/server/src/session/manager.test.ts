@@ -1,10 +1,12 @@
+import { spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { unlinkSync } from 'node:fs';
+import { mkdtempSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { AgentProvider, SpawnOptions } from '@cubby/core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Database } from '../db/index.js';
+import { readGitHead } from '../git/git-service.js';
 import { SessionManager } from './manager.js';
 import { SessionStore } from './store.js';
 
@@ -39,6 +41,24 @@ function createMockProvider(): AgentProvider & {
     },
     async kill() {},
   };
+}
+
+function runGit(cwd: string, args: string[]): void {
+  const result = spawnSync('git', args, { cwd, encoding: 'utf8' });
+  if (result.status !== 0) {
+    throw new Error(`git ${args.join(' ')} failed: ${result.stderr}`);
+  }
+}
+
+function createCommittedRepo(prefix: string): string {
+  const root = mkdtempSync(join(tmpdir(), prefix));
+  writeFileSync(join(root, 'README.md'), '# test\n');
+  runGit(root, ['init']);
+  runGit(root, ['config', 'user.email', 'cubby@example.test']);
+  runGit(root, ['config', 'user.name', 'Cubby Test']);
+  runGit(root, ['add', '.']);
+  runGit(root, ['commit', '-m', 'initial']);
+  return root;
 }
 
 describe('SessionManager', () => {
@@ -216,6 +236,168 @@ describe('SessionManager', () => {
     expect(updated?.status).toBe('running');
     await new Promise((r) => setTimeout(r, 100));
     expect(outputs.length).toBeGreaterThan(0);
+  });
+
+  it('generates and persists a session review', async () => {
+    const workspace = createCommittedRepo('cubby-session-review-');
+    const baseline = await readGitHead(workspace);
+    const session = manager.createSession({
+      workspaceId: workspace,
+      provider: 'mock',
+      baselineGitHead: baseline,
+    });
+    store.appendTerminalOutput(session.id, { data: 'first output\n', seqStart: 0, seq: 13 });
+    store.appendTerminalOutput(session.id, { data: 'final output\n', seqStart: 13, seq: 26 });
+    store.updateStatus(session.id, 'ended', { exitCode: 2 });
+    writeFileSync(join(workspace, 'notes.txt'), 'review me\n');
+
+    const review = await manager.generateSessionReview(session.id);
+
+    expect(review).toMatchObject({
+      sessionId: session.id,
+      workspaceId: workspace,
+      baselineGitHead: baseline,
+      changedFiles: [{ path: 'notes.txt', status: 'untracked' }],
+      summary: { total: 1, untracked: 1 },
+      lastOutput: 'first output\nfinal output\n',
+      exitCode: 2,
+    });
+    expect(store.getSessionReview(session.id)).toEqual(review);
+  });
+
+  it('runs and records a verification command in the session workspace', async () => {
+    const workspace = mkdtempSync(join(tmpdir(), 'cubby-verification-run-'));
+    const session = manager.createSession({
+      workspaceId: workspace,
+      provider: 'mock',
+    });
+
+    const run = await manager.runVerification(session.id, 'printf "verification ok\\n"');
+
+    expect(run).toMatchObject({
+      sessionId: session.id,
+      workspaceId: workspace,
+      command: 'printf "verification ok\\n"',
+      exitCode: 0,
+      outputSummary: 'verification ok\n',
+    });
+    expect(run.durationMs).toBeGreaterThanOrEqual(0);
+    expect(store.listVerificationRuns(session.id)).toEqual([run]);
+  });
+
+  it('binds a supervisor objective and reports watching state', () => {
+    const session = manager.createSession({ workspaceId: '/tmp', provider: 'mock' });
+
+    const state = manager.setSessionObjective(session.id, 'Ship supervisor-lite');
+
+    expect(state).toMatchObject({
+      sessionId: session.id,
+      workspaceId: '/tmp',
+      objective: 'Ship supervisor-lite',
+      status: 'watching',
+      stuckReasons: [],
+      reviews: [],
+    });
+    expect(manager.getSupervisorState(session.id).objective).toBe('Ship supervisor-lite');
+  });
+
+  it('detects a long-running session with stale terminal output as idle', () => {
+    const session = manager.createSession({ workspaceId: '/tmp', provider: 'mock' });
+    manager.setSessionObjective(session.id, 'Finish a long task');
+    store.updateStatus(session.id, 'running');
+
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date('2026-06-11T10:00:00.000Z'));
+      store.appendTerminalOutput(session.id, 'working...\n');
+      vi.setSystemTime(new Date('2026-06-11T10:07:00.000Z'));
+
+      const state = manager.getSupervisorState(session.id);
+
+      expect(state.status).toBe('idle');
+      expect(state.idleForMs).toBe(420_000);
+      expect(state.stuckReasons).toContain('No terminal output for 7m');
+      expect(state.lastOutputAt).toBe('2026-06-11T10:00:00.000Z');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('detects terminal output that is waiting for user input as stuck', () => {
+    const session = manager.createSession({ workspaceId: '/tmp', provider: 'mock' });
+    manager.setSessionObjective(session.id, 'Finish a blocked task');
+    store.updateStatus(session.id, 'running');
+    store.appendTerminalOutput(session.id, 'Mock Claude Code ready; waiting for input\r\n');
+
+    const state = manager.getSupervisorState(session.id);
+
+    expect(state.status).toBe('stuck');
+    expect(state.stuckReasons).toContain('Terminal appears to be waiting for input');
+  });
+
+  it('detects the Claude workspace trust confirmation prompt as stuck', () => {
+    const session = manager.createSession({ workspaceId: '/tmp', provider: 'claude-code' });
+    manager.setSessionObjective(session.id, 'Finish a blocked Claude task');
+    store.updateStatus(session.id, 'running');
+    store.appendTerminalOutput(
+      session.id,
+      [
+        'Quick safety check: Is this a project you created or one you trust?',
+        '1. Yes, I trust this folder   2. No, exit',
+        'Enter to confirm · Esc to cancel',
+      ].join('\r\n'),
+    );
+
+    const state = manager.getSupervisorState(session.id);
+
+    expect(state.status).toBe('stuck');
+    expect(state.stuckReasons).toContain('Terminal appears to be waiting for input');
+  });
+
+  it('detects cursor-positioned terminal confirmation prompts as stuck', () => {
+    const session = manager.createSession({ workspaceId: '/tmp', provider: 'claude-code' });
+    manager.setSessionObjective(session.id, 'Finish an ANSI-rendered prompt');
+    store.updateStatus(session.id, 'running');
+    store.appendTerminalOutput(
+      session.id,
+      '\x1b[2GEnter\x1b[8Gto\x1b[11Gconfirm\x1b[21GEsc\x1b[25Gto\x1b[28Gcancel\r\n',
+    );
+
+    const state = manager.getSupervisorState(session.id);
+
+    expect(state.status).toBe('stuck');
+    expect(state.stuckReasons).toContain('Terminal appears to be waiting for input');
+  });
+
+  it('runs a manual supervisor review and persists suggestions without writing terminal input', async () => {
+    const workspace = createCommittedRepo('cubby-supervisor-review-');
+    const baseline = await readGitHead(workspace);
+    const session = manager.createSession({
+      workspaceId: workspace,
+      provider: 'mock',
+      baselineGitHead: baseline,
+    });
+    manager.setSessionObjective(session.id, 'Implement the roadmap supervisor workflow');
+    store.appendTerminalOutput(session.id, 'waiting for input\n');
+    writeFileSync(join(workspace, 'notes.txt'), 'needs review\n');
+    await manager.runVerification(session.id, 'sh -c "echo failing verification; exit 3"');
+
+    const beforeHistory = manager.getOutputHistory(session.id).join('');
+    const review = await manager.runSupervisorReview(session.id);
+    const afterHistory = manager.getOutputHistory(session.id).join('');
+
+    expect(review).toMatchObject({
+      sessionId: session.id,
+      workspaceId: workspace,
+      objective: 'Implement the roadmap supervisor workflow',
+      terminalTail: 'waiting for input\n',
+    });
+    expect(review.summary).toContain('Implement the roadmap supervisor workflow');
+    expect(review.suggestions).toContain(
+      'Fix failing verification: sh -c "echo failing verification; exit 3".',
+    );
+    expect(store.listSupervisorReviews(session.id)).toEqual([review]);
+    expect(afterHistory).toBe(beforeHistory);
   });
 
   it('passes persisted yolo mode into provider spawn options when starting', async () => {

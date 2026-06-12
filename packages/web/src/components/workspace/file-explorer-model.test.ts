@@ -1,11 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import {
   definitionLineForSymbol,
+  extractedWorkspaceFileRefs,
   fileExplorerLayoutMode,
   fileLanguageFromPath,
+  filePreviewKind,
   importTargetForSymbol,
   isFileBrowseResponse,
   isFilePreviewResponse,
+  isWorkspaceSearchResponse,
+  markdownPreviewBlocks,
   parentPathWithinRoot,
   relativePathFromRoot,
 } from './file-explorer-model.js';
@@ -50,6 +54,43 @@ describe('file explorer model', () => {
     ).toBe(false);
   });
 
+  it('validates workspace search responses', () => {
+    expect(
+      isWorkspaceSearchResponse({
+        root: '/work',
+        query: 'roadmap',
+        truncated: false,
+        results: [
+          {
+            path: 'docs/ROADMAP.md',
+            absolutePath: '/work/docs/ROADMAP.md',
+            line: 8,
+            column: 12,
+            excerpt: 'Runtime diagnostics',
+            matchType: 'content',
+          },
+          {
+            path: 'src/App.tsx',
+            absolutePath: '/work/src/App.tsx',
+            line: 1,
+            column: 1,
+            excerpt: 'src/App.tsx',
+            matchType: 'path',
+          },
+        ],
+      }),
+    ).toBe(true);
+
+    expect(
+      isWorkspaceSearchResponse({
+        root: '/work',
+        query: 'roadmap',
+        truncated: false,
+        results: [{ path: 'README.md', line: '1' }],
+      }),
+    ).toBe(false);
+  });
+
   it('calculates parent paths without moving above the root', () => {
     expect(parentPathWithinRoot('/work/src/components', '/work')).toBe('/work/src');
     expect(parentPathWithinRoot('/work/src', '/work')).toBe('/work');
@@ -64,6 +105,37 @@ describe('file explorer model', () => {
     expect(fileLanguageFromPath('/work/styles/global.css')).toBe('css');
     expect(fileLanguageFromPath('/work/scripts/dev.ts')).toBe('typescript');
     expect(fileLanguageFromPath('/work/unknown.config')).toBe('plaintext');
+  });
+
+  it('classifies file preview modes for text, markdown, and images', () => {
+    expect(filePreviewKind('/work/src/app.ts')).toBe('text');
+    expect(filePreviewKind('/work/README.md')).toBe('markdown');
+    expect(filePreviewKind('/work/assets/logo.png')).toBe('image');
+    expect(filePreviewKind('/work/assets/photo.webp')).toBe('image');
+  });
+
+  it('builds safe markdown preview blocks without raw HTML', () => {
+    expect(
+      markdownPreviewBlocks(
+        ['# Title', '', '- first', '- second', '', '```ts', '<script>', '```'].join('\n'),
+      ),
+    ).toEqual([
+      { kind: 'heading', level: 1, text: 'Title' },
+      { kind: 'list', items: ['first', 'second'] },
+      { kind: 'code', language: 'ts', text: '<script>' },
+    ]);
+  });
+
+  it('extracts workspace file references from verification output', () => {
+    expect(
+      extractedWorkspaceFileRefs(
+        ['src/app.ts:12:5 - error TS2322: mismatch', 'docs/README.md:3 failed check'].join('\n'),
+        '/work',
+      ),
+    ).toEqual([
+      { path: '/work/src/app.ts', displayPath: 'src/app.ts', line: 12 },
+      { path: '/work/docs/README.md', displayPath: 'docs/README.md', line: 3 },
+    ]);
   });
 
   it('uses compact layout on mobile-sized viewports', () => {
