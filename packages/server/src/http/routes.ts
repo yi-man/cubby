@@ -157,50 +157,6 @@ export function registerRoutes(
     return sessionManager.listSessions();
   });
 
-  app.get('/api/sessions/:id/supervisor', async (request, reply) => {
-    const { id } = request.params as { id: string };
-    try {
-      return sessionManager.getSupervisorState(id);
-    } catch (err) {
-      if (isSessionNotFound(err)) {
-        return sendNotFound(reply);
-      }
-      throw err;
-    }
-  });
-
-  app.put('/api/sessions/:id/supervisor/objective', async (request, reply) => {
-    const { id } = request.params as { id: string };
-    const body = request.body as { objective?: unknown } | undefined;
-    if (typeof body?.objective !== 'string' || !body.objective.trim()) {
-      return reply.code(400).send({ error: 'Session objective is required' });
-    }
-
-    try {
-      return sessionManager.setSessionObjective(id, body.objective);
-    } catch (err) {
-      if (isSessionNotFound(err)) {
-        return sendNotFound(reply);
-      }
-      if (isSupervisorObjectiveError(err)) {
-        return reply.code(400).send({ error: err.message });
-      }
-      throw err;
-    }
-  });
-
-  app.post('/api/sessions/:id/supervisor/reviews', async (request, reply) => {
-    const { id } = request.params as { id: string };
-    try {
-      return await sessionManager.runSupervisorReview(id);
-    } catch (err) {
-      if (isSessionNotFound(err)) {
-        return sendNotFound(reply);
-      }
-      throw err;
-    }
-  });
-
   app.get('/api/sessions/:id', async (request) => {
     const { id } = request.params as { id: string };
     const session = sessionManager.getSession(id);
@@ -370,10 +326,6 @@ function isNodeError(err: unknown): err is NodeJS.ErrnoException {
 
 function isSessionNotFound(err: unknown): boolean {
   return err instanceof Error && err.message === 'Session not found';
-}
-
-function isSupervisorObjectiveError(err: unknown): err is Error {
-  return err instanceof Error && err.message === 'Session objective is required';
 }
 
 function normalizeTerminalDimension(

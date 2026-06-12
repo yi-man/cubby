@@ -2,17 +2,17 @@
 
 ## 产品定义
 
-**Cubby** 是一个自托管的个人 AI 编码工作台。用户在自己的服务器（本机或 VPS）上部署，通过浏览器访问，用它启动、监督、恢复和验收 AI agent 编码会话。
+**Cubby** 是一个自托管的个人 AI 编码工作台。用户在自己的服务器（本机或 VPS）上部署，通过浏览器访问，用它启动、恢复和验收 AI agent 编码会话。
 
 **一句话定位：** 你自己的远程 AI 编码控制台，数据不上云，任何设备都能访问。
 
-Cubby 的当前定位不是浏览器版 VS Code，也不是多人协作 IDE。代码写入、重构、测试命令和 Git 操作优先交给 agent session 在终端内完成；Cubby 本身优先提供远程访问安全、会话控制、终端连续性、运行预览、Git diff、文件查看、Supervisor 检查和环境诊断。
+Cubby 的当前定位不是浏览器版 VS Code，也不是多人协作 IDE。代码写入、重构、测试命令和 Git 操作优先交给 agent session 在终端内完成；Cubby 本身优先提供远程访问安全、会话控制、终端连续性、运行预览、Git diff、文件查看和环境诊断。
 
 ### 产品原则
 
 - **Agent-first**：用户主要通过自然语言和终端驱动 agent 完成开发，不把 Cubby 做成完整可编辑 IDE。
 - **个人工作台**：默认面向单人自托管使用，先保证个人远程工作流稳定，再考虑团队协作。
-- **审阅优先于手改**：文件浏览、diff、Supervisor 检查和 app preview 比内置文件写入更重要。
+- **审阅优先于手改**：文件浏览、diff 和 app preview 比内置文件写入更重要。
 - **远程可用性优先**：认证、服务管理、断线恢复、端口预览和诊断是远程开发的基础能力。
 - **保守暴露能力**：任何能触发终端、agent 或本机文件访问的入口都必须经过认证和路径安全约束。
 
@@ -64,7 +64,7 @@ cubby/
 
 #### F1: Workspace 管理
 - 打开工作区（指定路径，验证路径存在可读）
-- 关闭工作区（级联销毁：sessions → terminals → LSP → supervisor → watcher）
+- 关闭工作区（级联销毁：sessions → terminals → watcher）
 - 列出已打开的工作区
 - 浏览文件系统选择路径（`workspace.browse`）
 - UI 状态持久化（面板宽度、focus mode、pane layout、展开目录列表）
@@ -103,12 +103,12 @@ cubby/
 #### F3: Agent 会话管理
 - 会话生命周期状态机：draft → starting → running → idle → ended
 - 会话标题从首条用户指令自动提取（截取前 50 字符，超出部分加省略号）
-- 输入活动追踪：记录输入类型（typing / submit / internal_submit / system / control），用于 supervisor 触发判断
+- 输入活动追踪：记录输入类型（typing / submit / internal_submit / system / control）
 - 会话元数据持久化到 SQLite
 - 支持并行多会话，不同 provider 并存
 - 会话列表展示（按状态分组）
 - 会话操作：创建、停止、删除、关闭（stop + delete + pane disposition）、重启
-- 会话元数据：objective、baseline git head
+- 会话元数据：baseline git head
 
 **验收标准：**
 - [ ] 创建会话后 agent 正常响应
@@ -123,7 +123,6 @@ cubby/
   - id、displayName、badge、kind（built_in/preset/custom）
   - capability（full/limited/unsupported）+ capabilities 数组
   - buildCommand(options) → argv/env/cwd
-  - buildSupervisorEvalCommand()（P1 用）
   - configSchema（Zod）
   - idleHeuristics（PTY 输出匹配规则）
   - installStrategy（brew/npm/winget）
@@ -153,7 +152,6 @@ cubby/
   - `workspace.{id}.session.{sid}.state` / `...lifecycle` / `...progress`
   - `workspace.{id}.terminal.{tid}.output` / `...created` / `...exit` / `...continuity_lost`
   - `workspace.{id}.lsp.diagnostics`
-  - `workspace.{id}.session.{sid}.supervisor.state`
   - `notification.toast`
   - `update.state.changed`
 - 完整命令体系（105 个 WS 命令，见下方清单）
@@ -205,7 +203,6 @@ cubby/
 - 完整设置项：
   - 默认 provider
   - 通知（enabled / soundEnabled）
-  - Supervisor（评估超时、重试设置）
   - 外观（theme、terminal renderer、locale、font sizes、personalization）
   - LSP mode（auto/off）
   - Updates（auto-check、interval）
@@ -266,26 +263,11 @@ cubby/
 ### P1 — 扩展功能
 
 #### F12: Supervisor 系统
-- 评估→注入循环（evaluate → inject guidance）
-- 状态机：inactive → idle → evaluating → injecting → paused → error → stopped
-- 工作项分解（stage 模式 + subtarget 模式）
-- 评估器：独立 CLI 进程执行，JSON 输出解析
-- 注入器：通过 bracketed paste 写入 agent 终端
-- 上下文构建：终端快照 + 会话状态 + 目标记忆（含分解追踪、停滞计数）
-- 调度器：
-  - 自动触发：监听 session.lifecycle turn_completed 事件
-  - 手动触发：`supervisor.trigger` 命令
-  - 定时触发：设定未来时间自动执行评估
-- 目标存储：`.cubby/supervisor/targets/`（meta.json、memory.json、cycles.jsonl）
-- 可配置：评估超时（默认 600s，最大 86400s）、重试次数/延迟、超时重试、错误重试、最大监管次数
-- 目标恢复：从历史目标恢复（`supervisor.restore`）
-- UI：创建、监控、暂停/恢复、手动触发
+- 已撤下，不再作为近期产品能力。
 
 **验收标准：**
-- [ ] 启用 supervisor 后 agent 偏离目标时自动注入
-- [ ] 状态实时展示
-- [ ] 可暂停/恢复
-- [ ] 评估历史可查看
+- [ ] 工具栏不展示 Supervisor 入口
+- [ ] 后端不暴露 Supervisor API
 
 #### F13: LSP 集成
 - 服务端 LSP Manager（per-workspace，idle timeout 60s，restart limit）
@@ -304,12 +286,13 @@ cubby/
 
 #### F14: Workspace / Review / Verification Surfaces
 - Workspace intelligence UI/API 已撤下，避免和项目 README/说明文档重复。
-- Session review UI/API 已撤下，改由 Git Changes、File Explorer 和 Supervisor 承担验收入口。
+- Session review UI/API 已撤下，改由 Git Changes 和 File Explorer 承担验收入口。
 - Verification runs UI/API 已撤下，验证命令继续由 agent 在终端内执行。
+- Supervisor UI/API 已撤下。
 
 **验收标准：**
-- [ ] 工具栏不展示 Workspace、Review、Verification 入口
-- [ ] 后端不暴露 workspace intelligence、session review、verification runs 外部 API
+- [ ] 工具栏不展示 Workspace、Review、Verification、Supervisor 入口
+- [ ] 后端不暴露 workspace intelligence、session review、verification runs、supervisor 外部 API
 
 #### F16: Agent Context & Instructions
 - 上下文包构建：fromFile / fromDiff / fromProjectSummary
@@ -376,7 +359,6 @@ cubby/
 - Fastify Pino 结构化日志
 - 日志文件：`~/.cubby/logs/server.out.log`、`server.err.log`
 - CLI 日志管理：`cubby logs --tail`、`--errors-only`
-- Supervisor evaluator debug 日志
 
 **验收标准：**
 - [ ] `cubby logs` 可查看服务日志
@@ -441,7 +423,6 @@ cubby/
 | diagnostics | 2 | get, recheck |
 | provider | 4 | list, runtimeStatus, install.start, install.get |
 | custom-provider | 4 | list, create, update, delete |
-| supervisor | 9 | create, get, listRecoverableTargets, update, delete, pause, resume, trigger, restore |
 | worktree | 6 | list, status, diff, tree, create, remove |
 | fencing | 5 | request, heartbeat, release, status, takeover |
 | lsp | 14 | ensureSession, setMode, runtimeStatus, install.start, install.get, openDocument, changeDocument, closeDocument, definition, declaration, typeDefinition, references, hover, documentSymbols |

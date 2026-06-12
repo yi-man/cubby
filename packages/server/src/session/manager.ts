@@ -6,9 +6,7 @@ import type {
   RecoveryReconcileResult,
   Session,
   SessionReview,
-  SessionSupervisorState,
   SpawnOptions,
-  SupervisorReview,
   TerminalOutputChunk,
   TerminalReplayResult,
   TerminalSnapshotResult,
@@ -22,17 +20,6 @@ const OUTPUT_HISTORY_LIMIT = 5000;
 const SNAPSHOT_PERSIST_DEBOUNCE_MS = 250;
 const RESUME_UNSUPPORTED_REASON = 'Provider does not support resume';
 const RESUME_CONVERSATION_MISSING_REASON = 'Provider conversation not found';
-const SUPERVISOR_IDLE_THRESHOLD_MS = 5 * 60 * 1000;
-const SUPERVISOR_TERMINAL_TAIL_CHARS = 4000;
-const ESCAPE_CHAR = String.fromCharCode(0x1b);
-const BELL_CHAR = String.fromCharCode(0x07);
-const OSC_SEQUENCE_PATTERN = new RegExp(
-  `${ESCAPE_CHAR}\\][\\s\\S]*?(?:${BELL_CHAR}|${ESCAPE_CHAR}\\\\)`,
-  'g',
-);
-const CSI_SEQUENCE_PATTERN = new RegExp(`${ESCAPE_CHAR}\\[[0-?]*[ -/]*[@-~]`, 'g');
-const CHARSET_SEQUENCE_PATTERN = new RegExp(`${ESCAPE_CHAR}[()][A-Za-z0-9]`, 'g');
-const SINGLE_ESCAPE_PATTERN = new RegExp(`${ESCAPE_CHAR}[0-9A-Za-z=>]`, 'g');
 
 interface ResumeAvailability {
   resumable: boolean;
@@ -553,79 +540,6 @@ export class SessionManager {
     return this.store.getSessionReview(sessionId);
   }
 
-  setSessionObjective(sessionId: string, objective: string): SessionSupervisorState {
-    const session = this.store.get(sessionId);
-    if (!session) throw new Error('Session not found');
-    const trimmedObjective = objective.trim();
-    if (!trimmedObjective) throw new Error('Session objective is required');
-
-    this.store.setSessionObjective({
-      sessionId,
-      workspaceId: session.workspaceId,
-      objective: trimmedObjective,
-    });
-    return this.getSupervisorState(sessionId);
-  }
-
-  getSupervisorState(sessionId: string): SessionSupervisorState {
-    const session = this.store.get(sessionId);
-    if (!session) throw new Error('Session not found');
-    const supervisor = this.store.getSessionSupervisor(sessionId);
-    const objective = supervisor?.objective ?? null;
-    const lastOutputAt = this.store.getLatestTerminalOutputAt(sessionId);
-    const idleForMs = lastOutputAt ? Math.max(0, Date.now() - new Date(lastOutputAt).getTime()) : 0;
-    const terminalTail = terminalTailFromHistory(this.getOutputHistory(sessionId));
-    const inputBlocked = isLiveSession(session.status) && terminalLooksInputBlocked(terminalTail);
-    const idle =
-      isLiveSession(session.status) &&
-      lastOutputAt !== null &&
-      idleForMs >= SUPERVISOR_IDLE_THRESHOLD_MS;
-    const stuckReasons: string[] = [];
-    if (inputBlocked) stuckReasons.push('Terminal appears to be waiting for input');
-    if (idle) stuckReasons.push(`No terminal output for ${formatIdleMinutes(idleForMs)}m`);
-
-    let status: SessionSupervisorState['status'];
-    if (!objective) {
-      status = 'unconfigured';
-    } else if (session.status === 'ended') {
-      status = 'ended';
-    } else if (inputBlocked) {
-      status = 'stuck';
-    } else if (idle) {
-      status = 'idle';
-    } else {
-      status = 'watching';
-    }
-
-    return {
-      sessionId,
-      workspaceId: session.workspaceId,
-      objective,
-      status,
-      lastOutputAt,
-      idleForMs,
-      stuckReasons,
-      reviews: this.store.listSupervisorReviews(sessionId),
-    };
-  }
-
-  async runSupervisorReview(sessionId: string): Promise<SupervisorReview> {
-    const session = this.store.get(sessionId);
-    if (!session) throw new Error('Session not found');
-    const state = this.getSupervisorState(sessionId);
-    const sessionReview = await this.generateSessionReview(sessionId);
-    const suggestions = buildSupervisorSuggestions(state, sessionReview);
-
-    return this.store.recordSupervisorReview({
-      sessionId,
-      workspaceId: session.workspaceId,
-      objective: state.objective,
-      summary: formatSupervisorReviewSummary(state, sessionReview),
-      suggestions,
-      terminalTail: terminalTailFromHistory(this.getOutputHistory(sessionId)),
-    });
-  }
-
   private getOutputHistoryChunks(session: Session): TerminalOutputChunk[] {
     const persistedHistory = this.store.getTerminalOutputChunks(
       session.id,
@@ -775,86 +689,6 @@ function synthesizeOutputChunks(history: string[]): { chunks: TerminalOutputChun
     return { data, seqStart, seq };
   });
   return { chunks, seq };
-}
-
-function terminalTailFromHistory(history: string[]): string {
-  return history.join('').slice(-SUPERVISOR_TERMINAL_TAIL_CHARS);
-}
-
-function terminalLooksInputBlocked(terminalTail: string): boolean {
-  const normalized = normalizeTerminalTextForDetection(terminalTail);
-  return [
-    'waiting for input',
-    'press enter',
-    'enter to confirm',
-    'esc to cancel',
-    'continue?',
-    'do you want to proceed',
-    'are you sure',
-    'select an option',
-    'y/n',
-    '[y/n]',
-  ].some((marker) => normalized.includes(marker));
-}
-
-function normalizeTerminalTextForDetection(text: string): string {
-  return replaceTerminalControlCharacters(
-    text
-      .replace(OSC_SEQUENCE_PATTERN, ' ')
-      .replace(CSI_SEQUENCE_PATTERN, ' ')
-      .replace(CHARSET_SEQUENCE_PATTERN, ' ')
-      .replace(SINGLE_ESCAPE_PATTERN, ' '),
-  )
-    .replace(/\s+/g, ' ')
-    .toLowerCase();
-}
-
-function replaceTerminalControlCharacters(text: string): string {
-  let normalized = '';
-  for (const char of text) {
-    const code = char.charCodeAt(0);
-    normalized += code <= 0x1f || code === 0x7f ? ' ' : char;
-  }
-  return normalized;
-}
-
-function formatIdleMinutes(idleForMs: number): number {
-  return Math.max(1, Math.round(idleForMs / 60_000));
-}
-
-function formatSupervisorReviewSummary(
-  state: SessionSupervisorState,
-  review: SessionReview,
-): string {
-  const objective = state.objective ?? 'No objective';
-  const fileCount =
-    review.summary.total === 1 ? '1 changed file' : `${review.summary.total} changed files`;
-  return `Supervisor checked "${objective}": ${fileCount}, status ${state.status}.`;
-}
-
-function buildSupervisorSuggestions(
-  state: SessionSupervisorState,
-  review: SessionReview,
-): string[] {
-  const suggestions: string[] = [];
-
-  if (!state.objective) {
-    suggestions.push('Set a session objective before accepting the result.');
-  }
-  if (state.status === 'stuck') {
-    suggestions.push('Respond to the waiting prompt or ask the agent for a concise status update.');
-  } else if (state.status === 'idle') {
-    suggestions.push('Ask the agent for a concise status update against the objective.');
-  }
-
-  if (review.summary.total > 0) {
-    suggestions.push('Inspect changed files against the objective before accepting.');
-  }
-  if (suggestions.length === 0) {
-    suggestions.push('Inspect the result against the objective before accepting.');
-  }
-
-  return Array.from(new Set(suggestions));
 }
 
 function replayOutputChunks(

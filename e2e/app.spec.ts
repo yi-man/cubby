@@ -806,7 +806,7 @@ test.describe('Cubby MVP', () => {
     }
   });
 
-  test('terminal toolbar keeps previews and omits workspace and review actions', async ({
+  test('terminal toolbar keeps previews and omits workspace review and supervisor actions', async ({
     page,
   }) => {
     const workspaceDir = mkdtempSync(join(tmpdir(), 'cubby-trimmed-toolbar-'));
@@ -823,75 +823,12 @@ test.describe('Cubby MVP', () => {
       await expect(page.getByRole('button', { name: 'Open file explorer' })).toBeVisible();
       await expect(page.getByRole('button', { name: 'Open git changes' })).toBeVisible();
       await expect(page.getByRole('button', { name: 'Open port previews' })).toBeVisible();
-      await expect(page.getByRole('button', { name: 'Open supervisor' })).toBeVisible();
       await expect(page.getByRole('button', { name: 'Open workspace intelligence' })).toHaveCount(
         0,
       );
       await expect(page.getByRole('button', { name: 'Open session review' })).toHaveCount(0);
+      await expect(page.getByRole('button', { name: 'Open supervisor' })).toHaveCount(0);
     } finally {
-      rmSync(workspaceDir, { recursive: true, force: true });
-    }
-  });
-
-  test('supervisor-lite saves reviews and injects suggestions only after confirmation', async ({
-    page,
-  }) => {
-    test.skip(
-      !MOCK_CLAUDE_PROVIDER_ENABLED,
-      'Requires CUBBY_MOCK_CLAUDE_PROVIDER=1 for deterministic supervisor terminal output',
-    );
-
-    const workspaceDir = mkdtempSync(join(tmpdir(), 'cubby-supervisor-lite-'));
-    await installWebSocketRecorder(page);
-    const session = await createSession(page, {
-      workspaceId: workspaceDir,
-      title: `Supervisor Lite ${Date.now()}`,
-    });
-
-    try {
-      await page.goto('/');
-      const group = page.getByTestId('workspace-group').filter({ hasText: workspaceDir });
-      await selectSessionTab(group, session.title);
-      await activeSessionView(page).getByRole('button', { name: 'Start', exact: true }).click();
-      await assertActiveDetail(page, { title: session.title, status: 'running', action: 'Stop' });
-      await expect
-        .poll(() => terminalText(page), { timeout: 10000 })
-        .toContain('Mock Claude Code ready');
-      await sendTerminalInput(page, session.id, 'waiting for input\r\n');
-      await expect
-        .poll(() => terminalText(page), { timeout: 10000 })
-        .toContain('waiting for input');
-
-      await page.getByRole('button', { name: 'Open supervisor' }).click();
-      const dialog = page.getByTestId('supervisor-lite-dialog');
-      await expect(dialog).toBeVisible();
-      await dialog
-        .getByRole('textbox', { name: 'Session objective' })
-        .fill('Finish supervisor-lite validation');
-      await dialog.getByRole('button', { name: 'Save objective' }).click();
-      await expect(dialog.getByTestId('supervisor-status')).toContainText('Stuck');
-      await expect(dialog).toContainText('Terminal appears to be waiting for input');
-
-      const terminalBeforeCheck = await terminalText(page);
-      await dialog.getByRole('button', { name: 'Check status' }).click();
-      await expect(dialog.getByTestId('supervisor-reviews')).toContainText(
-        'Finish supervisor-lite validation',
-      );
-      await expect(dialog.getByTestId('supervisor-reviews')).not.toContainText('verification');
-      await expect.poll(() => terminalText(page)).toBe(terminalBeforeCheck);
-
-      const suggestion = dialog.getByTestId('supervisor-suggestion').first();
-      const suggestionText =
-        (await suggestion.getByTestId('supervisor-suggestion-text').textContent()) ?? '';
-      expect(suggestionText.length).toBeGreaterThan(0);
-      page.once('dialog', async (confirmDialog) => {
-        expect(confirmDialog.message()).toContain('Inject this suggestion');
-        await confirmDialog.accept();
-      });
-      await suggestion.getByRole('button', { name: 'Inject suggestion' }).click();
-      await expect.poll(() => terminalText(page), { timeout: 10000 }).toContain(suggestionText);
-    } finally {
-      await stopSession(page, session).catch(() => {});
       rmSync(workspaceDir, { recursive: true, force: true });
     }
   });

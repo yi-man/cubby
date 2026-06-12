@@ -884,7 +884,7 @@ describe('createServer', () => {
     expect(explicitResponse.json()).toMatchObject({ title: 'No yolo', yolo: false });
   });
 
-  it('creates HTTP sessions with a git baseline without exposing review or verification APIs', async () => {
+  it('creates HTTP sessions with a git baseline without exposing review verification or supervisor APIs', async () => {
     const workspaceDir = mkdtempSync(join(tmpdir(), 'cubby-session-route-'));
     dataDirs.push(workspaceDir);
     writeFileSync(join(workspaceDir, 'README.md'), '# session\n');
@@ -918,6 +918,19 @@ describe('createServer', () => {
       method: 'GET',
       url: `/api/sessions/${session.id}/verification-runs`,
     });
+    const supervisorGetResponse = await app.inject({
+      method: 'GET',
+      url: `/api/sessions/${session.id}/supervisor`,
+    });
+    const supervisorObjectiveResponse = await app.inject({
+      method: 'PUT',
+      url: `/api/sessions/${session.id}/supervisor/objective`,
+      payload: { objective: 'Finish the workflow' },
+    });
+    const supervisorReviewResponse = await app.inject({
+      method: 'POST',
+      url: `/api/sessions/${session.id}/supervisor/reviews`,
+    });
     await app.close();
 
     expect(createResponse.statusCode).toBe(200);
@@ -926,6 +939,9 @@ describe('createServer', () => {
     expect(reviewGetResponse.statusCode).toBe(404);
     expect(verificationPostResponse.statusCode).toBe(404);
     expect(verificationGetResponse.statusCode).toBe(404);
+    expect(supervisorGetResponse.statusCode).toBe(404);
+    expect(supervisorObjectiveResponse.statusCode).toBe(404);
+    expect(supervisorReviewResponse.statusCode).toBe(404);
   });
 
   it('generates a persisted session review when a session ends', async () => {
@@ -968,77 +984,6 @@ describe('createServer', () => {
       changedFiles: [{ path: 'README.md', status: 'modified' }],
       summary: { total: 1, modified: 1 },
     });
-  });
-
-  it('manages supervisor objective and manual reviews through the HTTP API', async () => {
-    const workspaceDir = mkdtempSync(join(tmpdir(), 'cubby-supervisor-route-'));
-    dataDirs.push(workspaceDir);
-    writeFileSync(join(workspaceDir, 'README.md'), '# supervisor\n');
-    await runGit(workspaceDir, ['init']);
-    await runGit(workspaceDir, ['config', 'user.email', 'cubby@example.test']);
-    await runGit(workspaceDir, ['config', 'user.name', 'Cubby Test']);
-    await runGit(workspaceDir, ['add', '.']);
-    await runGit(workspaceDir, ['commit', '-m', 'initial']);
-    const { app } = await createServer(0);
-    const createResponse = await app.inject({
-      method: 'POST',
-      url: '/api/sessions',
-      payload: { workspaceId: workspaceDir, provider: 'claude-code', title: 'Supervisor route' },
-    });
-    const session = createResponse.json();
-    writeFileSync(join(workspaceDir, 'todo.txt'), 'review this\n');
-
-    const objectiveResponse = await app.inject({
-      method: 'PUT',
-      url: `/api/sessions/${session.id}/supervisor/objective`,
-      payload: { objective: 'Finish the supervisor workflow' },
-    });
-    const getResponse = await app.inject({
-      method: 'GET',
-      url: `/api/sessions/${session.id}/supervisor`,
-    });
-    const reviewResponse = await app.inject({
-      method: 'POST',
-      url: `/api/sessions/${session.id}/supervisor/reviews`,
-    });
-    const emptyObjectiveResponse = await app.inject({
-      method: 'PUT',
-      url: `/api/sessions/${session.id}/supervisor/objective`,
-      payload: { objective: '   ' },
-    });
-    await app.close();
-
-    expect(objectiveResponse.statusCode).toBe(200);
-    expect(objectiveResponse.json()).toMatchObject({
-      sessionId: session.id,
-      objective: 'Finish the supervisor workflow',
-      status: 'watching',
-    });
-    expect(getResponse.statusCode).toBe(200);
-    expect(getResponse.json()).toMatchObject({
-      sessionId: session.id,
-      objective: 'Finish the supervisor workflow',
-      reviews: [],
-    });
-    expect(reviewResponse.statusCode).toBe(200);
-    expect(reviewResponse.json()).toMatchObject({
-      sessionId: session.id,
-      objective: 'Finish the supervisor workflow',
-    });
-    expect(reviewResponse.json().summary).toContain('Finish the supervisor workflow');
-    expect(reviewResponse.json().summary).not.toContain('verification');
-    expect(reviewResponse.json().suggestions).not.toContain(
-      'Run a verification command before accepting the result.',
-    );
-    expect(
-      reviewResponse
-        .json()
-        .suggestions.some((suggestion: string) => suggestion.includes('verification')),
-    ).toBe(false);
-    expect(reviewResponse.json().suggestions).toContain(
-      'Inspect changed files against the objective before accepting.',
-    );
-    expect(emptyObjectiveResponse.statusCode).toBe(400);
   });
 
   it('renames a session through the HTTP API', async () => {
