@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { mkdtempSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { AgentProvider, SpawnOptions } from '@cubby/core';
+import type { AgentProvider, SpawnOptions, TerminalReplayResult } from '@cubby/core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Database } from '../db/index.js';
 import { readGitHead } from '../git/git-service.js';
@@ -43,6 +43,28 @@ function createMockProvider(): AgentProvider & {
   };
 }
 
+function createLiveOutputProvider(name: string, output = 'hello from live'): AgentProvider {
+  return {
+    name,
+    async spawn(
+      _sessionId: string,
+      _options: SpawnOptions,
+      onOutput: (data: string) => void = () => {},
+    ) {
+      setTimeout(() => onOutput(output), 0);
+      return {
+        pid: 32_100,
+        onData: (_callback) => {},
+        onExit: (_callback) => {},
+        write: () => {},
+        resize: () => {},
+        kill: () => {},
+      };
+    },
+    async kill() {},
+  };
+}
+
 function runGit(cwd: string, args: string[]): void {
   const result = spawnSync('git', args, { cwd, encoding: 'utf8' });
   if (result.status !== 0) {
@@ -59,6 +81,34 @@ function createCommittedRepo(prefix: string): string {
   runGit(root, ['add', '.']);
   runGit(root, ['commit', '-m', 'initial']);
   return root;
+}
+
+async function waitForSessionStatus(
+  manager: SessionManager,
+  sessionId: string,
+  status: string,
+  timeoutMs = 1_000,
+): Promise<void> {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeoutMs) {
+    if (manager.getSession(sessionId)?.status === status) return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error(`Timed out waiting for session ${sessionId} to become ${status}`);
+}
+
+async function waitForOutputReplay(
+  manager: SessionManager,
+  sessionId: string,
+  timeoutMs = 1_000,
+): Promise<Extract<TerminalReplayResult, { status: 'ok' }>> {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeoutMs) {
+    const replay = manager.getOutputReplay(sessionId, 0);
+    if (replay.status === 'ok' && replay.chunks.length > 0) return replay;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error(`Timed out waiting for output replay for session ${sessionId}`);
 }
 
 describe('SessionManager', () => {
@@ -294,13 +344,12 @@ describe('SessionManager', () => {
   });
 
   it('returns sequenced live replay chunks after a rendered seq', async () => {
-    const session = manager.createSession({ workspaceId: '/tmp', provider: 'mock' });
+    const provider = createLiveOutputProvider('live-replay');
+    manager.registerProvider(provider);
+    const session = manager.createSession({ workspaceId: '/tmp', provider: provider.name });
     await manager.startSession(session.id, { cwd: '/tmp', cols: 80, rows: 24 });
-    await new Promise((r) => setTimeout(r, 20));
 
-    const fullReplay = manager.getOutputReplay(session.id, 0);
-    expect(fullReplay.status).toBe('ok');
-    if (fullReplay.status !== 'ok') throw new Error('expected ok replay');
+    const fullReplay = await waitForOutputReplay(manager, session.id);
 
     const firstSeq = fullReplay.chunks[0]?.seq ?? 0;
     const partialReplay = manager.getOutputReplay(session.id, firstSeq);
@@ -315,12 +364,12 @@ describe('SessionManager', () => {
   });
 
   it('reconciles a caught-up live session as noop', async () => {
-    const session = manager.createSession({ workspaceId: '/tmp', provider: 'mock' });
+    const provider = createLiveOutputProvider('live-noop');
+    manager.registerProvider(provider);
+    const session = manager.createSession({ workspaceId: '/tmp', provider: provider.name });
     await manager.startSession(session.id, { cwd: '/tmp', cols: 80, rows: 24 });
-    await new Promise((r) => setTimeout(r, 20));
 
-    const replay = manager.getOutputReplay(session.id, 0);
-    if (replay.status !== 'ok') throw new Error('expected ok replay');
+    const replay = await waitForOutputReplay(manager, session.id);
 
     expect(manager.reconcileTerminalRecovery(session.id, replay.seq)).toEqual({
       action: 'noop',
@@ -330,12 +379,12 @@ describe('SessionManager', () => {
   });
 
   it('reconciles cold live recovery as snapshot when a checkpoint is available', async () => {
-    const session = manager.createSession({ workspaceId: '/tmp', provider: 'mock' });
+    const provider = createLiveOutputProvider('live-snapshot');
+    manager.registerProvider(provider);
+    const session = manager.createSession({ workspaceId: '/tmp', provider: provider.name });
     await manager.startSession(session.id, { cwd: '/tmp', cols: 80, rows: 24 });
-    await new Promise((r) => setTimeout(r, 20));
 
-    const replay = manager.getOutputReplay(session.id, 0);
-    if (replay.status !== 'ok') throw new Error('expected ok replay');
+    const replay = await waitForOutputReplay(manager, session.id);
 
     expect(manager.reconcileTerminalRecovery(session.id, 0)).toEqual({
       action: 'snapshot',
@@ -516,7 +565,7 @@ describe('SessionManager', () => {
     const session = manager.createSession({ workspaceId: '/tmp', provider: 'mock' });
     await manager.startSession(session.id, { cwd: '/tmp', cols: 80, rows: 24 });
 
-    await new Promise((r) => setTimeout(r, 100));
+    await waitForSessionStatus(manager, session.id, 'ended');
 
     expect(manager.getOutputHistory(session.id)).toContain('hello from mock');
     expect(manager.getSession(session.id)?.status).toBe('ended');
@@ -526,7 +575,7 @@ describe('SessionManager', () => {
   it('keeps ended session output history available after manager restart', async () => {
     const session = manager.createSession({ workspaceId: '/tmp', provider: 'mock' });
     await manager.startSession(session.id, { cwd: '/tmp', cols: 80, rows: 24 });
-    await new Promise((r) => setTimeout(r, 100));
+    await waitForSessionStatus(manager, session.id, 'ended');
 
     expect(manager.getSession(session.id)?.status).toBe('ended');
 

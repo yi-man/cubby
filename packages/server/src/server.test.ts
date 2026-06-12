@@ -13,6 +13,8 @@ import { createServer } from './server.js';
 import { SessionManager } from './session/manager.js';
 import { SessionStore } from './session/store.js';
 
+const AUTH_TEST_TIMEOUT_MS = 15_000;
+
 interface SessionFixture {
   id: string;
 }
@@ -231,113 +233,129 @@ describe('createServer', () => {
     );
   });
 
-  it('requires login for protected HTTP routes when password auth is configured', async () => {
-    process.env.CUBBY_AUTH_PASSWORD = 'correct horse battery staple';
-    const { app } = await createServer(0);
+  it(
+    'requires login for protected HTTP routes when password auth is configured',
+    async () => {
+      process.env.CUBBY_AUTH_PASSWORD = 'correct horse battery staple';
+      const { app } = await createServer(0);
 
-    const blockedResponse = await app.inject({ method: 'GET', url: '/api/sessions' });
-    const wrongLoginResponse = await app.inject({
-      method: 'POST',
-      url: '/auth/login',
-      payload: { password: 'wrong' },
-    });
-    const loginResponse = await app.inject({
-      method: 'POST',
-      url: '/auth/login',
-      payload: { password: 'correct horse battery staple' },
-    });
-    const cookie = loginResponse.headers['set-cookie'];
-    const authenticatedResponse = await app.inject({
-      method: 'GET',
-      url: '/api/sessions',
-      headers: { cookie: Array.isArray(cookie) ? cookie[0] : String(cookie) },
-    });
-    await app.close();
-
-    expect(blockedResponse.statusCode).toBe(401);
-    expect(blockedResponse.json()).toEqual({ error: 'Authentication required' });
-    expect(wrongLoginResponse.statusCode).toBe(401);
-    expect(wrongLoginResponse.json()).toEqual({ error: 'Invalid password' });
-    expect(loginResponse.statusCode).toBe(200);
-    expect(loginResponse.json()).toEqual({ ok: true });
-    expect(cookie).toBeTruthy();
-    expect(authenticatedResponse.statusCode).toBe(200);
-  });
-
-  it('requires login when password auth is configured in config.json', async () => {
-    const dataDir = useTempDataDir();
-    writeFileSync(
-      join(dataDir, 'config.json'),
-      JSON.stringify({
-        auth: { passwordHash: bcrypt.hashSync('config-secret', 10) },
-      }),
-    );
-    const { app } = await createServer(0);
-
-    const blockedResponse = await app.inject({ method: 'GET', url: '/api/sessions' });
-    const loginResponse = await app.inject({
-      method: 'POST',
-      url: '/auth/login',
-      payload: { password: 'config-secret' },
-    });
-    const cookie = loginResponse.headers['set-cookie'];
-    const authenticatedResponse = await app.inject({
-      method: 'GET',
-      url: '/api/sessions',
-      headers: { cookie: Array.isArray(cookie) ? cookie[0] : String(cookie) },
-    });
-    await app.close();
-
-    expect(blockedResponse.statusCode).toBe(401);
-    expect(loginResponse.statusCode).toBe(200);
-    expect(authenticatedResponse.statusCode).toBe(200);
-  });
-
-  it('reports authenticated status from the Cubby auth cookie', async () => {
-    process.env.CUBBY_AUTH_PASSWORD = 'status-secret';
-    const { app } = await createServer(0);
-
-    const beforeLoginResponse = await app.inject({ method: 'GET', url: '/auth/status' });
-    const loginResponse = await app.inject({
-      method: 'POST',
-      url: '/auth/login',
-      payload: { password: 'status-secret' },
-    });
-    const cookie = loginResponse.headers['set-cookie'];
-    const afterLoginResponse = await app.inject({
-      method: 'GET',
-      url: '/auth/status',
-      headers: { cookie: Array.isArray(cookie) ? cookie[0] : String(cookie) },
-    });
-    await app.close();
-
-    expect(beforeLoginResponse.json()).toEqual({ enabled: true, authenticated: false });
-    expect(afterLoginResponse.json()).toEqual({ enabled: true, authenticated: true });
-  });
-
-  it('temporarily blocks repeated failed login attempts', async () => {
-    process.env.CUBBY_AUTH_PASSWORD = 'lockout-secret';
-    const { app } = await createServer(0);
-
-    for (let attempt = 0; attempt < 5; attempt++) {
-      const response = await app.inject({
+      const blockedResponse = await app.inject({ method: 'GET', url: '/api/sessions' });
+      const wrongLoginResponse = await app.inject({
         method: 'POST',
         url: '/auth/login',
         payload: { password: 'wrong' },
       });
-      expect(response.statusCode).toBe(401);
-    }
+      const loginResponse = await app.inject({
+        method: 'POST',
+        url: '/auth/login',
+        payload: { password: 'correct horse battery staple' },
+      });
+      const cookie = loginResponse.headers['set-cookie'];
+      const authenticatedResponse = await app.inject({
+        method: 'GET',
+        url: '/api/sessions',
+        headers: { cookie: Array.isArray(cookie) ? cookie[0] : String(cookie) },
+      });
+      await app.close();
 
-    const blockedResponse = await app.inject({
-      method: 'POST',
-      url: '/auth/login',
-      payload: { password: 'lockout-secret' },
-    });
-    await app.close();
+      expect(blockedResponse.statusCode).toBe(401);
+      expect(blockedResponse.json()).toEqual({ error: 'Authentication required' });
+      expect(wrongLoginResponse.statusCode).toBe(401);
+      expect(wrongLoginResponse.json()).toEqual({ error: 'Invalid password' });
+      expect(loginResponse.statusCode).toBe(200);
+      expect(loginResponse.json()).toEqual({ ok: true });
+      expect(cookie).toBeTruthy();
+      expect(authenticatedResponse.statusCode).toBe(200);
+    },
+    AUTH_TEST_TIMEOUT_MS,
+  );
 
-    expect(blockedResponse.statusCode).toBe(429);
-    expect(blockedResponse.json()).toEqual({ error: 'Too many failed login attempts' });
-  });
+  it(
+    'requires login when password auth is configured in config.json',
+    async () => {
+      const dataDir = useTempDataDir();
+      writeFileSync(
+        join(dataDir, 'config.json'),
+        JSON.stringify({
+          auth: { passwordHash: bcrypt.hashSync('config-secret', 10) },
+        }),
+      );
+      const { app } = await createServer(0);
+
+      const blockedResponse = await app.inject({ method: 'GET', url: '/api/sessions' });
+      const loginResponse = await app.inject({
+        method: 'POST',
+        url: '/auth/login',
+        payload: { password: 'config-secret' },
+      });
+      const cookie = loginResponse.headers['set-cookie'];
+      const authenticatedResponse = await app.inject({
+        method: 'GET',
+        url: '/api/sessions',
+        headers: { cookie: Array.isArray(cookie) ? cookie[0] : String(cookie) },
+      });
+      await app.close();
+
+      expect(blockedResponse.statusCode).toBe(401);
+      expect(loginResponse.statusCode).toBe(200);
+      expect(authenticatedResponse.statusCode).toBe(200);
+    },
+    AUTH_TEST_TIMEOUT_MS,
+  );
+
+  it(
+    'reports authenticated status from the Cubby auth cookie',
+    async () => {
+      process.env.CUBBY_AUTH_PASSWORD = 'status-secret';
+      const { app } = await createServer(0);
+
+      const beforeLoginResponse = await app.inject({ method: 'GET', url: '/auth/status' });
+      const loginResponse = await app.inject({
+        method: 'POST',
+        url: '/auth/login',
+        payload: { password: 'status-secret' },
+      });
+      const cookie = loginResponse.headers['set-cookie'];
+      const afterLoginResponse = await app.inject({
+        method: 'GET',
+        url: '/auth/status',
+        headers: { cookie: Array.isArray(cookie) ? cookie[0] : String(cookie) },
+      });
+      await app.close();
+
+      expect(beforeLoginResponse.json()).toEqual({ enabled: true, authenticated: false });
+      expect(afterLoginResponse.json()).toEqual({ enabled: true, authenticated: true });
+    },
+    AUTH_TEST_TIMEOUT_MS,
+  );
+
+  it(
+    'temporarily blocks repeated failed login attempts',
+    async () => {
+      process.env.CUBBY_AUTH_PASSWORD = 'lockout-secret';
+      const { app } = await createServer(0);
+
+      for (let attempt = 0; attempt < 5; attempt++) {
+        const response = await app.inject({
+          method: 'POST',
+          url: '/auth/login',
+          payload: { password: 'wrong' },
+        });
+        expect(response.statusCode).toBe(401);
+      }
+
+      const blockedResponse = await app.inject({
+        method: 'POST',
+        url: '/auth/login',
+        payload: { password: 'lockout-secret' },
+      });
+      await app.close();
+
+      expect(blockedResponse.statusCode).toBe(429);
+      expect(blockedResponse.json()).toEqual({ error: 'Too many failed login attempts' });
+    },
+    AUTH_TEST_TIMEOUT_MS,
+  );
 
   it('rejects requests from origins outside the allowlist', async () => {
     process.env.CUBBY_ALLOWED_ORIGINS = 'https://trusted.example';
