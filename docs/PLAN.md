@@ -6,7 +6,7 @@
 
 **测试策略：** 边开发边写测试，不攒到最后。每个阶段包含对应的单元测试和集成测试。
 
-> **当前路线更新（2026-06-11）：** Cubby 已重新定位为自托管的个人 AI 编码工作台，而不是浏览器版 VS Code。近期开发优先级以 `docs/ROADMAP.md` 为准：远程访问安全、CLI 服务管理、WebSocket 可靠重连、端口预览、session review、verification runs、workspace intelligence 和 runtime diagnostics。下面的阶段计划保留为历史完整规划，涉及内置文件写入、完整 Git 写操作 UI、多 Tab fencing、完整 IDE/LSP 的内容不再作为近期核心。
+> **当前路线更新（2026-06-11）：** Cubby 已重新定位为自托管的个人 AI 编码工作台，而不是浏览器版 VS Code。近期开发优先级以 `docs/ROADMAP.md` 为准：远程访问安全、CLI 服务管理、WebSocket 可靠重连、端口预览、Git diff、文件查看、Supervisor 检查和 runtime diagnostics。下面的阶段计划保留为历史完整规划，涉及内置文件写入、完整 Git 写操作 UI、多 Tab fencing、完整 IDE/LSP、workspace intelligence、session review 和 verification runs 的内容不再作为近期核心。
 
 ---
 
@@ -354,8 +354,8 @@ CREATE TABLE provider_configs (
 - [ ] `session.close` — stop + delete + pane disposition
 
 **server — Session Metadata：**
-- [ ] objective、baseline git head、verification runs
-- [ ] `session.metadata.get` / `session.verification.add` 命令
+- [ ] objective、baseline git head
+- [ ] `session.metadata.get` 命令
 
 **server — 空闲检测：**
 - [ ] 监听 PTY 输出，匹配 idleHeuristics 规则
@@ -621,13 +621,8 @@ CREATE TABLE provider_configs (
 - [ ] `workspace.activate` / `workspace.deactivate`（注册 viewer for auto-fetch）
 - [ ] `workspace.lastViewedTarget.get` / `set`
 
-**server — Workspace Intelligence：**
-- [ ] 检测 package manager（npm/pnpm/yarn/bun）
-- [ ] 检测框架
-- [ ] 提取 package.json scripts
-- [ ] 检测 Makefile commands
-- [ ] 查找文档（README、docs/）
-- [ ] 检查 `.cubby/AGENTS.md`
+**server — Workspace Intelligence（已撤下）：**
+- [ ] 不再作为近期核心路径；项目上下文由 README/AGENTS/CLAUDE 和 agent 终端自行处理。
 
 **server — Diagnostics：**
 - [ ] 诊断检查：workspace、git、node、providers、auth
@@ -656,7 +651,7 @@ CREATE TABLE provider_configs (
 - [ ] 通知设置
 
 **单元测试：**
-- [ ] Workspace Intelligence：各种 package.json / Makefile 格式解析
+- [ ] Workspace Intelligence：已撤下，不再新增解析覆盖
 - [ ] 级联销毁顺序验证
 - [ ] Diagnostics：各检查项结果
 
@@ -688,7 +683,7 @@ CREATE TABLE provider_configs (
 - [ ] 测试覆盖率报告（目标：核心模块 > 80%）
 
 **集成测试补充：**
-- [ ] 跨模块流程：创建会话 → agent 执行 → 文件变更 → git commit → session review
+- [ ] 跨模块流程：创建会话 → agent 执行 → 文件变更 → Git changes / File Explorer / Supervisor 检查
 - [ ] 错误恢复：终端崩溃 → 自动清理 → 可重新创建
 - [ ] 并发场景：多终端同时写入、多会话并行
 

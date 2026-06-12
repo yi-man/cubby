@@ -63,22 +63,6 @@ CREATE TABLE IF NOT EXISTS session_reviews (
   FOREIGN KEY (session_id) REFERENCES sessions(id)
 );
 
-CREATE TABLE IF NOT EXISTS verification_runs (
-  id TEXT PRIMARY KEY,
-  session_id TEXT NOT NULL,
-  workspace_id TEXT NOT NULL,
-  command TEXT NOT NULL,
-  exit_code INTEGER,
-  duration_ms INTEGER NOT NULL,
-  output_summary TEXT NOT NULL,
-  started_at TEXT NOT NULL,
-  completed_at TEXT NOT NULL,
-  FOREIGN KEY (session_id) REFERENCES sessions(id)
-);
-
-CREATE INDEX IF NOT EXISTS idx_verification_runs_session_id_started_at
-  ON verification_runs(session_id, started_at DESC);
-
 CREATE TABLE IF NOT EXISTS session_supervisors (
   session_id TEXT PRIMARY KEY,
   workspace_id TEXT NOT NULL,

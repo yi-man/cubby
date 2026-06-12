@@ -213,7 +213,6 @@ describe('SessionStore', () => {
         renamed: 0,
         untracked: 0,
       },
-      verificationRuns: [],
       lastOutput: 'finished',
       exitCode: 0,
     });
@@ -229,37 +228,6 @@ describe('SessionStore', () => {
 
     expect(store.delete(session.id)).toBe(true);
     expect(store.getSessionReview(session.id)).toBeNull();
-  });
-
-  it('records, lists, and deletes verification runs', () => {
-    const session = store.create({ workspaceId: '/tmp/test', provider: 'claude-code' });
-
-    const run = store.recordVerificationRun({
-      sessionId: session.id,
-      workspaceId: session.workspaceId,
-      command: 'bun test',
-      exitCode: 0,
-      durationMs: 1234,
-      outputSummary: '1 test passed',
-      startedAt: '2026-06-11T10:00:00.000Z',
-      completedAt: '2026-06-11T10:00:01.234Z',
-    });
-
-    expect(run).toMatchObject({
-      sessionId: session.id,
-      workspaceId: session.workspaceId,
-      command: 'bun test',
-      exitCode: 0,
-      durationMs: 1234,
-      outputSummary: '1 test passed',
-      startedAt: '2026-06-11T10:00:00.000Z',
-      completedAt: '2026-06-11T10:00:01.234Z',
-    });
-    expect(run.id).toBeTruthy();
-    expect(store.listVerificationRuns(session.id)).toEqual([run]);
-
-    expect(store.delete(session.id)).toBe(true);
-    expect(store.listVerificationRuns(session.id)).toEqual([]);
   });
 
   it('upserts, loads, and deletes supervisor objectives and reviews', () => {

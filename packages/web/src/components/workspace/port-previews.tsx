@@ -266,7 +266,7 @@ function PortPreviewRow({
 }) {
   const cwdLabel = relativePathFromRoot(port.cwd, rootPath);
   const activityLabel = formatPreviewLastActivity(port.lastActivityAt);
-  const href = port.url;
+  const href = previewAbsoluteUrl(port.url, window.location.origin);
 
   return (
     <article

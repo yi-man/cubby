@@ -105,17 +105,17 @@ export function SupervisorLite({
         method: 'POST',
       });
       if (!response.ok) {
-        setError('Reviewer failed');
+        setError('Check failed');
         return;
       }
       const data = await response.json();
       if (!isSupervisorReviewResponse(data)) {
-        setError('Reviewer failed');
+        setError('Check failed');
         return;
       }
       await loadState();
     } catch {
-      setError('Reviewer failed');
+      setError('Check failed');
     } finally {
       setReviewing(false);
     }
@@ -334,18 +334,18 @@ export function SupervisorLite({
 
             <button
               type="button"
-              aria-label="Run reviewer"
+              aria-label="Check status"
               onClick={() => void runReviewer()}
               disabled={reviewing || loading}
               style={reviewButtonStyle(!reviewing && !loading)}
             >
               {reviewing ? <Loader2 {...ICON_PROPS} /> : <MessageSquareText {...ICON_PROPS} />}
-              <span>{reviewing ? 'Reviewing' : 'Run reviewer'}</span>
+              <span>{reviewing ? 'Checking' : 'Check status'}</span>
             </button>
           </section>
 
           <section
-            aria-label="Supervisor reviews"
+            aria-label="Supervisor checks"
             data-testid="supervisor-reviews"
             style={{
               minWidth: 0,
@@ -364,7 +364,7 @@ export function SupervisorLite({
                 onInjectSuggestion={injectSuggestion}
               />
             ) : (
-              <EmptyState label="No supervisor reviews" />
+              <EmptyState label="No supervisor checks" />
             )}
           </section>
         </div>

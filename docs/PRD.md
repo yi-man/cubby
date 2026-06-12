@@ -6,13 +6,13 @@
 
 **一句话定位：** 你自己的远程 AI 编码控制台，数据不上云，任何设备都能访问。
 
-Cubby 的当前定位不是浏览器版 VS Code，也不是多人协作 IDE。代码写入、重构、测试命令和 Git 操作优先交给 agent session 在终端内完成；Cubby 本身优先提供远程访问安全、会话控制、终端连续性、运行预览、结果审阅、验证记录和环境诊断。
+Cubby 的当前定位不是浏览器版 VS Code，也不是多人协作 IDE。代码写入、重构、测试命令和 Git 操作优先交给 agent session 在终端内完成；Cubby 本身优先提供远程访问安全、会话控制、终端连续性、运行预览、Git diff、文件查看、Supervisor 检查和环境诊断。
 
 ### 产品原则
 
 - **Agent-first**：用户主要通过自然语言和终端驱动 agent 完成开发，不把 Cubby 做成完整可编辑 IDE。
 - **个人工作台**：默认面向单人自托管使用，先保证个人远程工作流稳定，再考虑团队协作。
-- **审阅优先于手改**：文件浏览、diff、session review、verification runs 和 app preview 比内置文件写入更重要。
+- **审阅优先于手改**：文件浏览、diff、Supervisor 检查和 app preview 比内置文件写入更重要。
 - **远程可用性优先**：认证、服务管理、断线恢复、端口预览和诊断是远程开发的基础能力。
 - **保守暴露能力**：任何能触发终端、agent 或本机文件访问的入口都必须经过认证和路径安全约束。
 
@@ -108,7 +108,7 @@ cubby/
 - 支持并行多会话，不同 provider 并存
 - 会话列表展示（按状态分组）
 - 会话操作：创建、停止、删除、关闭（stop + delete + pane disposition）、重启
-- 会话元数据：objective、baseline git head、verification runs
+- 会话元数据：objective、baseline git head
 
 **验收标准：**
 - [ ] 创建会话后 agent 正常响应
@@ -169,7 +169,7 @@ cubby/
 - 文件读取和只读预览（文本、Markdown、图片、常见配置文件）
 - 文件内容搜索（关键词 + 匹配行 + 行号）
 - 文件名搜索 / quick open
-- 从 Git diff、session review、验证失败输出跳转到相关文件
+- 从 Git diff 跳转到相关文件
 - 图片文件检测和流式服务
 - 路径穿越防护（`resolveSafe`）
 
@@ -180,7 +180,7 @@ cubby/
 - [ ] 搜索返回匹配结果
 - [ ] 打开文本文件后只读预览正确
 - [ ] 打开 Markdown / 图片文件后可用于审阅
-- [ ] 从 diff 或验证失败结果可跳转到相关文件
+- [ ] 从 diff 可跳转到相关文件
 - [ ] 路径穿越尝试被拒绝
 
 #### F7: Git 审阅与变更理解
@@ -198,7 +198,7 @@ cubby/
 **验收标准：**
 - [ ] 修改文件后 git status 实时更新
 - [ ] diff 正确展示
-- [ ] session review 能展示从 baseline 到当前 HEAD 的变更文件
+- [ ] Git changes 能展示从 baseline 到当前 HEAD 的变更文件
 - [ ] PR 链接和 worktree 上下文展示正确
 
 #### F8: Settings 系统
@@ -302,33 +302,18 @@ cubby/
 - [ ] hover 展示类型信息
 - [ ] 诊断实时更新
 
-#### F14: Workspace Intelligence
-- 检测 package manager（npm/pnpm/yarn/bun）
-- 检测框架
-- 提取 package.json scripts
-- 检测 Makefile commands
-- 查找文档（README、docs/）
-- 检查 AGENTS.md
-- UI 展示推荐命令，可一键执行
+#### F14: Workspace / Review / Verification Surfaces
+- Workspace intelligence UI/API 已撤下，避免和项目 README/说明文档重复。
+- Session review UI/API 已撤下，改由 Git Changes、File Explorer 和 Supervisor 承担验收入口。
+- Verification runs UI/API 已撤下，验证命令继续由 agent 在终端内执行。
 
 **验收标准：**
-- [ ] Next.js 项目自动识别出 dev 命令
-- [ ] 推荐命令可执行
-
-#### F15: Session Review
-- 会话结束后生成 review summary
-- 变更文件列表（baseline HEAD → current HEAD diff）
-- 验证运行结果
-- 警告（missing baseline、not git repo）
-- 文件级 diff 查看
-
-**验收标准：**
-- [ ] 会话结束后可查看变更文件列表
-- [ ] 点击文件可查看 diff
+- [ ] 工具栏不展示 Workspace、Review、Verification 入口
+- [ ] 后端不暴露 workspace intelligence、session review、verification runs 外部 API
 
 #### F16: Agent Context & Instructions
-- 上下文包构建：fromFile / fromDiff / fromProjectSummary / fromSessionReview
-- Agent 指令生成：从 workspace intelligence 自动生成 `.cubby/AGENTS.md`
+- 上下文包构建：fromFile / fromDiff / fromProjectSummary
+- Agent 指令生成：由项目 README / AGENTS / CLAUDE 文档提供
 - 指令健康度评估
 
 **验收标准：**
@@ -446,12 +431,11 @@ cubby/
 | connection | 1 | probe |
 | recovery | 1 | reconcile |
 | session | 5 | list, create, stop, remove, close |
-| session-metadata | 2 | get, verification.add |
-| session-review | 2 | summary, diff |
+| session-metadata | 1 | get |
 | terminal | 7 | list, create, replay, snapshot, close, input, resize |
 | file | 9 | readTree, search, searchContent, read, create, mkdir, delete, rename, write |
 | git | 14 | status, stage, diff, log, show, unstage, discard, commit, push, pull, fetch, checkout, branch, branches |
-| workspace | 6 | list, browse, open, intelligence, close, uiState.set |
+| workspace | 5 | list, browse, open, close, uiState.set |
 | workspace-activity | 4 | activate, deactivate, lastViewedTarget.get, lastViewedTarget.set |
 | settings | 5 | get, update, previewCommand, readConfigFile, writeConfigFile |
 | diagnostics | 2 | get, recheck |

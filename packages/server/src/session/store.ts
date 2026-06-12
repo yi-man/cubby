@@ -4,7 +4,6 @@ import type {
   CreateSessionInput,
   CreateSessionSupervisorInput,
   CreateSupervisorReviewInput,
-  CreateVerificationRunInput,
   Session,
   SessionReview,
   SessionReviewChange,
@@ -13,7 +12,6 @@ import type {
   SessionSupervisor,
   SupervisorReview,
   TerminalOutputChunk,
-  VerificationRun,
 } from '@cubby/core';
 import type { Database } from '../db/index.js';
 
@@ -50,18 +48,6 @@ interface SessionReviewRow {
   summary_json: string;
   last_output: string;
   exit_code: number | null;
-}
-
-interface VerificationRunRow {
-  id: string;
-  session_id: string;
-  workspace_id: string;
-  command: string;
-  exit_code: number | null;
-  duration_ms: number;
-  output_summary: string;
-  started_at: string;
-  completed_at: string;
 }
 
 interface SessionSupervisorRow {
@@ -179,7 +165,6 @@ export class SessionStore {
   delete(id: string): boolean {
     this.db.prepare('DELETE FROM supervisor_reviews WHERE session_id = ?').run(id);
     this.db.prepare('DELETE FROM session_supervisors WHERE session_id = ?').run(id);
-    this.db.prepare('DELETE FROM verification_runs WHERE session_id = ?').run(id);
     this.db.prepare('DELETE FROM session_reviews WHERE session_id = ?').run(id);
     this.db.prepare('DELETE FROM terminal_snapshots WHERE session_id = ?').run(id);
     this.db.prepare('DELETE FROM terminal_outputs WHERE session_id = ?').run(id);
@@ -334,75 +319,9 @@ export class SessionStore {
         renamed: 0,
         untracked: 0,
       }),
-      verificationRuns: this.listVerificationRuns(sessionId),
       lastOutput: row.last_output,
       exitCode: row.exit_code,
     };
-  }
-
-  recordVerificationRun(input: CreateVerificationRunInput): VerificationRun {
-    const run: VerificationRun = {
-      id: randomUUID(),
-      sessionId: input.sessionId,
-      workspaceId: input.workspaceId,
-      command: input.command,
-      exitCode: input.exitCode,
-      durationMs: input.durationMs,
-      outputSummary: input.outputSummary,
-      startedAt: input.startedAt,
-      completedAt: input.completedAt,
-    };
-
-    this.db
-      .prepare(
-        `INSERT INTO verification_runs (
-          id,
-          session_id,
-          workspace_id,
-          command,
-          exit_code,
-          duration_ms,
-          output_summary,
-          started_at,
-          completed_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(
-        run.id,
-        run.sessionId,
-        run.workspaceId,
-        run.command,
-        run.exitCode,
-        run.durationMs,
-        run.outputSummary,
-        run.startedAt,
-        run.completedAt,
-      );
-
-    return run;
-  }
-
-  listVerificationRuns(sessionId: string): VerificationRun[] {
-    const rows = this.db
-      .prepare(
-        `SELECT *
-         FROM verification_runs
-         WHERE session_id = ?
-         ORDER BY started_at DESC, id DESC`,
-      )
-      .all(sessionId) as VerificationRunRow[];
-
-    return rows.map((row) => ({
-      id: row.id,
-      sessionId: row.session_id,
-      workspaceId: row.workspace_id,
-      command: row.command,
-      exitCode: row.exit_code,
-      durationMs: row.duration_ms,
-      outputSummary: row.output_summary,
-      startedAt: row.started_at,
-      completedAt: row.completed_at,
-    }));
   }
 
   setSessionObjective(input: CreateSessionSupervisorInput): SessionSupervisor {
